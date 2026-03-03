@@ -493,6 +493,161 @@ mod tests {
         assert_eq!(app.editor.buffer_text(), "");
     }
 
+    // === Word wrap tests ===
+
+    #[test]
+    fn long_line_wraps_with_continuation_marker() {
+        // Terminal: 20 wide, 6 tall (4 text rows + 1 mode line + 1 minibuffer)
+        // Gutter for 1 line: 2 chars ("1 ")
+        // Available text width: 18
+        // Chars per wrapped visual line: 17 (18 - 1 for '\')
+        let text = "abcdefghijklmnopqrstuvwxyz"; // 26 chars > 17
+        let (mut app, mut events) = test_app_with_text(20, 6, text, vec![]);
+        app.run_until_idle(&mut events).unwrap();
+        let screen = capture_screen(&app.terminal);
+        let lines: Vec<&str> = screen.lines().collect();
+        // First visual line: gutter + 17 chars + "\"
+        assert!(
+            lines[0].ends_with('\\'),
+            "Expected continuation marker '\\', got: '{}'",
+            lines[0]
+        );
+        // Second visual line: blank gutter + remaining 9 chars "rstuvwxyz"
+        assert!(
+            lines[1].contains("rstuvwxyz"),
+            "Expected wrapped text 'rstuvwxyz', got: '{}'",
+            lines[1]
+        );
+    }
+
+    #[test]
+    fn continuation_line_has_blank_gutter() {
+        // Same setup as above
+        let text = "abcdefghijklmnopqrstuvwxyz"; // 26 chars
+        let (mut app, mut events) = test_app_with_text(20, 6, text, vec![]);
+        app.run_until_idle(&mut events).unwrap();
+        let screen = capture_screen(&app.terminal);
+        let lines: Vec<&str> = screen.lines().collect();
+        // First line starts with "1 " (line number)
+        assert!(
+            lines[0].starts_with("1 "),
+            "Expected line number, got: '{}'",
+            lines[0]
+        );
+        // Continuation line starts with "  " (blank gutter)
+        assert!(
+            lines[1].starts_with("  "),
+            "Expected blank gutter on continuation line, got: '{}'",
+            lines[1]
+        );
+        // But the continuation line should NOT start with a digit
+        assert!(
+            !lines[1].trim_start().starts_with(|c: char| c.is_ascii_digit()),
+            "Continuation line should not have a line number: '{}'",
+            lines[1]
+        );
+    }
+
+    #[test]
+    fn wrapped_line_uses_multiple_visual_rows() {
+        // Terminal: 20 wide, 8 tall (6 text rows + 1 mode line + 1 minibuffer)
+        // Two buffer lines, first one wraps into 2 visual lines
+        let text = "abcdefghijklmnopqrstuvwxyz\nshort";
+        let (mut app, mut events) = test_app_with_text(20, 8, text, vec![]);
+        app.run_until_idle(&mut events).unwrap();
+        let screen = capture_screen(&app.terminal);
+        let lines: Vec<&str> = screen.lines().collect();
+        // Line 1 visual row 1: "1 abcdefghijklmnopq\" (gutter 2, 17 chars, \)
+        // Line 1 visual row 2: "  rstuvwxyz" (blank gutter, remaining)
+        // Line 2 visual row 1: "2 short"
+        assert!(
+            lines[0].contains("abcdefg"),
+            "First visual line should have start of long line: '{}'",
+            lines[0]
+        );
+        assert!(
+            lines[2].starts_with("2 "),
+            "Second buffer line should appear on 3rd visual row with line number '2': '{}'",
+            lines[2]
+        );
+        assert!(
+            lines[2].contains("short"),
+            "Second buffer line should contain 'short': '{}'",
+            lines[2]
+        );
+    }
+
+    #[test]
+    fn cursor_on_wrapped_portion() {
+        // Place cursor at char 20 of a long line, which is on the wrapped part
+        // Terminal: 20 wide, 6 tall
+        // Gutter: 2, text width: 18, chars per wrap: 17
+        let text = "abcdefghijklmnopqrstuvwxyz";
+        let events = vec![ctrl('e')]; // go to end of line (char 25)
+        let (mut app, mut events) = test_app_with_text(20, 6, text, events);
+        app.run_until_idle(&mut events).unwrap();
+
+        // The cursor should be on visual row 1 (the wrapped part),
+        // not on visual row 0
+        let buf = app.terminal.backend().buffer();
+        // Check that the cursor was set (we can verify point is at end)
+        assert_eq!(app.editor.point(), 25);
+
+        // Verify the wrapped text renders correctly
+        let screen = capture_screen(&app.terminal);
+        let lines: Vec<&str> = screen.lines().collect();
+        assert!(lines[0].ends_with('\\'), "Line should wrap: '{}'", lines[0]);
+    }
+
+    #[test]
+    fn triple_wrap_line() {
+        // A very long line that wraps 3 times
+        // Terminal: 15 wide, 8 tall (6 text rows + mode + minibuf)
+        // Gutter for 1 line: 2 chars
+        // Text width: 13, chars per wrap: 12
+        let text = "abcdefghijklmnopqrstuvwxyz0123456789"; // 36 chars
+        // wraps into ceil(36/12) = 3 visual lines
+        let (mut app, mut events) = test_app_with_text(15, 8, text, vec![]);
+        app.run_until_idle(&mut events).unwrap();
+        let screen = capture_screen(&app.terminal);
+        let lines: Vec<&str> = screen.lines().collect();
+        // Visual line 0: "1 " + 12 chars + "\"
+        assert!(lines[0].ends_with('\\'), "First wrap: '{}'", lines[0]);
+        // Visual line 1: "  " + 12 chars + "\"
+        assert!(lines[1].ends_with('\\'), "Second wrap: '{}'", lines[1]);
+        // Visual line 2: "  " + remaining 12 chars (no \)
+        assert!(!lines[2].ends_with('\\'), "Last segment shouldn't wrap: '{}'", lines[2]);
+    }
+
+    #[test]
+    fn scroll_accounts_for_wrapped_lines() {
+        // If the first line wraps and takes 2 visual rows, the second buffer
+        // line should appear on visual row 2, reducing visible buffer lines
+        // Terminal: 20 wide, 6 tall (4 text rows + mode + minibuf)
+        let text = "abcdefghijklmnopqrstuvwxyz\nline2\nline3\nline4\nline5";
+        let (mut app, mut events) = test_app_with_text(20, 6, text, vec![]);
+        app.run_until_idle(&mut events).unwrap();
+        let screen = capture_screen(&app.terminal);
+        // The long first line takes 2 visual rows, so only 2 more buffer lines fit
+        // in the 4 text rows (4 - 2 = 2 rows for lines 2 and 3)
+        assert!(
+            screen.contains("line2"),
+            "line2 should be visible: {}",
+            screen
+        );
+        assert!(
+            screen.contains("line3"),
+            "line3 should be visible: {}",
+            screen
+        );
+        // line4 should NOT fit in the 4 visible text rows
+        assert!(
+            !screen.contains("line4"),
+            "line4 should NOT be visible (pushed out by wrapping): {}",
+            screen
+        );
+    }
+
     #[test]
     fn cx_cs_saves_file() {
         let dir = tempfile::tempdir().unwrap();
