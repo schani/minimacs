@@ -249,15 +249,21 @@ where
     }
 
     fn handle_paste(&mut self, text: &str) {
+        // Sanitize: replace newlines with spaces when pasting into minibuffer
+        let text = if self.editor.minibuffer.is_active() {
+            text.replace("\r\n", " ").replace('\n', " ")
+        } else {
+            text.to_string()
+        };
         // Insert pasted text as a single undo group
-        self.editor.current_buffer_mut().history.commit();
-        let point = self.editor.pane_tree.focused_pane().point;
-        let buf = self.editor.current_buffer_mut();
-        buf.history.record_insert(point, text);
-        buf.insert(point, text);
+        self.editor.active_buffer_mut().history.commit();
+        let point = self.editor.active_pane().point;
+        let buf = self.editor.active_buffer_mut();
+        buf.history.record_insert(point, &text);
+        buf.insert(point, &text);
         let new_point = point + text.chars().count();
-        self.editor.pane_tree.focused_pane_mut().point = new_point;
-        self.editor.current_buffer_mut().history.commit();
+        self.editor.active_pane_mut().point = new_point;
+        self.editor.active_buffer_mut().history.commit();
     }
 
     fn update_viewport(&mut self) {

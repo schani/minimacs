@@ -5,7 +5,7 @@ use ratatui::layout::Direction;
 use crate::buffer::Buffer;
 use crate::command::Command;
 use crate::minibuffer::{Minibuffer, PromptKind};
-use crate::pane::PaneTree;
+use crate::pane::{Pane, PaneTree};
 
 /// Direction of incremental search.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,6 +36,8 @@ pub struct Editor {
     pub should_quit: bool,
     pub pending_keys: String,
     pub minibuffer: Minibuffer,
+    pub minibuffer_buffer: Buffer,
+    pub minibuffer_pane: Pane,
     pub isearch: Option<ISearchState>,
 }
 
@@ -43,6 +45,8 @@ pub struct Editor {
 impl Editor {
     pub fn new() -> Self {
         let buf = Buffer::new_scratch(0);
+        let mut mb_pane = Pane::new(usize::MAX);
+        mb_pane.viewport_height = 1;
         Self {
             buffers: vec![buf],
             next_buffer_id: 1,
@@ -52,12 +56,16 @@ impl Editor {
             should_quit: false,
             pending_keys: String::new(),
             minibuffer: Minibuffer::new(),
+            minibuffer_buffer: Buffer::from_str(usize::MAX, "*minibuffer*", ""),
+            minibuffer_pane: mb_pane,
             isearch: None,
         }
     }
 
     pub fn new_with_text(text: &str) -> Self {
         let buf = Buffer::from_str(0, "*scratch*", text);
+        let mut mb_pane = Pane::new(usize::MAX);
+        mb_pane.viewport_height = 1;
         Self {
             buffers: vec![buf],
             next_buffer_id: 1,
@@ -67,6 +75,8 @@ impl Editor {
             should_quit: false,
             pending_keys: String::new(),
             minibuffer: Minibuffer::new(),
+            minibuffer_buffer: Buffer::from_str(usize::MAX, "*minibuffer*", ""),
+            minibuffer_pane: mb_pane,
             isearch: None,
         }
     }
@@ -131,6 +141,42 @@ impl Editor {
             .expect("current buffer must exist")
     }
 
+    /// Get the active buffer (minibuffer buffer when prompt is active, else focused pane's buffer).
+    pub fn active_buffer(&self) -> &Buffer {
+        if self.minibuffer.is_active() {
+            &self.minibuffer_buffer
+        } else {
+            self.current_buffer()
+        }
+    }
+
+    /// Get the active buffer mutably.
+    pub fn active_buffer_mut(&mut self) -> &mut Buffer {
+        if self.minibuffer.is_active() {
+            &mut self.minibuffer_buffer
+        } else {
+            self.current_buffer_mut()
+        }
+    }
+
+    /// Get the active pane (minibuffer pane when prompt is active, else focused pane).
+    pub fn active_pane(&self) -> &Pane {
+        if self.minibuffer.is_active() {
+            &self.minibuffer_pane
+        } else {
+            self.pane_tree.focused_pane()
+        }
+    }
+
+    /// Get the active pane mutably.
+    pub fn active_pane_mut(&mut self) -> &mut Pane {
+        if self.minibuffer.is_active() {
+            &mut self.minibuffer_pane
+        } else {
+            self.pane_tree.focused_pane_mut()
+        }
+    }
+
     /// Get buffer by id.
     pub fn buffer_by_id(&self, id: usize) -> &Buffer {
         self.buffers
@@ -148,7 +194,7 @@ impl Editor {
     }
 
     pub fn commit_undo_group(&mut self) {
-        self.current_buffer_mut().history.commit();
+        self.active_buffer_mut().history.commit();
     }
 
     pub fn buffer_names(&self) -> Vec<String> {
@@ -166,6 +212,21 @@ impl Editor {
     }
 
     pub fn execute(&mut self, cmd: Command) {
+        // When minibuffer is active, intercept InsertNewline (submit) and InsertTab (complete)
+        if self.minibuffer.is_active() {
+            match &cmd {
+                Command::InsertNewline => {
+                    self.submit_prompt();
+                    return;
+                }
+                Command::InsertTab => {
+                    // Tab completion is handled in app.rs key routing
+                    return;
+                }
+                _ => {}
+            }
+        }
+
         // Mark non-edit actions for undo grouping
         match &cmd {
             Command::InsertChar(_) | Command::InsertNewline | Command::InsertTab => {}
@@ -173,7 +234,7 @@ impl Editor {
             | Command::KillLine => {}
             Command::Undo | Command::Redo => {}
             _ => {
-                self.current_buffer_mut().history.mark_action();
+                self.active_buffer_mut().history.mark_action();
             }
         }
 
@@ -220,10 +281,12 @@ impl Editor {
             Command::Cancel => self.cancel(),
             Command::Quit => self.quit(),
         }
-        // After any command, ensure cursor is visible
-        let point = self.pane_tree.focused_pane().point;
-        let (line, _) = self.current_buffer().char_to_line_col(point);
-        self.pane_tree.focused_pane_mut().ensure_visible(line);
+        // After any command, ensure cursor is visible (skip for minibuffer)
+        if !self.minibuffer.is_active() {
+            let point = self.pane_tree.focused_pane().point;
+            let (line, _) = self.current_buffer().char_to_line_col(point);
+            self.pane_tree.focused_pane_mut().ensure_visible(line);
+        }
     }
 
     // === Pane split commands ===
@@ -404,8 +467,8 @@ impl Editor {
     // === Movement commands ===
 
     fn forward_char(&mut self) {
-        let len = self.current_buffer().char_count();
-        let pane = self.pane_tree.focused_pane_mut();
+        let len = self.active_buffer().char_count();
+        let pane = self.active_pane_mut();
         if pane.point < len {
             pane.point += 1;
         }
@@ -413,7 +476,7 @@ impl Editor {
     }
 
     fn backward_char(&mut self) {
-        let pane = self.pane_tree.focused_pane_mut();
+        let pane = self.active_pane_mut();
         if pane.point > 0 {
             pane.point -= 1;
         }
@@ -421,9 +484,9 @@ impl Editor {
     }
 
     fn forward_word(&mut self) {
-        let buf = self.current_buffer();
+        let buf = self.active_buffer();
         let len = buf.char_count();
-        let mut pos = self.pane_tree.focused_pane().point;
+        let mut pos = self.active_pane().point;
 
         // Skip non-word characters
         while pos < len {
@@ -442,14 +505,14 @@ impl Editor {
             pos += 1;
         }
 
-        let pane = self.pane_tree.focused_pane_mut();
+        let pane = self.active_pane_mut();
         pane.point = pos;
         pane.preferred_column = None;
     }
 
     fn backward_word(&mut self) {
-        let buf = self.current_buffer();
-        let mut pos = self.pane_tree.focused_pane().point;
+        let buf = self.active_buffer();
+        let mut pos = self.active_pane().point;
 
         // Skip non-word characters backward
         while pos > 0 {
@@ -468,14 +531,14 @@ impl Editor {
             pos -= 1;
         }
 
-        let pane = self.pane_tree.focused_pane_mut();
+        let pane = self.active_pane_mut();
         pane.point = pos;
         pane.preferred_column = None;
     }
 
     fn delete_word_backward(&mut self) {
-        let buf = self.current_buffer();
-        let start = self.pane_tree.focused_pane().point;
+        let buf = self.active_buffer();
+        let start = self.active_pane().point;
         if start == 0 {
             return;
         }
@@ -499,101 +562,101 @@ impl Editor {
 
         // Delete from pos to start
         let deleted: String = self
-            .current_buffer()
+            .active_buffer()
             .text
             .slice(pos..start)
             .chars()
             .collect();
-        self.current_buffer_mut()
+        self.active_buffer_mut()
             .history
             .record_delete(pos, &deleted);
-        self.current_buffer_mut().remove(pos, start);
-        self.pane_tree.focused_pane_mut().point = pos;
-        self.pane_tree.focused_pane_mut().preferred_column = None;
+        self.active_buffer_mut().remove(pos, start);
+        self.active_pane_mut().point = pos;
+        self.active_pane_mut().preferred_column = None;
     }
 
     fn next_line(&mut self) {
-        let buf = self.current_buffer();
-        let pane = self.pane_tree.focused_pane();
+        let buf = self.active_buffer();
+        let pane = self.active_pane();
         let (line, col) = buf.char_to_line_col(pane.point);
         let target_col = pane.preferred_column.unwrap_or(col);
 
         if line + 1 < buf.line_count() {
             let new_point = buf.line_col_to_char(line + 1, target_col);
-            let pane = self.pane_tree.focused_pane_mut();
+            let pane = self.active_pane_mut();
             pane.point = new_point;
             pane.preferred_column = Some(target_col);
         }
     }
 
     fn previous_line(&mut self) {
-        let buf = self.current_buffer();
-        let pane = self.pane_tree.focused_pane();
+        let buf = self.active_buffer();
+        let pane = self.active_pane();
         let (line, col) = buf.char_to_line_col(pane.point);
         let target_col = pane.preferred_column.unwrap_or(col);
 
         if line > 0 {
             let new_point = buf.line_col_to_char(line - 1, target_col);
-            let pane = self.pane_tree.focused_pane_mut();
+            let pane = self.active_pane_mut();
             pane.point = new_point;
             pane.preferred_column = Some(target_col);
         }
     }
 
     fn beginning_of_line(&mut self) {
-        let buf = self.current_buffer();
-        let (line, _) = buf.char_to_line_col(self.pane_tree.focused_pane().point);
+        let buf = self.active_buffer();
+        let (line, _) = buf.char_to_line_col(self.active_pane().point);
         let new_point = buf.line_col_to_char(line, 0);
-        let pane = self.pane_tree.focused_pane_mut();
+        let pane = self.active_pane_mut();
         pane.point = new_point;
         pane.preferred_column = None;
     }
 
     fn end_of_line(&mut self) {
-        let buf = self.current_buffer();
-        let (line, _) = buf.char_to_line_col(self.pane_tree.focused_pane().point);
+        let buf = self.active_buffer();
+        let (line, _) = buf.char_to_line_col(self.active_pane().point);
         let line_len = buf.line_len_chars(line);
         let new_point = buf.line_col_to_char(line, line_len);
-        let pane = self.pane_tree.focused_pane_mut();
+        let pane = self.active_pane_mut();
         pane.point = new_point;
         pane.preferred_column = None;
     }
 
     fn buffer_beginning(&mut self) {
-        let pane = self.pane_tree.focused_pane_mut();
+        let pane = self.active_pane_mut();
         pane.point = 0;
         pane.preferred_column = None;
     }
 
     fn buffer_end(&mut self) {
-        let len = self.current_buffer().char_count();
-        let pane = self.pane_tree.focused_pane_mut();
+        let len = self.active_buffer().char_count();
+        let pane = self.active_pane_mut();
         pane.point = len;
         pane.preferred_column = None;
     }
 
     fn page_down(&mut self) {
-        let height = self.pane_tree.focused_pane().viewport_height;
-        let buf = self.current_buffer();
-        let pane = self.pane_tree.focused_pane();
+        let height = self.active_pane().viewport_height;
+        let buf = self.active_buffer();
+        let pane = self.active_pane();
         let (line, col) = buf.char_to_line_col(pane.point);
         let target_col = pane.preferred_column.unwrap_or(col);
         let new_line = (line + height).min(buf.line_count().saturating_sub(1));
         let new_point = buf.line_col_to_char(new_line, target_col);
-        let pane = self.pane_tree.focused_pane_mut();
+        let pane = self.active_pane_mut();
         pane.point = new_point;
         pane.preferred_column = Some(target_col);
     }
 
     fn page_up(&mut self) {
-        let height = self.pane_tree.focused_pane().viewport_height;
-        let buf = self.current_buffer();
-        let pane = self.pane_tree.focused_pane();
+        let height = self.active_pane().viewport_height;
+        let buf = self.active_buffer();
+        let pane = self.active_pane();
         let (line, col) = buf.char_to_line_col(pane.point);
         let target_col = pane.preferred_column.unwrap_or(col);
         let new_line = line.saturating_sub(height);
         let new_point = buf.line_col_to_char(new_line, target_col);
-        let pane = self.pane_tree.focused_pane_mut();
+        let pane = self.active_pane_mut();
         pane.point = new_point;
         pane.preferred_column = Some(target_col);
     }
@@ -601,77 +664,77 @@ impl Editor {
     // === Editing commands ===
 
     fn insert_char(&mut self, c: char) {
-        let pos = self.pane_tree.focused_pane().point;
+        let pos = self.active_pane().point;
         let s = c.to_string();
-        self.current_buffer_mut().history.record_insert(pos, &s);
-        self.current_buffer_mut().insert(pos, &s);
-        let pane = self.pane_tree.focused_pane_mut();
+        self.active_buffer_mut().history.record_insert(pos, &s);
+        self.active_buffer_mut().insert(pos, &s);
+        let pane = self.active_pane_mut();
         pane.point = pos + 1;
         pane.preferred_column = None;
     }
 
     fn insert_newline(&mut self) {
-        let pos = self.pane_tree.focused_pane().point;
-        let le = self.current_buffer().line_ending.as_str().to_string();
-        self.current_buffer_mut().history.record_insert(pos, &le);
-        self.current_buffer_mut().insert(pos, &le);
-        let pane = self.pane_tree.focused_pane_mut();
+        let pos = self.active_pane().point;
+        let le = self.active_buffer().line_ending.as_str().to_string();
+        self.active_buffer_mut().history.record_insert(pos, &le);
+        self.active_buffer_mut().insert(pos, &le);
+        let pane = self.active_pane_mut();
         pane.point = pos + le.len();
         pane.preferred_column = None;
     }
 
     fn insert_tab(&mut self) {
-        let pos = self.pane_tree.focused_pane().point;
+        let pos = self.active_pane().point;
         let spaces = "    ";
-        self.current_buffer_mut()
+        self.active_buffer_mut()
             .history
             .record_insert(pos, spaces);
-        self.current_buffer_mut().insert(pos, spaces);
-        let pane = self.pane_tree.focused_pane_mut();
+        self.active_buffer_mut().insert(pos, spaces);
+        let pane = self.active_pane_mut();
         pane.point = pos + 4;
         pane.preferred_column = None;
     }
 
     fn delete_backward(&mut self) {
-        let pos = self.pane_tree.focused_pane().point;
+        let pos = self.active_pane().point;
         if pos > 0 {
             let deleted: String = self
-                .current_buffer()
+                .active_buffer()
                 .text
                 .slice(pos - 1..pos)
                 .chars()
                 .collect();
-            self.current_buffer_mut()
+            self.active_buffer_mut()
                 .history
                 .record_delete(pos - 1, &deleted);
-            self.current_buffer_mut().remove(pos - 1, pos);
-            let pane = self.pane_tree.focused_pane_mut();
+            self.active_buffer_mut().remove(pos - 1, pos);
+            let pane = self.active_pane_mut();
             pane.point = pos - 1;
             pane.preferred_column = None;
         }
     }
 
     fn delete_forward(&mut self) {
-        let len = self.current_buffer().char_count();
-        let pos = self.pane_tree.focused_pane().point;
+        let len = self.active_buffer().char_count();
+        let pos = self.active_pane().point;
         if pos < len {
             let deleted: String = self
-                .current_buffer()
+                .active_buffer()
                 .text
                 .slice(pos..pos + 1)
                 .chars()
                 .collect();
-            self.current_buffer_mut()
+            self.active_buffer_mut()
                 .history
                 .record_delete(pos, &deleted);
-            self.current_buffer_mut().remove(pos, pos + 1);
-            self.pane_tree.focused_pane_mut().preferred_column = None;
+            self.active_buffer_mut().remove(pos, pos + 1);
+            self.active_pane_mut().preferred_column = None;
         }
     }
 
     fn kill_line(&mut self) {
-        let buf = self.current_buffer();
-        let pos = self.pane_tree.focused_pane().point;
+        let buf = self.active_buffer();
+        let pos = self.active_pane().point;
         let (line, col) = buf.char_to_line_col(pos);
         let line_len = buf.line_len_chars(line);
 
@@ -679,69 +742,73 @@ impl Editor {
             let total = buf.char_count();
             if pos < total {
                 let deleted: String = buf.text.slice(pos..pos + 1).chars().collect();
-                self.current_buffer_mut()
+                self.active_buffer_mut()
                     .history
                     .record_delete(pos, &deleted);
-                self.current_buffer_mut().remove(pos, pos + 1);
+                self.active_buffer_mut().remove(pos, pos + 1);
                 self.clipboard = deleted;
             }
         } else {
             let end = buf.line_col_to_char(line, line_len);
             let deleted: String = buf.text.slice(pos..end).chars().collect();
-            self.current_buffer_mut()
+            self.active_buffer_mut()
                 .history
                 .record_delete(pos, &deleted);
-            self.current_buffer_mut().remove(pos, end);
+            self.active_buffer_mut().remove(pos, end);
             self.clipboard = deleted;
         }
-        self.current_buffer_mut().history.commit();
-        self.pane_tree.focused_pane_mut().preferred_column = None;
+        self.active_buffer_mut().history.commit();
+        self.active_pane_mut().preferred_column = None;
     }
 
     // === Undo/Redo ===
 
     fn undo(&mut self) {
-        if let Some(group) = self.current_buffer_mut().history.undo() {
+        if let Some(group) = self.active_buffer_mut().history.undo() {
             for edit in group.edits.iter().rev() {
                 if !edit.inserted.is_empty() {
                     let end = edit.position + edit.inserted.len();
-                    self.current_buffer_mut().remove(edit.position, end);
+                    self.active_buffer_mut().remove(edit.position, end);
                 }
                 if !edit.deleted.is_empty() {
-                    self.current_buffer_mut()
+                    self.active_buffer_mut()
                         .insert(edit.position, &edit.deleted);
                 }
             }
             if let Some(first) = group.edits.first() {
-                self.pane_tree.focused_pane_mut().point = first.position;
+                self.active_pane_mut().point = first.position;
             }
-            self.current_buffer_mut().update_modified();
-            self.minibuffer.show_message("Undo!".to_string());
-        } else {
+            self.active_buffer_mut().update_modified();
+            if !self.minibuffer.is_active() {
+                self.minibuffer.show_message("Undo!".to_string());
+            }
+        } else if !self.minibuffer.is_active() {
             self.minibuffer
                 .show_message("No further undo information".to_string());
         }
     }
 
     fn redo(&mut self) {
-        if let Some(group) = self.current_buffer_mut().history.redo() {
+        if let Some(group) = self.active_buffer_mut().history.redo() {
             for edit in &group.edits {
                 if !edit.deleted.is_empty() {
                     let end = edit.position + edit.deleted.len();
-                    self.current_buffer_mut().remove(edit.position, end);
+                    self.active_buffer_mut().remove(edit.position, end);
                 }
                 if !edit.inserted.is_empty() {
-                    self.current_buffer_mut()
+                    self.active_buffer_mut()
                         .insert(edit.position, &edit.inserted);
                 }
             }
             if let Some(last) = group.edits.last() {
-                self.pane_tree.focused_pane_mut().point =
+                self.active_pane_mut().point =
                     last.position + last.inserted.len();
             }
-            self.current_buffer_mut().update_modified();
-            self.minibuffer.show_message("Redo!".to_string());
-        } else {
+            self.active_buffer_mut().update_modified();
+            if !self.minibuffer.is_active() {
+                self.minibuffer.show_message("Redo!".to_string());
+            }
+        } else if !self.minibuffer.is_active() {
             self.minibuffer
                 .show_message("No further redo information".to_string());
         }
@@ -770,13 +837,13 @@ impl Editor {
     // === Mark/Region ===
 
     fn set_mark(&mut self) {
-        let point = self.pane_tree.focused_pane().point;
-        self.pane_tree.focused_pane_mut().mark = Some(point);
+        let point = self.active_pane().point;
+        self.active_pane_mut().mark = Some(point);
         self.minibuffer.show_message("Mark set".to_string());
     }
 
     fn swap_point_and_mark(&mut self) {
-        let pane = self.pane_tree.focused_pane_mut();
+        let pane = self.active_pane_mut();
         if let Some(mark) = pane.mark {
             let old_point = pane.point;
             pane.point = mark;
@@ -796,22 +863,32 @@ impl Editor {
         })
     }
 
+    /// Get region from the active pane (minibuffer pane or focused pane).
+    fn active_region(&self) -> Option<(usize, usize)> {
+        let pane = self.active_pane();
+        pane.mark.map(|mark| {
+            let start = pane.point.min(mark);
+            let end = pane.point.max(mark);
+            (start, end)
+        })
+    }
+
     fn cut(&mut self) {
-        if let Some((start, end)) = self.region() {
+        if let Some((start, end)) = self.active_region() {
             let text: String = self
-                .current_buffer()
+                .active_buffer()
                 .text
                 .slice(start..end)
                 .chars()
                 .collect();
-            self.current_buffer_mut()
+            self.active_buffer_mut()
                 .history
                 .record_delete(start, &text);
-            self.current_buffer_mut().remove(start, end);
-            self.current_buffer_mut().history.commit();
+            self.active_buffer_mut().remove(start, end);
+            self.active_buffer_mut().history.commit();
             self.clipboard = text.clone();
             self.set_os_clipboard(&text);
-            let pane = self.pane_tree.focused_pane_mut();
+            let pane = self.active_pane_mut();
             pane.point = start;
             pane.mark = None;
         } else {
@@ -821,10 +898,16 @@ impl Editor {
     }
 
     fn copy(&mut self) {
-        if let Some(text) = self.region_text() {
+        if let Some((start, end)) = self.active_region() {
+            let text: String = self
+                .active_buffer()
+                .text
+                .slice(start..end)
+                .chars()
+                .collect();
             self.clipboard = text.clone();
             self.set_os_clipboard(&text);
-            self.pane_tree.focused_pane_mut().mark = None;
+            self.active_pane_mut().mark = None;
             self.minibuffer.show_message("Region copied".to_string());
         } else {
             self.minibuffer
@@ -837,15 +920,21 @@ impl Editor {
             .get_os_clipboard()
             .unwrap_or_else(|| self.clipboard.clone());
         if !text.is_empty() {
-            let pos = self.pane_tree.focused_pane().point;
-            self.current_buffer_mut()
+            // Sanitize: replace newlines with spaces when pasting into minibuffer
+            let text = if self.minibuffer.is_active() {
+                text.replace("\r\n", " ").replace('\n', " ")
+            } else {
+                text
+            };
+            let pos = self.active_pane().point;
+            self.active_buffer_mut()
                 .history
                 .record_insert(pos, &text);
-            self.current_buffer_mut().insert(pos, &text);
-            self.current_buffer_mut().history.commit();
-            self.pane_tree.focused_pane_mut().point = pos + text.len();
+            self.active_buffer_mut().insert(pos, &text);
+            self.active_buffer_mut().history.commit();
+            self.active_pane_mut().point = pos + text.len();
         }
-        self.pane_tree.focused_pane_mut().preferred_column = None;
+        self.active_pane_mut().preferred_column = None;
     }
 
     fn set_os_clipboard(&self, _text: &str) {
