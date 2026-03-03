@@ -23,9 +23,7 @@ pub enum PromptKind {
 #[derive(Debug)]
 pub struct Prompt {
     pub kind: PromptKind,
-    pub label: String,    // e.g., "Find file: "
-    pub input: String,    // current user input
-    pub cursor: usize,    // cursor position within input
+    pub label: String, // e.g., "Find file: "
 }
 
 impl Prompt {
@@ -33,146 +31,75 @@ impl Prompt {
         Self {
             kind,
             label: label.to_string(),
-            input: String::new(),
-            cursor: 0,
         }
     }
+}
 
-    pub fn new_with_input(kind: PromptKind, label: &str, input: &str) -> Self {
-        let cursor = input.len();
-        Self {
-            kind,
-            label: label.to_string(),
-            input: input.to_string(),
-            cursor,
+/// Tab completion for file paths. Returns the completed path string.
+pub fn complete_path(input: &str) -> String {
+    let path = if input.is_empty() {
+        PathBuf::from(".")
+    } else {
+        PathBuf::from(input)
+    };
+
+    let (dir, prefix) = if path.is_dir() {
+        (path, String::new())
+    } else {
+        let dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
+        let prefix = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        (dir, prefix)
+    };
+
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return input.to_string();
+    };
+
+    let mut matches: Vec<PathBuf> = entries
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            e.file_name()
+                .to_string_lossy()
+                .starts_with(&prefix)
+        })
+        .map(|e| e.path())
+        .collect();
+    matches.sort();
+
+    if matches.len() == 1 {
+        let mut completed = matches[0].to_string_lossy().into_owned();
+        if matches[0].is_dir() {
+            completed.push('/');
         }
-    }
-
-    /// Display text: label + input
-    pub fn display(&self) -> String {
-        format!("{}{}", self.label, self.input)
-    }
-
-    /// Insert a character at the cursor position.
-    pub fn insert_char(&mut self, c: char) {
-        self.input.insert(self.cursor, c);
-        self.cursor += c.len_utf8();
-    }
-
-    /// Delete the character before the cursor.
-    pub fn delete_backward(&mut self) {
-        if self.cursor > 0 {
-            // Find the previous char boundary
-            let prev = self.input[..self.cursor]
-                .char_indices()
-                .next_back()
-                .map(|(i, _)| i)
-                .unwrap_or(0);
-            self.input.remove(prev);
-            self.cursor = prev;
-        }
-    }
-
-    /// Move cursor forward.
-    pub fn forward_char(&mut self) {
-        if self.cursor < self.input.len() {
-            self.cursor += self.input[self.cursor..].chars().next().map_or(0, |c| c.len_utf8());
-        }
-    }
-
-    /// Move cursor backward.
-    pub fn backward_char(&mut self) {
-        if self.cursor > 0 {
-            self.cursor = self.input[..self.cursor]
-                .char_indices()
-                .next_back()
-                .map(|(i, _)| i)
-                .unwrap_or(0);
-        }
-    }
-
-    /// Move cursor to beginning.
-    pub fn beginning(&mut self) {
-        self.cursor = 0;
-    }
-
-    /// Move cursor to end.
-    pub fn end(&mut self) {
-        self.cursor = self.input.len();
-    }
-
-    /// Tab completion for file paths.
-    pub fn complete_path(&mut self) {
-        let path = if self.input.is_empty() {
-            PathBuf::from(".")
-        } else {
-            PathBuf::from(&self.input)
-        };
-
-        let (dir, prefix) = if path.is_dir() {
-            (path, String::new())
-        } else {
-            let dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
-            let prefix = path
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            (dir, prefix)
-        };
-
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            return;
-        };
-
-        let mut matches: Vec<PathBuf> = entries
-            .filter_map(|e| e.ok())
-            .filter(|e| {
-                e.file_name()
-                    .to_string_lossy()
-                    .starts_with(&prefix)
-            })
-            .map(|e| e.path())
-            .collect();
-        matches.sort();
-
-        if matches.len() == 1 {
-            let mut completed = matches[0].to_string_lossy().into_owned();
-            if matches[0].is_dir() {
-                completed.push('/');
-            }
-            self.input = completed;
-            self.cursor = self.input.len();
-        } else if matches.len() > 1 {
-            // Find common prefix
-            let names: Vec<String> = matches
-                .iter()
-                .map(|p| p.to_string_lossy().into_owned())
-                .collect();
-            if let Some(common) = common_prefix(&names) {
-                self.input = common;
-                self.cursor = self.input.len();
-            }
-        }
-    }
-
-    /// Tab completion for buffer names.
-    pub fn complete_buffer(&mut self, buffer_names: &[String]) {
-        let prefix = &self.input;
-        let matches: Vec<&String> = buffer_names
+        completed
+    } else if matches.len() > 1 {
+        let names: Vec<String> = matches
             .iter()
-            .filter(|name| name.starts_with(prefix.as_str()))
+            .map(|p| p.to_string_lossy().into_owned())
             .collect();
+        common_prefix(&names).unwrap_or_else(|| input.to_string())
+    } else {
+        input.to_string()
+    }
+}
 
-        if matches.len() == 1 {
-            self.input = matches[0].clone();
-            self.cursor = self.input.len();
-        } else if matches.len() > 1 {
-            let names: Vec<String> = matches.into_iter().cloned().collect();
-            if let Some(common) = common_prefix(&names) {
-                self.input = common;
-                self.cursor = self.input.len();
-            }
-        }
+/// Tab completion for buffer names. Returns the completed name string.
+pub fn complete_buffer(input: &str, buffer_names: &[String]) -> String {
+    let matches: Vec<&String> = buffer_names
+        .iter()
+        .filter(|name| name.starts_with(input))
+        .collect();
+
+    if matches.len() == 1 {
+        matches[0].clone()
+    } else if matches.len() > 1 {
+        let names: Vec<String> = matches.into_iter().cloned().collect();
+        common_prefix(&names).unwrap_or_else(|| input.to_string())
+    } else {
+        input.to_string()
     }
 }
 
@@ -235,11 +162,6 @@ impl Minibuffer {
         self.message = None;
     }
 
-    pub fn start_prompt_with_input(&mut self, kind: PromptKind, label: &str, input: &str) {
-        self.state = MinibufferState::Prompt(Prompt::new_with_input(kind, label, input));
-        self.message = None;
-    }
-
     pub fn cancel(&mut self) {
         self.state = MinibufferState::Idle;
         self.message = Some("Quit".to_string());
@@ -252,59 +174,11 @@ impl Minibuffer {
     pub fn show_message(&mut self, msg: String) {
         self.message = Some(msg);
     }
-
-    /// Get the display text for the minibuffer line.
-    pub fn display_text(&self) -> String {
-        match &self.state {
-            MinibufferState::Prompt(p) => p.display(),
-            MinibufferState::Idle => self.message.as_deref().unwrap_or("").to_string(),
-        }
-    }
-
-    /// Get cursor position within the minibuffer line (for the prompt cursor).
-    pub fn cursor_position(&self) -> Option<usize> {
-        match &self.state {
-            MinibufferState::Prompt(p) => Some(p.label.len() + p.cursor),
-            MinibufferState::Idle => None,
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn prompt_insert_and_delete() {
-        let mut prompt = Prompt::new(PromptKind::FindFile, "Find file: ");
-        prompt.insert_char('h');
-        prompt.insert_char('i');
-        assert_eq!(prompt.input, "hi");
-        assert_eq!(prompt.cursor, 2);
-        prompt.delete_backward();
-        assert_eq!(prompt.input, "h");
-        assert_eq!(prompt.cursor, 1);
-    }
-
-    #[test]
-    fn prompt_navigation() {
-        let mut prompt = Prompt::new(PromptKind::FindFile, "Find file: ");
-        prompt.insert_char('a');
-        prompt.insert_char('b');
-        prompt.insert_char('c');
-        prompt.backward_char();
-        assert_eq!(prompt.cursor, 2);
-        prompt.beginning();
-        assert_eq!(prompt.cursor, 0);
-        prompt.end();
-        assert_eq!(prompt.cursor, 3);
-    }
-
-    #[test]
-    fn prompt_display() {
-        let prompt = Prompt::new_with_input(PromptKind::FindFile, "Find file: ", "test.txt");
-        assert_eq!(prompt.display(), "Find file: test.txt");
-    }
 
     #[test]
     fn minibuffer_state_transitions() {
@@ -333,19 +207,14 @@ mod tests {
 
     #[test]
     fn buffer_name_completion() {
-        let mut prompt = Prompt::new(PromptKind::SwitchBuffer, "Switch to buffer: ");
-        prompt.insert_char('t');
-        prompt.complete_buffer(&["test.txt".into(), "todo.md".into(), "other.rs".into()]);
-        assert_eq!(prompt.input, "t"); // "test.txt" and "todo.md" share only "t"
+        let result = complete_buffer("t", &["test.txt".into(), "todo.md".into(), "other.rs".into()]);
+        assert_eq!(result, "t"); // "test.txt" and "todo.md" share only "t"
     }
 
     #[test]
     fn buffer_name_single_completion() {
-        let mut prompt = Prompt::new(PromptKind::SwitchBuffer, "Switch to buffer: ");
-        prompt.insert_char('t');
-        prompt.insert_char('e');
-        prompt.complete_buffer(&["test.txt".into(), "todo.md".into(), "other.rs".into()]);
-        assert_eq!(prompt.input, "test.txt"); // only "test.txt" matches
+        let result = complete_buffer("te", &["test.txt".into(), "todo.md".into(), "other.rs".into()]);
+        assert_eq!(result, "test.txt"); // only "test.txt" matches
     }
 
     #[test]
@@ -354,42 +223,9 @@ mod tests {
         std::fs::write(dir.path().join("alpha.txt"), "").unwrap();
         std::fs::write(dir.path().join("beta.txt"), "").unwrap();
 
-        let mut prompt = Prompt::new(PromptKind::FindFile, "Find file: ");
-        prompt.input = format!("{}/a", dir.path().display());
-        prompt.cursor = prompt.input.len();
-        prompt.complete_path();
-        assert!(prompt.input.ends_with("alpha.txt"));
-    }
-
-    #[test]
-    fn prompt_forward_char() {
-        let mut prompt = Prompt::new(PromptKind::FindFile, "Find file: ");
-        prompt.insert_char('a');
-        prompt.insert_char('b');
-        prompt.beginning();
-        assert_eq!(prompt.cursor, 0);
-        prompt.forward_char();
-        assert_eq!(prompt.cursor, 1);
-        // At end, forward_char should be a no-op
-        prompt.end();
-        let end = prompt.cursor;
-        prompt.forward_char();
-        assert_eq!(prompt.cursor, end);
-    }
-
-    #[test]
-    fn prompt_backward_char_at_start() {
-        let mut prompt = Prompt::new(PromptKind::FindFile, "Find file: ");
-        prompt.backward_char();
-        assert_eq!(prompt.cursor, 0);
-    }
-
-    #[test]
-    fn prompt_delete_backward_at_start() {
-        let mut prompt = Prompt::new(PromptKind::FindFile, "Find file: ");
-        prompt.delete_backward();
-        assert_eq!(prompt.input, "");
-        assert_eq!(prompt.cursor, 0);
+        let input = format!("{}/a", dir.path().display());
+        let result = complete_path(&input);
+        assert!(result.ends_with("alpha.txt"));
     }
 
     #[test]
@@ -398,12 +234,9 @@ mod tests {
         std::fs::write(dir.path().join("foobar.txt"), "").unwrap();
         std::fs::write(dir.path().join("foobaz.txt"), "").unwrap();
 
-        let mut prompt = Prompt::new(PromptKind::FindFile, "Find file: ");
-        prompt.input = format!("{}/foo", dir.path().display());
-        prompt.cursor = prompt.input.len();
-        prompt.complete_path();
-        // Should complete to common prefix
-        assert!(prompt.input.contains("foob"));
+        let input = format!("{}/foo", dir.path().display());
+        let result = complete_path(&input);
+        assert!(result.contains("foob"));
     }
 
     #[test]
@@ -412,31 +245,9 @@ mod tests {
         let sub = dir.path().join("subdir");
         std::fs::create_dir(&sub).unwrap();
 
-        let mut prompt = Prompt::new(PromptKind::FindFile, "Find file: ");
-        prompt.input = format!("{}/sub", dir.path().display());
-        prompt.cursor = prompt.input.len();
-        prompt.complete_path();
-        assert!(prompt.input.ends_with('/'), "Dir completion should end with /: {}", prompt.input);
-    }
-
-    #[test]
-    fn minibuffer_display_with_prompt() {
-        let mut mb = Minibuffer::new();
-        mb.start_prompt(PromptKind::FindFile, "Find file: ");
-        assert_eq!(mb.display_text(), "Find file: ");
-    }
-
-    #[test]
-    fn minibuffer_cursor_position_with_prompt() {
-        let mut mb = Minibuffer::new();
-        mb.start_prompt(PromptKind::FindFile, "Find file: ");
-        assert_eq!(mb.cursor_position(), Some(11)); // "Find file: ".len() + 0
-    }
-
-    #[test]
-    fn minibuffer_cursor_position_idle() {
-        let mb = Minibuffer::new();
-        assert_eq!(mb.cursor_position(), None);
+        let input = format!("{}/sub", dir.path().display());
+        let result = complete_path(&input);
+        assert!(result.ends_with('/'), "Dir completion should end with /: {}", result);
     }
 
     #[test]
@@ -464,7 +275,7 @@ mod tests {
     fn minibuffer_show_message() {
         let mut mb = Minibuffer::new();
         mb.show_message("hello".to_string());
-        assert_eq!(mb.display_text(), "hello");
+        assert_eq!(mb.message, Some("hello".to_string()));
     }
 
     #[test]

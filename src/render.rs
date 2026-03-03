@@ -450,12 +450,19 @@ fn render_pane_mode_line(
 }
 
 fn render_minibuffer(frame: &mut Frame, editor: &Editor, area: Rect) {
-    let text = editor.minibuffer.display_text();
+    let text = if editor.minibuffer.is_active() {
+        let label = &editor.minibuffer.prompt().unwrap().label;
+        let input: String = editor.minibuffer_buffer.text.to_string();
+        format!("{}{}", label, input)
+    } else {
+        editor.minibuffer.message.as_deref().unwrap_or("").to_string()
+    };
     let minibuffer = Paragraph::new(Line::from(text));
     frame.render_widget(minibuffer, area);
 
-    // If minibuffer has a prompt, set cursor there instead
-    if let Some(cursor_pos) = editor.minibuffer.cursor_position() {
+    // If minibuffer has a prompt, set cursor there
+    if let Some(prompt) = editor.minibuffer.prompt() {
+        let cursor_pos = prompt.label.len() + editor.minibuffer_pane.point;
         let x = area.x + cursor_pos as u16;
         if x < area.x + area.width {
             frame.set_cursor_position((x, area.y));

@@ -100,10 +100,21 @@ where
             return;
         }
 
-        // If minibuffer is active, route keys there
+        // If minibuffer is active, intercept Enter/Tab then route through keymap
         if self.editor.minibuffer.is_active() {
-            self.handle_minibuffer_key(key);
-            return;
+            match (key.modifiers, key.code) {
+                (KeyModifiers::NONE, KeyCode::Enter) => {
+                    self.editor.submit_prompt();
+                    return;
+                }
+                (KeyModifiers::NONE, KeyCode::Tab) => {
+                    self.handle_minibuffer_tab();
+                    return;
+                }
+                _ => {
+                    // Fall through to normal keymap processing
+                }
+            }
         }
 
         match self.keymap_state.process_key(key) {
@@ -134,12 +145,10 @@ where
         match (key.modifiers, key.code) {
             // C-s during isearch: cycle forward
             (KeyModifiers::CONTROL, KeyCode::Char('s')) => {
-                // If search direction is backward, switch to forward
                 if let Some(ref mut isearch) = self.editor.isearch {
                     isearch.direction = SearchDirection::Forward;
                 }
                 self.editor.isearch_next();
-                // Update the prompt label
                 if let Some(p) = self.editor.minibuffer.prompt_mut() {
                     p.label = "I-search: ".to_string();
                 }
@@ -162,10 +171,10 @@ where
             (KeyModifiers::NONE, KeyCode::Backspace) => {
                 if let Some(ref mut isearch) = self.editor.isearch {
                     isearch.query.pop();
-                    if let Some(p) = self.editor.minibuffer.prompt_mut() {
-                        p.input = isearch.query.clone();
-                        p.cursor = p.input.len();
-                    }
+                    // Sync minibuffer buffer to query
+                    let query = isearch.query.clone();
+                    self.editor.minibuffer_buffer.text = ropey::Rope::from_str(&query);
+                    self.editor.minibuffer_pane.point = query.chars().count();
                 }
                 self.editor.isearch_update();
             }
@@ -173,10 +182,10 @@ where
             (KeyModifiers::NONE | KeyModifiers::SHIFT, KeyCode::Char(c)) => {
                 if let Some(ref mut isearch) = self.editor.isearch {
                     isearch.query.push(c);
-                    if let Some(p) = self.editor.minibuffer.prompt_mut() {
-                        p.input = isearch.query.clone();
-                        p.cursor = p.input.len();
-                    }
+                    // Sync minibuffer buffer to query
+                    let query = isearch.query.clone();
+                    self.editor.minibuffer_buffer.text = ropey::Rope::from_str(&query);
+                    self.editor.minibuffer_pane.point = query.chars().count();
                 }
                 self.editor.isearch_update();
             }
@@ -188,63 +197,32 @@ where
         }
     }
 
-    fn handle_minibuffer_key(&mut self, key: KeyEvent) {
-        match (key.modifiers, key.code) {
-            (KeyModifiers::NONE, KeyCode::Enter) => {
-                self.editor.submit_prompt();
-            }
-            (KeyModifiers::NONE, KeyCode::Backspace) => {
-                if let Some(p) = self.editor.minibuffer.prompt_mut() {
-                    p.delete_backward();
-                }
-            }
-            (KeyModifiers::CONTROL, KeyCode::Char('f')) | (KeyModifiers::NONE, KeyCode::Right) => {
-                if let Some(p) = self.editor.minibuffer.prompt_mut() {
-                    p.forward_char();
-                }
-            }
-            (KeyModifiers::CONTROL, KeyCode::Char('b')) | (KeyModifiers::NONE, KeyCode::Left) => {
-                if let Some(p) = self.editor.minibuffer.prompt_mut() {
-                    p.backward_char();
-                }
-            }
-            (KeyModifiers::CONTROL, KeyCode::Char('a')) | (KeyModifiers::NONE, KeyCode::Home) => {
-                if let Some(p) = self.editor.minibuffer.prompt_mut() {
-                    p.beginning();
-                }
-            }
-            (KeyModifiers::CONTROL, KeyCode::Char('e')) | (KeyModifiers::NONE, KeyCode::End) => {
-                if let Some(p) = self.editor.minibuffer.prompt_mut() {
-                    p.end();
-                }
-            }
-            (KeyModifiers::NONE, KeyCode::Tab) => {
-                self.handle_minibuffer_tab();
-            }
-            (KeyModifiers::NONE | KeyModifiers::SHIFT, KeyCode::Char(c)) => {
-                if let Some(p) = self.editor.minibuffer.prompt_mut() {
-                    p.insert_char(c);
-                }
-            }
-            _ => {}
-        }
-    }
-
     fn handle_minibuffer_tab(&mut self) {
+        use crate::minibuffer::{complete_path, complete_buffer};
+
         let kind = self.editor.minibuffer.prompt().map(|p| p.kind.clone());
-        match kind {
+        let input = self.editor.minibuffer_text();
+        let completed = match kind {
             Some(PromptKind::FindFile) | Some(PromptKind::WriteFile) => {
-                if let Some(p) = self.editor.minibuffer.prompt_mut() {
-                    p.complete_path();
-                }
+                complete_path(&input)
             }
             Some(PromptKind::SwitchBuffer) => {
                 let names = self.editor.buffer_names();
-                if let Some(p) = self.editor.minibuffer.prompt_mut() {
-                    p.complete_buffer(&names);
-                }
+                complete_buffer(&input, &names)
             }
-            _ => {}
+            _ => return,
+        };
+        if completed != input {
+            // Replace buffer contents with completed text, as a single undo group
+            let buf = &mut self.editor.minibuffer_buffer;
+            let old_len = buf.char_count();
+            let old_text: String = buf.text.to_string();
+            buf.history.record_delete(0, &old_text);
+            buf.remove(0, old_len);
+            buf.history.record_insert(0, &completed);
+            buf.insert(0, &completed);
+            buf.history.commit();
+            self.editor.minibuffer_pane.point = completed.chars().count();
         }
     }
 

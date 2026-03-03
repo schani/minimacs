@@ -316,38 +316,67 @@ impl Editor {
         self.pane_tree.cycle_focus();
     }
 
-    // === Minibuffer prompt initiation ===
+    // === Minibuffer prompt lifecycle ===
+
+    /// Start a minibuffer prompt. No-op if already active (prompt guard).
+    fn start_minibuffer_prompt(&mut self, kind: PromptKind, label: &str) {
+        if self.minibuffer.is_active() {
+            return;
+        }
+        self.minibuffer.start_prompt(kind, label);
+        self.minibuffer_buffer.text = ropey::Rope::new();
+        self.minibuffer_buffer.modified = false;
+        self.minibuffer_buffer.history = crate::history::History::new();
+        self.minibuffer_pane.point = 0;
+        self.minibuffer_pane.mark = None;
+        self.minibuffer_pane.scroll_top = 0;
+        self.minibuffer_pane.preferred_column = None;
+    }
+
+    /// Start a minibuffer prompt with initial text. No-op if already active.
+    fn start_minibuffer_prompt_with_input(&mut self, kind: PromptKind, label: &str, input: &str) {
+        if self.minibuffer.is_active() {
+            return;
+        }
+        self.minibuffer.start_prompt(kind, label);
+        self.minibuffer_buffer.text = ropey::Rope::from_str(input);
+        self.minibuffer_buffer.modified = false;
+        self.minibuffer_buffer.history = crate::history::History::new();
+        self.minibuffer_pane.point = input.chars().count();
+        self.minibuffer_pane.mark = None;
+        self.minibuffer_pane.scroll_top = 0;
+        self.minibuffer_pane.preferred_column = None;
+    }
+
+    /// Read the current minibuffer text.
+    pub fn minibuffer_text(&self) -> String {
+        self.minibuffer_buffer.text.to_string()
+    }
 
     fn find_file_prompt(&mut self) {
         let initial = format!("{}/", self.cwd.display());
-        self.minibuffer
-            .start_prompt_with_input(PromptKind::FindFile, "Find file: ", &initial);
+        self.start_minibuffer_prompt_with_input(PromptKind::FindFile, "Find file: ", &initial);
     }
 
     fn switch_buffer_prompt(&mut self) {
-        self.minibuffer
-            .start_prompt(PromptKind::SwitchBuffer, "Switch to buffer: ");
+        self.start_minibuffer_prompt(PromptKind::SwitchBuffer, "Switch to buffer: ");
     }
 
     fn write_file_prompt(&mut self) {
         let initial = format!("{}/", self.cwd.display());
-        self.minibuffer
-            .start_prompt_with_input(PromptKind::WriteFile, "Write file: ", &initial);
+        self.start_minibuffer_prompt_with_input(PromptKind::WriteFile, "Write file: ", &initial);
     }
 
     fn goto_line_prompt(&mut self) {
-        self.minibuffer
-            .start_prompt(PromptKind::GotoLine, "Goto line: ");
+        self.start_minibuffer_prompt(PromptKind::GotoLine, "Goto line: ");
     }
 
     pub fn submit_prompt(&mut self) {
-        let (kind, input) = {
-            let prompt = match self.minibuffer.prompt() {
-                Some(p) => p,
-                None => return,
-            };
-            (prompt.kind.clone(), prompt.input.clone())
+        let kind = match self.minibuffer.prompt() {
+            Some(p) => p.kind.clone(),
+            None => return,
         };
+        let input = self.minibuffer_text();
 
         match kind {
             PromptKind::FindFile => {
@@ -430,11 +459,14 @@ impl Editor {
     }
 
     fn kill_buffer(&mut self) {
+        if self.minibuffer.is_active() {
+            return;
+        }
         let is_modified = self.current_buffer().modified;
         let name = self.current_buffer().name.clone();
 
         if is_modified {
-            self.minibuffer.start_prompt(
+            self.start_minibuffer_prompt(
                 PromptKind::SaveConfirm {
                     buffer_name: name.clone(),
                 },
@@ -975,6 +1007,9 @@ impl Editor {
     // === Incremental Search ===
 
     fn isearch_start(&mut self, direction: SearchDirection) {
+        if self.minibuffer.is_active() {
+            return;
+        }
         let pane = self.pane_tree.focused_pane();
         self.isearch = Some(ISearchState {
             query: String::new(),
@@ -987,7 +1022,7 @@ impl Editor {
             SearchDirection::Forward => "I-search: ",
             SearchDirection::Backward => "I-search backward: ",
         };
-        self.minibuffer.start_prompt(PromptKind::ISearch, label);
+        self.start_minibuffer_prompt(PromptKind::ISearch, label);
     }
 
     /// Called when isearch input changes — find next match from current position.
@@ -1126,10 +1161,13 @@ impl Editor {
     }
 
     fn quit(&mut self) {
+        if self.minibuffer.is_active() {
+            return;
+        }
         for buf in &self.buffers {
             if buf.modified {
                 let name = buf.name.clone();
-                self.minibuffer.start_prompt(
+                self.start_minibuffer_prompt(
                     PromptKind::SaveConfirm {
                         buffer_name: name.clone(),
                     },
@@ -1454,11 +1492,19 @@ mod tests {
         assert!(editor.minibuffer.is_active());
     }
 
+    impl Editor {
+        /// Helper: set minibuffer text directly (for tests).
+        fn set_minibuffer_text(&mut self, text: &str) {
+            self.minibuffer_buffer.text = ropey::Rope::from_str(text);
+            self.minibuffer_pane.point = text.chars().count();
+        }
+    }
+
     #[test]
     fn goto_line_via_prompt() {
         let mut editor = Editor::new_with_text("line1\nline2\nline3\nline4");
         editor.execute(Command::GotoLine);
-        editor.minibuffer.prompt_mut().unwrap().insert_char('3');
+        editor.set_minibuffer_text("3");
         editor.submit_prompt();
         let (line, _) = editor
             .current_buffer()
@@ -1474,9 +1520,7 @@ mod tests {
 
         let mut editor = Editor::new();
         editor.execute(Command::FindFile);
-        let prompt = editor.minibuffer.prompt_mut().unwrap();
-        prompt.input = file.to_string_lossy().into_owned();
-        prompt.cursor = prompt.input.len();
+        editor.set_minibuffer_text(&file.to_string_lossy());
         editor.submit_prompt();
 
         assert_eq!(editor.buffer_text(), "hello");
@@ -1492,9 +1536,7 @@ mod tests {
         let mut editor = Editor::new();
         editor.open_file(&file).unwrap();
         editor.execute(Command::SwitchBuffer);
-        let prompt = editor.minibuffer.prompt_mut().unwrap();
-        prompt.input = "*scratch*".to_string();
-        prompt.cursor = prompt.input.len();
+        editor.set_minibuffer_text("*scratch*");
         editor.submit_prompt();
 
         assert_eq!(editor.current_buffer().name, "*scratch*");
@@ -2013,9 +2055,7 @@ mod tests {
     fn goto_line_invalid_input() {
         let mut editor = Editor::new_with_text("line1\nline2\nline3");
         editor.execute(Command::GotoLine);
-        if let Some(p) = editor.minibuffer.prompt_mut() {
-            p.input = "abc".to_string();
-        }
+        editor.set_minibuffer_text("abc");
         editor.submit_prompt();
         assert_eq!(
             editor.minibuffer.message,
@@ -2027,9 +2067,7 @@ mod tests {
     fn switch_to_nonexistent_buffer() {
         let mut editor = Editor::new_with_text("hello");
         editor.execute(Command::SwitchBuffer);
-        if let Some(p) = editor.minibuffer.prompt_mut() {
-            p.input = "nonexistent".to_string();
-        }
+        editor.set_minibuffer_text("nonexistent");
         editor.submit_prompt();
         assert_eq!(
             editor.minibuffer.message,
@@ -2044,9 +2082,7 @@ mod tests {
 
         let mut editor = Editor::new_with_text("content");
         editor.execute(Command::WriteFile);
-        if let Some(p) = editor.minibuffer.prompt_mut() {
-            p.input = file.to_string_lossy().into_owned();
-        }
+        editor.set_minibuffer_text(&file.to_string_lossy());
         editor.submit_prompt();
 
         assert!(file.exists());
@@ -2066,10 +2102,7 @@ mod tests {
         // Simulate quit which triggers save confirm
         editor.execute(Command::Quit);
         assert!(editor.minibuffer.is_active());
-        // Answer "y"
-        if let Some(p) = editor.minibuffer.prompt_mut() {
-            p.input = "y".to_string();
-        }
+        editor.set_minibuffer_text("y");
         editor.submit_prompt();
         assert!(editor.should_quit);
         let content = std::fs::read_to_string(&file).unwrap();
@@ -2082,9 +2115,7 @@ mod tests {
         editor.execute(Command::InsertChar('X'));
         editor.execute(Command::Quit);
         assert!(editor.minibuffer.is_active());
-        if let Some(p) = editor.minibuffer.prompt_mut() {
-            p.input = "n".to_string();
-        }
+        editor.set_minibuffer_text("n");
         editor.submit_prompt();
         assert!(editor.should_quit);
     }
@@ -2095,9 +2126,7 @@ mod tests {
         editor.execute(Command::InsertChar('X'));
         editor.execute(Command::Quit);
         assert!(editor.minibuffer.is_active());
-        if let Some(p) = editor.minibuffer.prompt_mut() {
-            p.input = "q".to_string();
-        }
+        editor.set_minibuffer_text("q");
         editor.submit_prompt();
         assert!(!editor.should_quit);
     }
@@ -2108,9 +2137,7 @@ mod tests {
         editor.execute(Command::InsertChar('X'));
         editor.execute(Command::Quit);
         assert!(editor.minibuffer.is_active());
-        if let Some(p) = editor.minibuffer.prompt_mut() {
-            p.input = "x".to_string();
-        }
+        editor.set_minibuffer_text("x");
         editor.submit_prompt();
         assert!(!editor.should_quit);
         assert_eq!(
@@ -2126,9 +2153,6 @@ mod tests {
         if let Some(ref mut isearch) = editor.isearch {
             isearch.query = "xyz".to_string();
         }
-        if let Some(p) = editor.minibuffer.prompt_mut() {
-            p.input = "xyz".to_string();
-        }
         editor.isearch_update();
         assert_eq!(
             editor.minibuffer.message,
@@ -2142,9 +2166,6 @@ mod tests {
         editor.execute(Command::ISearchForward);
         if let Some(ref mut isearch) = editor.isearch {
             isearch.query = "hello".to_string();
-        }
-        if let Some(p) = editor.minibuffer.prompt_mut() {
-            p.input = "hello".to_string();
         }
         editor.isearch_update();
         // Try to cycle — no more matches
@@ -2161,9 +2182,6 @@ mod tests {
         if let Some(ref mut isearch) = editor.isearch {
             isearch.query = "hello".to_string();
         }
-        if let Some(p) = editor.minibuffer.prompt_mut() {
-            p.input = "hello".to_string();
-        }
         editor.isearch_update();
         // rfind from position 17 finds the last "hello" before cursor = position 12
         assert_eq!(editor.point(), 12);
@@ -2176,9 +2194,6 @@ mod tests {
         editor.execute(Command::ISearchBackward);
         if let Some(ref mut isearch) = editor.isearch {
             isearch.query = "ab".to_string();
-        }
-        if let Some(p) = editor.minibuffer.prompt_mut() {
-            p.input = "ab".to_string();
         }
         editor.isearch_update();
         // First backward match from end
@@ -2195,9 +2210,6 @@ mod tests {
         editor.execute(Command::ISearchForward);
         if let Some(ref mut isearch) = editor.isearch {
             isearch.query = "world".to_string();
-        }
-        if let Some(p) = editor.minibuffer.prompt_mut() {
-            p.input = "world".to_string();
         }
         editor.isearch_update();
         assert_eq!(editor.point(), 6);
