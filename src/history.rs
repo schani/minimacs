@@ -84,6 +84,21 @@ impl History {
         self.clear_redo();
     }
 
+    /// Record a replacement edit (delete + insert at same position) as a single edit.
+    /// This creates a single undo group so the replacement is undone atomically.
+    pub fn record_replace(&mut self, position: usize, deleted_text: &str, inserted_text: &str) {
+        // Commit any pending group first
+        self.commit();
+
+        self.current_group.push(Edit {
+            position,
+            deleted: deleted_text.to_string(),
+            inserted: inserted_text.to_string(),
+        });
+        self.last_edit_kind = EditKind::Other;
+        self.clear_redo();
+    }
+
     /// Record a delete edit. Each delete is its own group.
     pub fn record_delete(&mut self, position: usize, deleted_text: &str) {
         // Commit any pending group first
