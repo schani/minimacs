@@ -589,7 +589,7 @@ mod tests {
 
         // The cursor should be on visual row 1 (the wrapped part),
         // not on visual row 0
-        let buf = app.terminal.backend().buffer();
+        let _buf = app.terminal.backend().buffer();
         // Check that the cursor was set (we can verify point is at end)
         // "abcdefghijklmnopqrstuvwxyz" has 26 chars, C-e goes to position 26
         assert_eq!(app.editor.point(), 26);
