@@ -14,7 +14,10 @@ use std::io;
 
 use anyhow::Result;
 use crossterm::{
-    event::{DisableBracketedPaste, EnableBracketedPaste},
+    event::{
+        DisableBracketedPaste, EnableBracketedPaste, KeyboardEnhancementFlags,
+        PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+    },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -43,6 +46,14 @@ fn main() -> Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)?;
+
+    // Enable kitty keyboard protocol so keys like Ctrl-/ are reported correctly.
+    // This is best-effort: terminals that don't support it will silently ignore it.
+    let _ = execute!(
+        stdout,
+        PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+    );
+
     let backend = CrosstermBackend::new(stdout);
     let terminal = Terminal::new(backend)?;
 
@@ -53,6 +64,7 @@ fn main() -> Result<()> {
 
     // Restore terminal
     disable_raw_mode()?;
+    let _ = execute!(app.terminal.backend_mut(), PopKeyboardEnhancementFlags);
     execute!(
         app.terminal.backend_mut(),
         LeaveAlternateScreen,

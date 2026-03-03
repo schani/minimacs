@@ -232,6 +232,8 @@ pub fn default_keymap() -> KeymapNode {
     root.bind(&[ctrl('/')], Command::Undo);
     // C-_ is also undo in emacs, crossterm sends it as ctrl('_')
     root.bind(&[ctrl('_')], Command::Undo);
+    // Many terminals send C-/ as Ctrl-7 (byte 0x1F, shared key on US keyboards)
+    root.bind(&[ctrl('7')], Command::Undo);
 
     // Mark/Region
     root.bind(&[ctrl(' ')], Command::SetMark);
