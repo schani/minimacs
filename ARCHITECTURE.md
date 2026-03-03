@@ -39,7 +39,7 @@ src/
   keymap.rs         Key/KeymapNode/KeymapState -- multi-key chord trie
   command.rs        Command enum -- flat enum of all editor actions
   render.rs         render() -- walks pane tree, produces ratatui widgets
-  minibuffer.rs     Minibuffer/Prompt -- prompt UI with tab completion
+  minibuffer.rs     Minibuffer/Prompt -- prompt state, tab completion functions
   history.rs        History -- undo/redo with edit grouping
   syntax.rs         SyntaxState -- tree-sitter highlighting
   event.rs          EventSource trait -- abstracts terminal vs test input
@@ -82,9 +82,15 @@ struct Editor {
     should_quit: bool,
     pending_keys: String,
     minibuffer: Minibuffer,
+    minibuffer_buffer: Buffer,  // id=usize::MAX, not in buffers vec
+    minibuffer_pane: Pane,      // viewport_height=1
     isearch: Option<ISearchState>,
 }
 ```
+
+`active_buffer()` / `active_pane()` return the minibuffer buffer/pane when the
+minibuffer is active, otherwise the focused pane's buffer. All editing and
+movement methods use these instead of `current_buffer()` / `focused_pane()`.
 
 ### Buffer
 
@@ -237,9 +243,32 @@ The minibuffer has two states:
   `FindFile`, `WriteFile`, `SwitchBuffer`, `GotoLine`,
   `SaveConfirm { buffer_name }`, `ISearch`.
 
-Tab completion is implemented for file paths (reads the filesystem) and buffer
-names (matches against open buffers). The minibuffer supports basic editing:
-`C-f`/`C-b` movement, `C-a`/`C-e` for start/end, backspace.
+### Minibuffer as a Real Buffer
+
+The minibuffer uses a real `Buffer` (`minibuffer_buffer`, id=`usize::MAX`) and
+`Pane` (`minibuffer_pane`, viewport_height=1) owned by `Editor`. When a prompt
+is active, `active_buffer()` / `active_pane()` return the minibuffer's
+buffer/pane instead of the focused pane's. This means all editing and movement
+commands (word movement, kill-line, delete-forward, undo/redo, mark/cut/copy/
+paste) work automatically in the minibuffer without duplicating logic.
+
+The minibuffer buffer is never in `self.buffers` and never appears in buffer
+lists. Its `History` is reset each time a prompt starts. The shared clipboard
+means kill/yank in the minibuffer uses the same clipboard as the main editor.
+
+Key routing: Enter submits the prompt, Tab triggers completion (both intercepted
+before the keymap). All other keys go through the normal keymap. `InsertNewline`
+and `InsertTab` are intercepted in `execute()` when the minibuffer is active.
+
+Prompt nesting is prevented by two mechanisms: (1) `start_minibuffer_prompt()`
+returns early if a prompt is already active; (2) `isearch_start()`,
+`kill_buffer()`, and `quit()` have local guards.
+
+Tab completion is implemented as free functions `complete_path()` and
+`complete_buffer()` in `minibuffer.rs`. Completion replaces the buffer contents
+as a single undo group using `record_replace()`, making it undoable.
+
+Pasted text has newlines replaced with spaces when pasting into the minibuffer.
 
 ## Incremental Search
 
