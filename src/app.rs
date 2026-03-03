@@ -649,6 +649,185 @@ mod tests {
         );
     }
 
+    // === Isearch integration tests ===
+
+    #[test]
+    fn isearch_forward_via_app() {
+        let text = "hello world hello";
+        let events = vec![
+            ctrl('s'),       // start isearch
+            char_key('h'),   // type 'h'
+            char_key('e'),   // type 'e'
+            char_key('l'),   // type 'l'
+            char_key('l'),   // type 'l'
+            char_key('o'),   // type 'o'
+            ctrl('s'),       // cycle to next match
+            key(KeyCode::Enter), // accept
+        ];
+        let (mut app, mut events) = test_app_with_text(40, 10, text, events);
+        app.run_until_idle(&mut events).unwrap();
+        // Should be at the second "hello" (position 12)
+        assert_eq!(app.editor.point(), 12);
+        assert!(app.editor.isearch.is_none()); // isearch ended
+    }
+
+    #[test]
+    fn isearch_backward_via_app() {
+        let text = "hello world hello";
+        let mut events = vec![ctrl('e')]; // go to end
+        events.push(ctrl('r'));            // start backward isearch
+        events.extend(key_events("hello"));
+        events.push(key(KeyCode::Enter)); // accept
+        let (mut app, mut events) = test_app_with_text(40, 10, text, events);
+        app.run_until_idle(&mut events).unwrap();
+        // rfind from position 17 finds the last "hello" before that = position 12
+        assert_eq!(app.editor.point(), 12);
+    }
+
+    #[test]
+    fn isearch_backspace_refines_query() {
+        let text = "abc abcd abcde";
+        let events = vec![
+            ctrl('s'),
+            char_key('a'), char_key('b'), char_key('c'), char_key('d'), char_key('e'),
+            key(KeyCode::Backspace), // remove 'e' from query → "abcd"
+            key(KeyCode::Enter),
+        ];
+        let (mut app, mut events) = test_app_with_text(40, 10, text, events);
+        app.run_until_idle(&mut events).unwrap();
+        // "abcd" matches at position 4
+        assert_eq!(app.editor.point(), 4);
+    }
+
+    #[test]
+    fn isearch_other_key_accepts_and_processes() {
+        let text = "hello world";
+        let events = vec![
+            ctrl('s'),
+            char_key('w'), char_key('o'), char_key('r'), char_key('l'), char_key('d'),
+            ctrl('a'), // not an isearch key → accept search, then beginning-of-line
+        ];
+        let (mut app, mut events) = test_app_with_text(40, 10, text, events);
+        app.run_until_idle(&mut events).unwrap();
+        // C-a after accept should go to beginning of line
+        assert_eq!(app.editor.point(), 0);
+        assert!(app.editor.isearch.is_none());
+    }
+
+    #[test]
+    fn isearch_cancel_restores_via_app() {
+        let text = "hello world";
+        let events = vec![
+            ctrl('s'),
+            char_key('w'), char_key('o'), char_key('r'), char_key('l'), char_key('d'),
+            ctrl('g'), // cancel isearch
+        ];
+        let (mut app, mut events) = test_app_with_text(40, 10, text, events);
+        app.run_until_idle(&mut events).unwrap();
+        // Should restore to original position (0)
+        assert_eq!(app.editor.point(), 0);
+    }
+
+    // === Minibuffer integration tests ===
+
+    #[test]
+    fn minibuffer_find_file_via_app() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test_file.txt");
+        std::fs::write(&file, "file content").unwrap();
+
+        let mut events = vec![ctrl('x'), ctrl('f')]; // C-x C-f to open find-file
+        // Clear the default input (cwd/) with many backspaces
+        for _ in 0..200 {
+            events.push(key(KeyCode::Backspace));
+        }
+        // Type the file path
+        for c in file.to_string_lossy().chars() {
+            events.push(char_key(c));
+        }
+        events.push(key(KeyCode::Enter)); // submit
+
+        let (mut app, mut events) = test_app(40, 10, events);
+        app.run_until_idle(&mut events).unwrap();
+        assert_eq!(app.editor.buffer_text(), "file content");
+    }
+
+    #[test]
+    fn minibuffer_navigation_via_app() {
+        // Test C-f, C-b, C-a, C-e, Backspace in minibuffer
+        let events = vec![
+            ctrl('x'), ctrl('f'),    // open find-file prompt
+            ctrl('a'),               // go to start of input
+            ctrl('e'),               // go to end of input
+            ctrl('b'),               // back one char
+            ctrl('f'),               // forward one char
+            key(KeyCode::Backspace), // delete backward
+            ctrl('g'),               // cancel
+        ];
+        let (mut app, mut events) = test_app(40, 10, events);
+        app.run_until_idle(&mut events).unwrap();
+        assert!(!app.editor.minibuffer.is_active());
+    }
+
+    #[test]
+    fn minibuffer_tab_completion_via_app() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("unique_file.txt"), "hello").unwrap();
+
+        let mut events = vec![ctrl('x'), ctrl('f')]; // open find-file
+        // Clear the default input
+        for _ in 0..200 {
+            events.push(key(KeyCode::Backspace));
+        }
+        for c in format!("{}/uni", dir.path().display()).chars() {
+            events.push(char_key(c));
+        }
+        events.push(key(KeyCode::Tab)); // tab complete
+        events.push(key(KeyCode::Enter)); // submit
+        let (mut app, mut events) = test_app(40, 10, events);
+        app.run_until_idle(&mut events).unwrap();
+        assert_eq!(app.editor.buffer_text(), "hello");
+    }
+
+    #[test]
+    fn resize_event_handled() {
+        let events = vec![Event::Resize(100, 50)];
+        let (mut app, mut events) = test_app(40, 10, events);
+        app.run_until_idle(&mut events).unwrap();
+        // Should not crash — resize is a no-op
+        assert!(!app.editor.should_quit);
+    }
+
+    // === Multi-pane rendering ===
+
+    #[test]
+    fn split_pane_renders_two_mode_lines() {
+        let events = vec![ctrl('x'), char_key('2')]; // C-x 2 to split
+        let (mut app, mut events) = test_app_with_text(40, 12, "hello\nworld", events);
+        app.run_until_idle(&mut events).unwrap();
+        let screen = capture_screen(&app.terminal);
+        // Should have two mode lines (both showing *scratch* or similar)
+        let mode_line_count = screen.lines().filter(|l| l.contains("--")).count();
+        assert!(mode_line_count >= 2, "Expected 2 mode lines, screen:\n{}", screen);
+    }
+
+    // === Region rendering ===
+
+    #[test]
+    fn region_renders_in_buffer() {
+        // Set mark, move forward, then render — should exercise region highlighting
+        let events = vec![
+            ctrl(' '),               // set mark
+            ctrl('f'), ctrl('f'), ctrl('f'), // move forward 3
+        ];
+        let (mut app, mut events) = test_app_with_text(40, 10, "hello world", events);
+        app.run_until_idle(&mut events).unwrap();
+        // Verify mark is set and region exists
+        assert!(app.editor.region().is_some());
+        let screen = capture_screen(&app.terminal);
+        assert!(screen.contains("hello"), "Screen should show text: {}", screen);
+    }
+
     #[test]
     fn cx_cs_saves_file() {
         let dir = tempfile::tempdir().unwrap();

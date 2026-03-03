@@ -14,7 +14,11 @@ fn main() {
     let hook = r#"#!/bin/sh
 set -e
 cargo build 2>&1
-cargo test 2>&1
+if command -v cargo-llvm-cov >/dev/null 2>&1; then
+    cargo llvm-cov --fail-under-lines 90 --summary-only 2>&1
+else
+    cargo test 2>&1
+fi
 cargo clippy -- -D warnings 2>&1
 "#;
 

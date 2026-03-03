@@ -469,6 +469,7 @@ mod tests {
 
     #[test]
     fn gutter_width_for_small_files() {
+        assert_eq!(gutter_width(0), 2);   // "_ " (zero lines)
         assert_eq!(gutter_width(1), 2);   // "1 "
         assert_eq!(gutter_width(9), 2);   // "9 "
         assert_eq!(gutter_width(10), 3);  // "10 "

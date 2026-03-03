@@ -360,4 +360,115 @@ mod tests {
         prompt.complete_path();
         assert!(prompt.input.ends_with("alpha.txt"));
     }
+
+    #[test]
+    fn prompt_forward_char() {
+        let mut prompt = Prompt::new(PromptKind::FindFile, "Find file: ");
+        prompt.insert_char('a');
+        prompt.insert_char('b');
+        prompt.beginning();
+        assert_eq!(prompt.cursor, 0);
+        prompt.forward_char();
+        assert_eq!(prompt.cursor, 1);
+        // At end, forward_char should be a no-op
+        prompt.end();
+        let end = prompt.cursor;
+        prompt.forward_char();
+        assert_eq!(prompt.cursor, end);
+    }
+
+    #[test]
+    fn prompt_backward_char_at_start() {
+        let mut prompt = Prompt::new(PromptKind::FindFile, "Find file: ");
+        prompt.backward_char();
+        assert_eq!(prompt.cursor, 0);
+    }
+
+    #[test]
+    fn prompt_delete_backward_at_start() {
+        let mut prompt = Prompt::new(PromptKind::FindFile, "Find file: ");
+        prompt.delete_backward();
+        assert_eq!(prompt.input, "");
+        assert_eq!(prompt.cursor, 0);
+    }
+
+    #[test]
+    fn path_completion_multiple_matches() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("foobar.txt"), "").unwrap();
+        std::fs::write(dir.path().join("foobaz.txt"), "").unwrap();
+
+        let mut prompt = Prompt::new(PromptKind::FindFile, "Find file: ");
+        prompt.input = format!("{}/foo", dir.path().display());
+        prompt.cursor = prompt.input.len();
+        prompt.complete_path();
+        // Should complete to common prefix
+        assert!(prompt.input.contains("foob"));
+    }
+
+    #[test]
+    fn path_completion_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("subdir");
+        std::fs::create_dir(&sub).unwrap();
+
+        let mut prompt = Prompt::new(PromptKind::FindFile, "Find file: ");
+        prompt.input = format!("{}/sub", dir.path().display());
+        prompt.cursor = prompt.input.len();
+        prompt.complete_path();
+        assert!(prompt.input.ends_with('/'), "Dir completion should end with /: {}", prompt.input);
+    }
+
+    #[test]
+    fn minibuffer_display_with_prompt() {
+        let mut mb = Minibuffer::new();
+        mb.start_prompt(PromptKind::FindFile, "Find file: ");
+        assert_eq!(mb.display_text(), "Find file: ");
+    }
+
+    #[test]
+    fn minibuffer_cursor_position_with_prompt() {
+        let mut mb = Minibuffer::new();
+        mb.start_prompt(PromptKind::FindFile, "Find file: ");
+        assert_eq!(mb.cursor_position(), Some(11)); // "Find file: ".len() + 0
+    }
+
+    #[test]
+    fn minibuffer_cursor_position_idle() {
+        let mb = Minibuffer::new();
+        assert_eq!(mb.cursor_position(), None);
+    }
+
+    #[test]
+    fn minibuffer_prompt_idle() {
+        let mb = Minibuffer::new();
+        assert!(mb.prompt().is_none());
+    }
+
+    #[test]
+    fn minibuffer_prompt_mut_idle() {
+        let mut mb = Minibuffer::new();
+        assert!(mb.prompt_mut().is_none());
+    }
+
+    #[test]
+    fn minibuffer_finish() {
+        let mut mb = Minibuffer::new();
+        mb.start_prompt(PromptKind::FindFile, "Find file: ");
+        assert!(mb.is_active());
+        mb.finish();
+        assert!(!mb.is_active());
+    }
+
+    #[test]
+    fn minibuffer_show_message() {
+        let mut mb = Minibuffer::new();
+        mb.show_message("hello".to_string());
+        assert_eq!(mb.display_text(), "hello");
+    }
+
+    #[test]
+    fn common_prefix_empty_list() {
+        assert_eq!(common_prefix(&[]), None);
+    }
 }

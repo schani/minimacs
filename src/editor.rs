@@ -1811,4 +1811,323 @@ mod tests {
         editor.execute(Command::Undo);
         assert_eq!(editor.buffer_text(), "hello world");
     }
+
+    #[test]
+    fn undo_with_nothing_to_undo() {
+        let mut editor = Editor::new_with_text("hello");
+        editor.execute(Command::Undo);
+        assert_eq!(
+            editor.minibuffer.message,
+            Some("No further undo information".to_string())
+        );
+    }
+
+    #[test]
+    fn redo_with_nothing_to_redo() {
+        let mut editor = Editor::new_with_text("hello");
+        editor.execute(Command::Redo);
+        assert_eq!(
+            editor.minibuffer.message,
+            Some("No further redo information".to_string())
+        );
+    }
+
+    #[test]
+    fn swap_point_and_mark_no_mark() {
+        let mut editor = Editor::new_with_text("hello");
+        editor.execute(Command::SwapPointAndMark);
+        assert_eq!(
+            editor.minibuffer.message,
+            Some("No mark set".to_string())
+        );
+    }
+
+    #[test]
+    fn cut_no_region() {
+        let mut editor = Editor::new_with_text("hello");
+        editor.execute(Command::Cut);
+        assert_eq!(
+            editor.minibuffer.message,
+            Some("No region selected".to_string())
+        );
+    }
+
+    #[test]
+    fn copy_no_region() {
+        let mut editor = Editor::new_with_text("hello");
+        editor.execute(Command::Copy);
+        assert_eq!(
+            editor.minibuffer.message,
+            Some("No region selected".to_string())
+        );
+    }
+
+    #[test]
+    fn cancel_active_minibuffer() {
+        let mut editor = Editor::new_with_text("hello");
+        editor.execute(Command::FindFile);
+        assert!(editor.minibuffer.is_active());
+        editor.execute(Command::Cancel);
+        assert!(!editor.minibuffer.is_active());
+    }
+
+    #[test]
+    fn write_file_prompt() {
+        let mut editor = Editor::new_with_text("hello");
+        editor.execute(Command::WriteFile);
+        assert!(editor.minibuffer.is_active());
+        let prompt = editor.minibuffer.prompt().unwrap();
+        assert_eq!(prompt.kind, PromptKind::WriteFile);
+    }
+
+    #[test]
+    fn kill_buffer_unmodified() {
+        let mut editor = Editor::new_with_text("hello");
+        editor.execute(Command::KillBuffer);
+        // Killing the only buffer creates a new scratch buffer
+        assert_eq!(editor.current_buffer().name, "*scratch*");
+        assert_eq!(editor.buffer_text(), "");
+    }
+
+    #[test]
+    fn kill_buffer_modified_prompts() {
+        let mut editor = Editor::new_with_text("");
+        editor.execute(Command::InsertChar('x'));
+        assert!(editor.current_buffer().modified);
+        editor.execute(Command::KillBuffer);
+        assert!(editor.minibuffer.is_active());
+        let prompt = editor.minibuffer.prompt().unwrap();
+        assert!(matches!(prompt.kind, PromptKind::SaveConfirm { .. }));
+    }
+
+    #[test]
+    fn kill_buffer_with_others_remaining() {
+        let dir = tempfile::tempdir().unwrap();
+        let file1 = dir.path().join("a.txt");
+        let file2 = dir.path().join("b.txt");
+        std::fs::write(&file1, "aaa").unwrap();
+        std::fs::write(&file2, "bbb").unwrap();
+
+        let mut editor = Editor::new();
+        editor.open_file(&file1).unwrap();
+        editor.open_file(&file2).unwrap();
+        assert_eq!(editor.buffers.len(), 3); // scratch + a.txt + b.txt
+        let current_id = editor.pane_tree.focused_pane().buffer_id;
+        editor.execute(Command::KillBuffer);
+        // Buffer was killed, switched to first remaining
+        assert!(editor.buffers.iter().all(|b| b.id != current_id));
+    }
+
+    #[test]
+    fn goto_line_invalid_input() {
+        let mut editor = Editor::new_with_text("line1\nline2\nline3");
+        editor.execute(Command::GotoLine);
+        if let Some(p) = editor.minibuffer.prompt_mut() {
+            p.input = "abc".to_string();
+        }
+        editor.submit_prompt();
+        assert_eq!(
+            editor.minibuffer.message,
+            Some("Invalid line number".to_string())
+        );
+    }
+
+    #[test]
+    fn switch_to_nonexistent_buffer() {
+        let mut editor = Editor::new_with_text("hello");
+        editor.execute(Command::SwitchBuffer);
+        if let Some(p) = editor.minibuffer.prompt_mut() {
+            p.input = "nonexistent".to_string();
+        }
+        editor.submit_prompt();
+        assert_eq!(
+            editor.minibuffer.message,
+            Some("No buffer named 'nonexistent'".to_string())
+        );
+    }
+
+    #[test]
+    fn submit_write_file_prompt() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("output.txt");
+
+        let mut editor = Editor::new_with_text("content");
+        editor.execute(Command::WriteFile);
+        if let Some(p) = editor.minibuffer.prompt_mut() {
+            p.input = file.to_string_lossy().into_owned();
+        }
+        editor.submit_prompt();
+
+        assert!(file.exists());
+        let content = std::fs::read_to_string(&file).unwrap();
+        assert_eq!(content, "content");
+    }
+
+    #[test]
+    fn save_confirm_yes() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.txt");
+        std::fs::write(&file, "original").unwrap();
+
+        let mut editor = Editor::new();
+        editor.open_file(&file).unwrap();
+        editor.execute(Command::InsertChar('X'));
+        // Simulate quit which triggers save confirm
+        editor.execute(Command::Quit);
+        assert!(editor.minibuffer.is_active());
+        // Answer "y"
+        if let Some(p) = editor.minibuffer.prompt_mut() {
+            p.input = "y".to_string();
+        }
+        editor.submit_prompt();
+        assert!(editor.should_quit);
+        let content = std::fs::read_to_string(&file).unwrap();
+        assert_eq!(content, "Xoriginal");
+    }
+
+    #[test]
+    fn save_confirm_no() {
+        let mut editor = Editor::new_with_text("");
+        editor.execute(Command::InsertChar('X'));
+        editor.execute(Command::Quit);
+        assert!(editor.minibuffer.is_active());
+        if let Some(p) = editor.minibuffer.prompt_mut() {
+            p.input = "n".to_string();
+        }
+        editor.submit_prompt();
+        assert!(editor.should_quit);
+    }
+
+    #[test]
+    fn save_confirm_quit() {
+        let mut editor = Editor::new_with_text("");
+        editor.execute(Command::InsertChar('X'));
+        editor.execute(Command::Quit);
+        assert!(editor.minibuffer.is_active());
+        if let Some(p) = editor.minibuffer.prompt_mut() {
+            p.input = "q".to_string();
+        }
+        editor.submit_prompt();
+        assert!(!editor.should_quit);
+    }
+
+    #[test]
+    fn save_confirm_invalid() {
+        let mut editor = Editor::new_with_text("");
+        editor.execute(Command::InsertChar('X'));
+        editor.execute(Command::Quit);
+        assert!(editor.minibuffer.is_active());
+        if let Some(p) = editor.minibuffer.prompt_mut() {
+            p.input = "x".to_string();
+        }
+        editor.submit_prompt();
+        assert!(!editor.should_quit);
+        assert_eq!(
+            editor.minibuffer.message,
+            Some("Please answer y, n, or q".to_string())
+        );
+    }
+
+    #[test]
+    fn isearch_no_match() {
+        let mut editor = Editor::new_with_text("hello world");
+        editor.execute(Command::ISearchForward);
+        if let Some(ref mut isearch) = editor.isearch {
+            isearch.query = "xyz".to_string();
+        }
+        if let Some(p) = editor.minibuffer.prompt_mut() {
+            p.input = "xyz".to_string();
+        }
+        editor.isearch_update();
+        assert_eq!(
+            editor.minibuffer.message,
+            Some("Failing I-search".to_string())
+        );
+    }
+
+    #[test]
+    fn isearch_next_no_more_matches() {
+        let mut editor = Editor::new_with_text("hello world");
+        editor.execute(Command::ISearchForward);
+        if let Some(ref mut isearch) = editor.isearch {
+            isearch.query = "hello".to_string();
+        }
+        if let Some(p) = editor.minibuffer.prompt_mut() {
+            p.input = "hello".to_string();
+        }
+        editor.isearch_update();
+        // Try to cycle — no more matches
+        editor.isearch_next();
+        assert!(editor.minibuffer.message.as_ref().unwrap().contains("Failing"));
+    }
+
+    #[test]
+    fn isearch_backward_finds_match() {
+        let mut editor = Editor::new_with_text("hello world hello");
+        // Move to end
+        editor.pane_tree.focused_pane_mut().point = 17;
+        editor.execute(Command::ISearchBackward);
+        if let Some(ref mut isearch) = editor.isearch {
+            isearch.query = "hello".to_string();
+        }
+        if let Some(p) = editor.minibuffer.prompt_mut() {
+            p.input = "hello".to_string();
+        }
+        editor.isearch_update();
+        // rfind from position 17 finds the last "hello" before cursor = position 12
+        assert_eq!(editor.point(), 12);
+    }
+
+    #[test]
+    fn isearch_next_backward() {
+        let mut editor = Editor::new_with_text("ab ab ab");
+        editor.pane_tree.focused_pane_mut().point = 8;
+        editor.execute(Command::ISearchBackward);
+        if let Some(ref mut isearch) = editor.isearch {
+            isearch.query = "ab".to_string();
+        }
+        if let Some(p) = editor.minibuffer.prompt_mut() {
+            p.input = "ab".to_string();
+        }
+        editor.isearch_update();
+        // First backward match from end
+        let first = editor.point();
+        editor.isearch_next();
+        // Should find an earlier match
+        assert!(editor.point() < first || editor.minibuffer.message.as_ref().unwrap().contains("Failing"));
+    }
+
+    #[test]
+    fn isearch_empty_query_restores() {
+        let mut editor = Editor::new_with_text("hello world");
+        editor.pane_tree.focused_pane_mut().point = 5;
+        editor.execute(Command::ISearchForward);
+        if let Some(ref mut isearch) = editor.isearch {
+            isearch.query = "world".to_string();
+        }
+        if let Some(p) = editor.minibuffer.prompt_mut() {
+            p.input = "world".to_string();
+        }
+        editor.isearch_update();
+        assert_eq!(editor.point(), 6);
+        // Clear query → should restore
+        if let Some(ref mut isearch) = editor.isearch {
+            isearch.query = String::new();
+        }
+        editor.isearch_update();
+        assert_eq!(editor.point(), 5);
+    }
+
+    #[test]
+    fn buffer_names_list() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.txt");
+        std::fs::write(&file, "hello").unwrap();
+
+        let mut editor = Editor::new();
+        editor.open_file(&file).unwrap();
+        let names = editor.buffer_names();
+        assert!(names.contains(&"*scratch*".to_string()));
+        assert!(names.contains(&"test.txt".to_string()));
+    }
 }

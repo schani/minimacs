@@ -451,4 +451,51 @@ mod tests {
         pane.ensure_visible(7);
         assert_eq!(pane.scroll_top, 5);
     }
+
+    #[test]
+    fn cycle_focus_single_pane_noop() {
+        let mut tree = PaneTree::new(0);
+        tree.cycle_focus();
+        assert_eq!(tree.focused_pane().buffer_id, 0);
+    }
+
+    #[test]
+    fn for_each_pane_visits_all() {
+        let mut tree = PaneTree::new(0);
+        tree.split(Direction::Vertical, 1);
+        let mut ids = Vec::new();
+        tree.for_each_pane(&mut |pane| {
+            ids.push(pane.buffer_id);
+        });
+        assert_eq!(ids.len(), 2);
+        assert!(ids.contains(&0));
+        assert!(ids.contains(&1));
+    }
+
+    #[test]
+    fn update_pane_viewport() {
+        let mut tree = PaneTree::new(0);
+        tree.update_pane_viewport(&[], 30, 100);
+        assert_eq!(tree.focused_pane().viewport_height, 30);
+        assert_eq!(tree.focused_pane().viewport_width, 100);
+    }
+
+    #[test]
+    fn delete_from_three_way_split() {
+        let mut tree = PaneTree::new(0);
+        // Split twice to get 3 panes
+        tree.split(Direction::Vertical, 1);
+        // Focus is on first child [0]
+        tree.cycle_focus(); // now on second child [1]
+        // Split the second child
+        tree.split(Direction::Vertical, 2);
+        // Now we have a root split with 2 children:
+        //   child 0: Leaf(0)
+        //   child 1: Split { Leaf(1), Leaf(2) }
+        assert_eq!(tree.pane_count(), 3);
+
+        // Delete the focused pane (which is inside the nested split)
+        assert!(tree.delete_focused());
+        assert_eq!(tree.pane_count(), 2);
+    }
 }
