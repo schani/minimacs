@@ -52,6 +52,26 @@ impl Buffer {
         }
     }
 
+    /// Create a new empty buffer with a file path (for files that don't exist yet).
+    pub fn new_for_path(id: BufferId, path: &Path) -> Self {
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.display().to_string());
+        let syntax_state = syntax::detect_language(path).and_then(SyntaxState::new);
+        Self {
+            id,
+            text: Rope::new(),
+            path: Some(path.to_path_buf()),
+            name,
+            modified: false,
+            read_only: false,
+            line_ending: LineEnding::Lf,
+            history: History::new(),
+            syntax: syntax_state,
+        }
+    }
+
     pub fn from_str(id: BufferId, name: &str, content: &str) -> Self {
         Self {
             id,

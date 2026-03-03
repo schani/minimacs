@@ -92,14 +92,26 @@ impl Editor {
 
         let id = self.next_buffer_id;
         self.next_buffer_id += 1;
-        let buf = Buffer::from_file(id, &canonical)?;
+        let buf = match Buffer::from_file(id, &canonical) {
+            Ok(buf) => buf,
+            Err(_) if !canonical.exists() => {
+                // File doesn't exist yet — create a new empty buffer with the path
+                Buffer::new_for_path(id, &canonical)
+            }
+            Err(e) => return Err(e),
+        };
         let name = buf.name.clone();
+        let msg = if buf.path.as_ref().is_some_and(|p| p.exists()) {
+            format!("Opened {}", name)
+        } else {
+            format!("(New file) {}", name)
+        };
         self.buffers.push(buf);
         let pane = self.pane_tree.focused_pane_mut();
         pane.buffer_id = id;
         pane.point = 0;
         pane.scroll_top = 0;
-        self.minibuffer.show_message(format!("Opened {}", name));
+        self.minibuffer.show_message(msg);
         Ok(())
     }
 
@@ -1751,6 +1763,42 @@ mod tests {
         editor.execute(Command::DeleteWordBackward);
         assert_eq!(editor.buffer_text(), "hello");
         assert_eq!(editor.point(), 0);
+    }
+
+    // === Non-existent file tests ===
+
+    #[test]
+    fn open_nonexistent_file_creates_buffer() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("new_file.txt");
+        assert!(!file.exists());
+
+        let mut editor = Editor::new();
+        editor.open_file(&file).unwrap();
+
+        assert_eq!(editor.current_buffer().name, "new_file.txt");
+        assert_eq!(editor.buffer_text(), "");
+        assert_eq!(
+            editor.current_buffer().path.as_ref().unwrap().file_name(),
+            Some(std::ffi::OsStr::new("new_file.txt"))
+        );
+    }
+
+    #[test]
+    fn open_nonexistent_file_save_creates_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("new_file.txt");
+        assert!(!file.exists());
+
+        let mut editor = Editor::new();
+        editor.open_file(&file).unwrap();
+        editor.execute(Command::InsertChar('h'));
+        editor.execute(Command::InsertChar('i'));
+        editor.execute(Command::Save);
+
+        assert!(file.exists());
+        let content = std::fs::read_to_string(&file).unwrap();
+        assert_eq!(content, "hi");
     }
 
     #[test]
