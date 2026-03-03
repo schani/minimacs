@@ -162,6 +162,12 @@ deleted text, and inserted text. Edits are grouped by kind:
 - Deletes and other operations each get their own group.
 - Redo stack is cleared on any new edit.
 
+History tracks a monotonic `version` counter (incremented on each commit) and
+a `clean_version` recording the version at last save/load. `is_clean()` returns
+true when no uncommitted edits exist and the current version matches the clean
+version. When the redo stack is cleared and the clean version was on the
+discarded branch, `clean_version` is set to `None` (unreachable).
+
 ## Event Loop
 
 `App::run()` is the main loop:
@@ -191,15 +197,22 @@ deleted text, and inserted text. Edits are grouped by kind:
    - Computes gutter width from the buffer's line count.
    - For each visible line: if syntax state exists, computes per-character
      styles from tree-sitter highlight spans; otherwise uses default style.
+   - Long lines are wrapped with a `\` continuation marker in the last column.
+     Wrapped segments get blank gutters; only the first visual row shows the
+     line number.
    - Overlays region highlighting (white background between mark and point).
    - Overlays search match highlighting (yellow for current match, dark for
      others).
-   - Renders lines with `Paragraph`, gutter with `Paragraph`.
+   - Gutter line numbers and text content are rendered together as spans
+     within a single `Paragraph` widget.
    - Renders the mode line: modified flag, buffer name, `(line,col)`,
      position percentage, and any pending key chord prefix.
-   - Focused pane gets bold white mode line; unfocused panes get dim gray.
+   - Focused pane gets a white-background bold mode line; unfocused panes
+     get dark gray background with white text.
 4. Renders the minibuffer (prompt or message).
-5. Sets the terminal cursor position to the focused pane's point.
+5. Sets the terminal cursor position. If the minibuffer is active, the cursor
+   goes to the minibuffer input. Otherwise it is placed at the focused pane's
+   point, accounting for line wrapping when computing the visual position.
 
 ## Syntax Highlighting
 
@@ -208,10 +221,10 @@ recognized language gets a `SyntaxState` containing a tree-sitter
 `HighlightConfiguration`.
 
 Highlighting happens at render time on visible lines only. The `highlight()`
-method takes a byte range, runs tree-sitter-highlight, and returns a list of
-`StyledSpan { text, style }`. These are converted to per-character `Style`
-entries in a `HashMap<(line, col), Style>` that the renderer consults when
-building `Span`s.
+method takes a byte slice, runs tree-sitter-highlight, and returns a list of
+`StyledSpan { start, end, style }` (byte ranges). The renderer converts these
+to per-character `Style` entries in a `HashMap<(line, col), Style>` that it
+consults when building `Span`s.
 
 The color theme is a built-in dark palette using 256-color indices.
 
@@ -221,8 +234,8 @@ The minibuffer has two states:
 
 - **Idle**: shows timed messages ("Wrote file.txt", "Quit", errors).
 - **Prompt**: active text input with a label. Prompt kinds:
-  `FindFile`, `WriteFile`, `SwitchBuffer`, `KillBuffer`, `GotoLine`,
-  `SaveConfirm`, `ISearch`.
+  `FindFile`, `WriteFile`, `SwitchBuffer`, `GotoLine`,
+  `SaveConfirm { buffer_name }`, `ISearch`.
 
 Tab completion is implemented for file paths (reads the filesystem) and buffer
 names (matches against open buffers). The minibuffer supports basic editing:
@@ -272,4 +285,3 @@ trait EventSource {
 3. **Snapshot tests**: use `insta::assert_snapshot!` to capture rendered screen
    output from `TestBackend` and compare against stored snapshots.
 
-There are 144 tests across all modules.

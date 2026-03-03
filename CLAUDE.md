@@ -1,3 +1,5 @@
+- The ARCHITECTURE.md file is an overview of the architecture
 - Make a commit for each minimally complete change
 - Always start with tests, then write the actual code
 - Check the TODO.md file. If there are tasks in there, do them, then check them off.
+- Documentation, in particular ARCHITECTURE.md, must always be kept up-to-date!
