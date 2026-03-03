@@ -136,6 +136,7 @@ impl Buffer {
         };
         let content: String = self.text.to_string();
         fs::write(&path, &content)?;
+        self.history.mark_clean();
         self.modified = false;
         Ok(())
     }
@@ -198,6 +199,11 @@ impl Buffer {
             self.text.remove(start..end);
             self.modified = true;
         }
+    }
+
+    /// Update the modified flag based on undo history clean state.
+    pub fn update_modified(&mut self) {
+        self.modified = !self.history.is_clean();
     }
 }
 

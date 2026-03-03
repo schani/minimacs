@@ -23,6 +23,11 @@ pub struct History {
     current_group: Vec<Edit>,
     /// Track the kind of last edit for grouping decisions.
     last_edit_kind: EditKind,
+    /// Monotonic version counter, incremented on each commit.
+    version: usize,
+    /// Version at which the buffer was last saved/loaded (clean).
+    /// `None` means the clean state is unreachable (branch diverged).
+    clean_version: Option<usize>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,6 +46,8 @@ impl History {
             redo_stack: Vec::new(),
             current_group: Vec::new(),
             last_edit_kind: EditKind::None,
+            version: 0,
+            clean_version: Some(0),
         }
     }
 
@@ -74,7 +81,7 @@ impl History {
         });
         self.last_edit_kind = EditKind::Insert;
         // Clear redo stack on new edit
-        self.redo_stack.clear();
+        self.clear_redo();
     }
 
     /// Record a delete edit. Each delete is its own group.
@@ -92,7 +99,19 @@ impl History {
         self.last_edit_kind = EditKind::Delete;
         // Don't auto-commit deletes - they'll be committed on next non-delete action
         // Clear redo stack on new edit
-        self.redo_stack.clear();
+        self.clear_redo();
+    }
+
+    /// Clear the redo stack, invalidating clean_version if it was on the redo path.
+    fn clear_redo(&mut self) {
+        if !self.redo_stack.is_empty() {
+            // If the clean version is ahead of current version,
+            // it was on the redo path and is now unreachable
+            if self.clean_version.is_some_and(|cv| cv > self.version) {
+                self.clean_version = None;
+            }
+            self.redo_stack.clear();
+        }
     }
 
     /// Commit the current group to the undo stack.
@@ -102,6 +121,7 @@ impl History {
                 edits: std::mem::take(&mut self.current_group),
             };
             self.undo_stack.push(group);
+            self.version += 1;
             self.last_edit_kind = EditKind::None;
         }
     }
@@ -118,6 +138,7 @@ impl History {
     pub fn undo(&mut self) -> Option<EditGroup> {
         self.commit(); // commit any pending edits first
         if let Some(group) = self.undo_stack.pop() {
+            self.version -= 1;
             self.redo_stack.push(group.clone());
             Some(group)
         } else {
@@ -129,11 +150,22 @@ impl History {
     /// The group is moved back to the undo stack.
     pub fn redo(&mut self) -> Option<EditGroup> {
         if let Some(group) = self.redo_stack.pop() {
+            self.version += 1;
             self.undo_stack.push(group.clone());
             Some(group)
         } else {
             None
         }
+    }
+
+    /// Mark the current state as "clean" (e.g., after saving).
+    pub fn mark_clean(&mut self) {
+        self.clean_version = Some(self.version);
+    }
+
+    /// Check if the buffer is in the clean state (no modifications since last save/load).
+    pub fn is_clean(&self) -> bool {
+        self.current_group.is_empty() && self.clean_version == Some(self.version)
     }
 }
 
@@ -254,5 +286,63 @@ mod tests {
     fn empty_redo_returns_none() {
         let mut hist = History::new();
         assert!(hist.redo().is_none());
+    }
+
+    #[test]
+    fn initially_clean() {
+        let hist = History::new();
+        assert!(hist.is_clean());
+    }
+
+    #[test]
+    fn dirty_after_edit() {
+        let mut hist = History::new();
+        hist.record_insert(0, "a");
+        assert!(!hist.is_clean());
+    }
+
+    #[test]
+    fn clean_after_undo_to_origin() {
+        let mut hist = History::new();
+        hist.record_insert(0, "a");
+        hist.commit();
+        assert!(!hist.is_clean());
+        hist.undo();
+        assert!(hist.is_clean());
+    }
+
+    #[test]
+    fn clean_after_mark_clean() {
+        let mut hist = History::new();
+        hist.record_insert(0, "a");
+        hist.commit();
+        hist.mark_clean();
+        assert!(hist.is_clean());
+    }
+
+    #[test]
+    fn clean_after_undo_redo_to_clean_point() {
+        let mut hist = History::new();
+        hist.record_insert(0, "a");
+        hist.commit();
+        hist.mark_clean();
+        hist.record_insert(1, "b");
+        hist.commit();
+        assert!(!hist.is_clean());
+        hist.undo();
+        assert!(hist.is_clean());
+    }
+
+    #[test]
+    fn dirty_after_branch_diverges() {
+        let mut hist = History::new();
+        hist.record_insert(0, "a");
+        hist.commit();
+        hist.mark_clean(); // clean at version 1
+        hist.undo(); // back to version 0
+        hist.record_insert(0, "b"); // new branch, redo cleared
+        hist.commit(); // version 2, but on different branch
+        // clean_version was 1 on old branch, now unreachable
+        assert!(!hist.is_clean());
     }
 }

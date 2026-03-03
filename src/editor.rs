@@ -715,6 +715,7 @@ impl Editor {
             if let Some(first) = group.edits.first() {
                 self.pane_tree.focused_pane_mut().point = first.position;
             }
+            self.current_buffer_mut().update_modified();
             self.minibuffer.show_message("Undo!".to_string());
         } else {
             self.minibuffer
@@ -738,6 +739,7 @@ impl Editor {
                 self.pane_tree.focused_pane_mut().point =
                     last.position + last.inserted.len();
             }
+            self.current_buffer_mut().update_modified();
             self.minibuffer.show_message("Redo!".to_string());
         } else {
             self.minibuffer
@@ -2129,5 +2131,47 @@ mod tests {
         let names = editor.buffer_names();
         assert!(names.contains(&"*scratch*".to_string()));
         assert!(names.contains(&"test.txt".to_string()));
+    }
+
+    #[test]
+    fn undo_restores_unmodified_state() {
+        let mut editor = Editor::new_with_text("hello");
+        assert!(!editor.current_buffer().modified);
+        editor.execute(Command::InsertChar('X'));
+        assert!(editor.current_buffer().modified);
+        editor.commit_undo_group();
+        editor.execute(Command::Undo);
+        assert!(
+            !editor.current_buffer().modified,
+            "Buffer should be unmodified after undoing to original state"
+        );
+    }
+
+    #[test]
+    fn undo_redo_preserves_modified_after_save() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.txt");
+        std::fs::write(&file, "original").unwrap();
+
+        let mut editor = Editor::new();
+        editor.open_file(&file).unwrap();
+        assert!(!editor.current_buffer().modified);
+
+        // Make an edit and save
+        editor.execute(Command::InsertChar('X'));
+        editor.execute(Command::Save);
+        assert!(!editor.current_buffer().modified);
+
+        // Make another edit
+        editor.execute(Command::InsertChar('Y'));
+        assert!(editor.current_buffer().modified);
+
+        // Undo back to saved state
+        editor.commit_undo_group();
+        editor.execute(Command::Undo);
+        assert!(
+            !editor.current_buffer().modified,
+            "Should be unmodified after undoing to last save point"
+        );
     }
 }

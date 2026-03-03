@@ -3,4 +3,4 @@
 - [x] Add a pre-commit hook that runs the build and unit tests, and doesn't allow committing if they fail
 - [x] Enforce unit test coverage threshold
 - [x] Invoking the editor with a filename that doesn't exist should still open a buffer for that file, and saving it should save to that file
-- [ ] When a file is unchanged, doing something, and then undoing that, should put it back into the unchanged state
+- [x] When a file is unchanged, doing something, and then undoing that, should put it back into the unchanged state
