@@ -1,0 +1,34 @@
+[package]
+name = "minimacs"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+default = ["clipboard"]
+clipboard = ["arboard"]
+
+[dependencies]
+ratatui = "0.30"
+crossterm = { version = "0.29", features = ["bracketed-paste"] }
+ropey = "1"
+unicode-segmentation = "1"
+unicode-width = "0.2"
+anyhow = "1"
+arboard = { version = "3", features = ["wayland-data-control"], optional = true }
+tree-sitter = "0.25"
+tree-sitter-language = "0.1"
+tree-sitter-highlight = "0.25"
+tree-sitter-rust = "0.24"
+tree-sitter-javascript = "0.23"
+tree-sitter-typescript = "0.23"
+tree-sitter-json = "0.24"
+tree-sitter-toml-ng = "0.7"
+tree-sitter-go = "0.23"
+tree-sitter-html = "0.23"
+tree-sitter-bash = "0.23"
+tree-sitter-yaml = "0.7"
+tree-sitter-md = "0.5"
+
+[dev-dependencies]
+insta = "1"
+tempfile = "3"

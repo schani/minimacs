@@ -1,0 +1,13 @@
+---
+source: src/app.rs
+expression: screen
+---
+1 line one
+2 line two
+3 line three
+  ~
+  ~
+  ~
+  ~
+  ~
+ -- *scratch* (1,0)  Top
