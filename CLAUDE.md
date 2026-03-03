@@ -1,0 +1,3 @@
+- Make a commit for each minimally complete change
+- Always start with tests, then write the actual code
+- Check the TODO.md file. If there are tasks in there, do them, then check them off.
