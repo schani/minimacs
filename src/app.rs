@@ -591,7 +591,8 @@ mod tests {
         // not on visual row 0
         let buf = app.terminal.backend().buffer();
         // Check that the cursor was set (we can verify point is at end)
-        assert_eq!(app.editor.point(), 25);
+        // "abcdefghijklmnopqrstuvwxyz" has 26 chars, C-e goes to position 26
+        assert_eq!(app.editor.point(), 26);
 
         // Verify the wrapped text renders correctly
         let screen = capture_screen(&app.terminal);

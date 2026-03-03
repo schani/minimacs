@@ -75,9 +75,27 @@ pub fn render(frame: &mut Frame, editor: &Editor) {
         if is_focused && !editor.minibuffer.is_active() {
             let (cursor_line, cursor_col) = buf.char_to_line_col(pane.point);
             let gw = gutter_width(buf.line_count());
+            let text_width = (text_area.width as usize).saturating_sub(gw);
 
-            let screen_line = cursor_line.saturating_sub(pane.scroll_top) as u16;
-            let screen_col = gw as u16 + cursor_col as u16;
+            // Compute visual row from scroll_top, accounting for wrapping
+            let mut visual_row: usize = 0;
+            for lidx in pane.scroll_top..cursor_line {
+                let line_len = buf.line_len_chars(lidx);
+                visual_row += visual_lines_for_length(line_len, text_width);
+            }
+
+            // Add offset within cursor's line if it wraps
+            let line_len = buf.line_len_chars(cursor_line);
+            let (row_in_line, col_in_segment) = if text_width > 1 && line_len > text_width {
+                let cps = text_width - 1;
+                (cursor_col / cps, cursor_col % cps)
+            } else {
+                (0, cursor_col)
+            };
+            visual_row += row_in_line;
+
+            let screen_line = visual_row as u16;
+            let screen_col = gw as u16 + col_in_segment as u16;
 
             if screen_col < text_area.x + text_area.width && screen_line < text_area.height {
                 frame.set_cursor_position((text_area.x + screen_col, text_area.y + screen_line));
@@ -97,6 +115,18 @@ fn gutter_width(line_count: usize) -> usize {
     digits + 1 // +1 for separator space
 }
 
+/// Compute how many visual rows a buffer line occupies with wrapping.
+fn visual_lines_for_length(line_char_len: usize, text_width: usize) -> usize {
+    if text_width <= 1 || line_char_len <= text_width {
+        return 1;
+    }
+    let chars_per_segment = text_width - 1; // one column reserved for '\'
+    // First N-1 segments hold chars_per_segment chars each; last segment holds up to text_width.
+    // N = 1 + ceil((line_char_len - text_width) / chars_per_segment)
+    let excess = line_char_len - text_width;
+    1 + excess.div_ceil(chars_per_segment)
+}
+
 fn render_pane_text(
     frame: &mut Frame,
     buf: &Buffer,
@@ -107,94 +137,184 @@ fn render_pane_text(
     area: Rect,
 ) {
     let scroll_top = pane.scroll_top;
-    let visible_lines = area.height as usize;
+    let max_visual_rows = area.height as usize;
     let total_lines = buf.line_count();
     let gw = gutter_width(total_lines);
+    let text_width = (area.width as usize).saturating_sub(gw);
 
-    // Compute per-character syntax styles for visible lines (if syntax available)
-    let syntax_styles = compute_syntax_char_styles(buf, scroll_top, visible_lines);
+    // Compute per-character syntax styles for visible buffer lines
+    let syntax_styles = compute_syntax_char_styles(buf, scroll_top, max_visual_rows);
 
-    let mut lines = Vec::new();
-    for i in 0..visible_lines {
-        let line_idx = scroll_top + i;
-        if line_idx < total_lines {
+    let mut output_lines: Vec<Line> = Vec::new();
+    let mut line_idx = scroll_top;
+
+    while output_lines.len() < max_visual_rows && line_idx < total_lines {
+        let line_text: String = buf.text.line(line_idx).chars().collect();
+        let line_text = line_text.trim_end_matches('\n').trim_end_matches('\r');
+        let line_start_char = buf.text.line_to_char(line_idx);
+        let line_chars: Vec<char> = line_text.chars().collect();
+
+        if text_width == 0 {
+            output_lines.push(Line::from(Span::raw(String::new())));
+            line_idx += 1;
+            continue;
+        }
+
+        if line_chars.len() <= text_width {
+            // Line fits in one visual row — no wrapping needed
             let line_num = format!("{:>width$} ", line_idx + 1, width = gw - 1);
-            let line_text: String = buf.text.line(line_idx).chars().collect();
-            let line_text = line_text.trim_end_matches('\n').trim_end_matches('\r');
-
             let mut spans = vec![Span::styled(
                 line_num,
                 Style::default().fg(Color::DarkGray),
             )];
 
-            let line_start_char = buf.text.line_to_char(line_idx);
-            let line_chars: Vec<char> = line_text.chars().collect();
-
-            if line_chars.is_empty() {
-                spans.push(Span::raw(String::new()));
-            } else {
-                // Build per-character style array
-                let char_styles: Vec<Style> = line_chars.iter().enumerate().map(|(col, _)| {
-                    let char_pos = line_start_char + col;
-
-                    // Priority: region > current match > other matches > syntax > default
-                    let in_region = region
-                        .map(|(rs, re)| char_pos >= rs && char_pos < re)
-                        .unwrap_or(false);
-
-                    if in_region {
-                        Style::default().bg(Color::White).fg(Color::Black)
-                    } else {
-                        // Check if in a search match
-                        let is_current_match = current_match.is_some_and(|cm| {
-                            search_matches.iter().any(|(pos, len)| {
-                                *pos == cm && char_pos >= *pos && char_pos < *pos + *len
-                            })
-                        });
-                        let is_other_match = search_matches.iter().any(|(pos, len)| {
-                            char_pos >= *pos && char_pos < *pos + *len
-                        });
-
-                        if is_current_match {
-                            // Current match: bright yellow bg
-                            Style::default().bg(Color::Yellow).fg(Color::Black)
-                        } else if is_other_match {
-                            // Other matches: dim highlight
-                            Style::default().bg(Color::Indexed(58)).fg(Color::White)
-                        } else if let Some(ref syn) = syntax_styles {
-                            syn.get(&(line_idx, col)).copied().unwrap_or_default()
-                        } else {
-                            Style::default()
-                        }
-                    }
-                }).collect();
-
-                // RLE: merge consecutive chars with same style into spans
-                let mut run_start = 0;
-                while run_start < line_chars.len() {
-                    let style = char_styles[run_start];
-                    let mut run_end = run_start + 1;
-                    while run_end < line_chars.len() && char_styles[run_end] == style {
-                        run_end += 1;
-                    }
-                    let text: String = line_chars[run_start..run_end].iter().collect();
-                    spans.push(Span::styled(text, style));
-                    run_start = run_end;
-                }
+            if !line_chars.is_empty() {
+                build_styled_spans(
+                    &mut spans,
+                    &line_chars,
+                    0,
+                    line_chars.len(),
+                    line_idx,
+                    line_start_char,
+                    region,
+                    search_matches,
+                    current_match,
+                    &syntax_styles,
+                );
             }
 
-            lines.push(Line::from(spans));
+            output_lines.push(Line::from(spans));
         } else {
-            let padding = " ".repeat(gw);
-            lines.push(Line::from(Span::styled(
-                format!("{}~", padding),
-                Style::default().fg(Color::DarkGray),
-            )));
+            // Line needs wrapping
+            let chars_per_segment = (text_width - 1).max(1);
+            let mut offset = 0;
+            let mut is_first = true;
+
+            while offset < line_chars.len() && output_lines.len() < max_visual_rows {
+                let remaining = line_chars.len() - offset;
+                let is_last = remaining <= text_width;
+                let segment_len = if is_last { remaining } else { chars_per_segment };
+
+                // Gutter: line number for first visual line, blank for continuation
+                let gutter_text = if is_first {
+                    format!("{:>width$} ", line_idx + 1, width = gw - 1)
+                } else {
+                    " ".repeat(gw)
+                };
+                let mut spans = vec![Span::styled(
+                    gutter_text,
+                    Style::default().fg(Color::DarkGray),
+                )];
+
+                build_styled_spans(
+                    &mut spans,
+                    &line_chars,
+                    offset,
+                    offset + segment_len,
+                    line_idx,
+                    line_start_char,
+                    region,
+                    search_matches,
+                    current_match,
+                    &syntax_styles,
+                );
+
+                if !is_last {
+                    spans.push(Span::styled(
+                        "\\",
+                        Style::default().fg(Color::DarkGray),
+                    ));
+                }
+
+                output_lines.push(Line::from(spans));
+                offset += segment_len;
+                is_first = false;
+            }
         }
+
+        line_idx += 1;
     }
 
-    let paragraph = Paragraph::new(lines);
+    // Fill remaining rows with ~
+    while output_lines.len() < max_visual_rows {
+        let padding = " ".repeat(gw);
+        output_lines.push(Line::from(Span::styled(
+            format!("{}~", padding),
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+
+    let paragraph = Paragraph::new(output_lines);
     frame.render_widget(paragraph, area);
+}
+
+/// Build styled spans for a segment of a buffer line (chars[start..end]).
+#[allow(clippy::too_many_arguments)]
+fn build_styled_spans(
+    spans: &mut Vec<Span<'static>>,
+    line_chars: &[char],
+    start: usize,
+    end: usize,
+    line_idx: usize,
+    line_start_char: usize,
+    region: Option<(usize, usize)>,
+    search_matches: &[(usize, usize)],
+    current_match: Option<usize>,
+    syntax_styles: &Option<std::collections::HashMap<(usize, usize), Style>>,
+) {
+    let segment = &line_chars[start..end];
+    if segment.is_empty() {
+        return;
+    }
+
+    let char_styles: Vec<Style> = segment
+        .iter()
+        .enumerate()
+        .map(|(j, _)| {
+            let col = start + j; // column within the buffer line
+            let char_pos = line_start_char + col; // global char position
+
+            let in_region = region
+                .map(|(rs, re)| char_pos >= rs && char_pos < re)
+                .unwrap_or(false);
+
+            if in_region {
+                Style::default().bg(Color::White).fg(Color::Black)
+            } else {
+                let is_current_match = current_match.is_some_and(|cm| {
+                    search_matches
+                        .iter()
+                        .any(|(pos, len)| *pos == cm && char_pos >= *pos && char_pos < *pos + *len)
+                });
+                let is_other_match = search_matches
+                    .iter()
+                    .any(|(pos, len)| char_pos >= *pos && char_pos < *pos + *len);
+
+                if is_current_match {
+                    Style::default().bg(Color::Yellow).fg(Color::Black)
+                } else if is_other_match {
+                    Style::default().bg(Color::Indexed(58)).fg(Color::White)
+                } else if let Some(ref syn) = syntax_styles {
+                    syn.get(&(line_idx, col)).copied().unwrap_or_default()
+                } else {
+                    Style::default()
+                }
+            }
+        })
+        .collect();
+
+    // RLE: merge consecutive chars with same style into spans
+    let mut run_start = 0;
+    while run_start < segment.len() {
+        let style = char_styles[run_start];
+        let mut run_end = run_start + 1;
+        while run_end < segment.len() && char_styles[run_end] == style {
+            run_end += 1;
+        }
+        let text: String = segment[run_start..run_end].iter().collect();
+        spans.push(Span::styled(text, style));
+        run_start = run_end;
+    }
 }
 
 /// Compute per-character syntax styles for visible lines.
@@ -228,15 +348,18 @@ fn compute_syntax_char_styles(
     let styled_spans = syntax.highlight(&visible_bytes);
 
     // Build a byte-to-style lookup, then map to (line, col) via char positions
-    // First, build a byte-offset -> style array
     let mut byte_styles = vec![Style::default(); visible_bytes.len()];
     for ss in &styled_spans {
-        for item in byte_styles.iter_mut().take(ss.end.min(visible_bytes.len())).skip(ss.start) {
+        for item in byte_styles
+            .iter_mut()
+            .take(ss.end.min(visible_bytes.len()))
+            .skip(ss.start)
+        {
             *item = ss.style;
         }
     }
 
-    // Now map each visible line's chars to styles
+    // Map each visible line's chars to styles
     let mut result = std::collections::HashMap::new();
 
     for line_idx in first_line..last_line {
@@ -351,5 +474,34 @@ mod tests {
         assert_eq!(gutter_width(10), 3);  // "10 "
         assert_eq!(gutter_width(99), 3);  // "99 "
         assert_eq!(gutter_width(100), 4); // "100 "
+    }
+
+    #[test]
+    fn visual_lines_no_wrap() {
+        // Lines that fit within text_width don't wrap
+        assert_eq!(visual_lines_for_length(5, 18), 1);
+        assert_eq!(visual_lines_for_length(18, 18), 1); // exactly fits
+        assert_eq!(visual_lines_for_length(0, 18), 1);
+    }
+
+    #[test]
+    fn visual_lines_single_wrap() {
+        // text_width=18, cps=17. Line of 19 chars wraps into 2 visual lines.
+        assert_eq!(visual_lines_for_length(19, 18), 2);
+        // 35 chars: seg1=17+\, seg2=18 (fits). 2 visual lines.
+        assert_eq!(visual_lines_for_length(35, 18), 2);
+    }
+
+    #[test]
+    fn visual_lines_double_wrap() {
+        // text_width=18, cps=17. 36 chars: seg1=17, seg2=17, seg3=2. 3 lines.
+        assert_eq!(visual_lines_for_length(36, 18), 3);
+    }
+
+    #[test]
+    fn visual_lines_triple_wrap() {
+        // text_width=13, cps=12. 36 chars:
+        // seg1=12, remaining=24. excess=36-13=23. 1+ceil(23/12)=1+2=3.
+        assert_eq!(visual_lines_for_length(36, 13), 3);
     }
 }
