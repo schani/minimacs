@@ -184,6 +184,14 @@ fn alt(c: char) -> Key {
     }
 }
 
+fn alt_key(code: KeyCode) -> Key {
+    Key {
+        code,
+        ctrl: false,
+        alt: true,
+    }
+}
+
 fn plain(code: KeyCode) -> Key {
     Key {
         code,
@@ -227,6 +235,10 @@ pub fn default_keymap() -> KeymapNode {
     root.bind(&[plain(KeyCode::Delete)], Command::DeleteForward);
     root.bind(&[ctrl('k')], Command::KillLine);
     root.bind(&[plain(KeyCode::Tab)], Command::InsertTab);
+    root.bind(
+        &[alt_key(KeyCode::Backspace)],
+        Command::DeleteWordBackward,
+    );
 
     // Undo/Redo
     root.bind(&[ctrl('/')], Command::Undo);

@@ -157,7 +157,8 @@ impl Editor {
         // Mark non-edit actions for undo grouping
         match &cmd {
             Command::InsertChar(_) | Command::InsertNewline | Command::InsertTab => {}
-            Command::DeleteBackward | Command::DeleteForward | Command::KillLine => {}
+            Command::DeleteBackward | Command::DeleteForward | Command::DeleteWordBackward
+            | Command::KillLine => {}
             Command::Undo | Command::Redo => {}
             _ => {
                 self.current_buffer_mut().history.mark_action();
@@ -182,6 +183,7 @@ impl Editor {
             Command::InsertTab => self.insert_tab(),
             Command::DeleteBackward => self.delete_backward(),
             Command::DeleteForward => self.delete_forward(),
+            Command::DeleteWordBackward => self.delete_word_backward(),
             Command::KillLine => self.kill_line(),
             Command::Undo => self.undo(),
             Command::Redo => self.redo(),
@@ -457,6 +459,45 @@ impl Editor {
         let pane = self.pane_tree.focused_pane_mut();
         pane.point = pos;
         pane.preferred_column = None;
+    }
+
+    fn delete_word_backward(&mut self) {
+        let buf = self.current_buffer();
+        let start = self.pane_tree.focused_pane().point;
+        if start == 0 {
+            return;
+        }
+
+        // Find the word boundary (same logic as backward_word)
+        let mut pos = start;
+        while pos > 0 {
+            let ch = buf.text.char(pos - 1);
+            if ch.is_alphanumeric() || ch == '_' {
+                break;
+            }
+            pos -= 1;
+        }
+        while pos > 0 {
+            let ch = buf.text.char(pos - 1);
+            if !ch.is_alphanumeric() && ch != '_' {
+                break;
+            }
+            pos -= 1;
+        }
+
+        // Delete from pos to start
+        let deleted: String = self
+            .current_buffer()
+            .text
+            .slice(pos..start)
+            .chars()
+            .collect();
+        self.current_buffer_mut()
+            .history
+            .record_delete(pos, &deleted);
+        self.current_buffer_mut().remove(pos, start);
+        self.pane_tree.focused_pane_mut().point = pos;
+        self.pane_tree.focused_pane_mut().preferred_column = None;
     }
 
     fn next_line(&mut self) {
@@ -1682,5 +1723,44 @@ mod tests {
         assert_eq!(editor.point(), 8); // Start of "baz"
         editor.execute(Command::BackwardWord);
         assert_eq!(editor.point(), 0); // Start of "foo_bar"
+    }
+
+    // === Delete word backward tests ===
+
+    #[test]
+    fn delete_word_backward_basic() {
+        let mut editor = Editor::new_with_text("hello world");
+        editor.pane_tree.focused_pane_mut().point = 11;
+        editor.execute(Command::DeleteWordBackward);
+        assert_eq!(editor.buffer_text(), "hello ");
+        assert_eq!(editor.point(), 6);
+    }
+
+    #[test]
+    fn delete_word_backward_with_spaces() {
+        let mut editor = Editor::new_with_text("hello   world");
+        editor.pane_tree.focused_pane_mut().point = 13;
+        editor.execute(Command::DeleteWordBackward);
+        assert_eq!(editor.buffer_text(), "hello   ");
+        assert_eq!(editor.point(), 8);
+    }
+
+    #[test]
+    fn delete_word_backward_at_start() {
+        let mut editor = Editor::new_with_text("hello");
+        editor.execute(Command::DeleteWordBackward);
+        assert_eq!(editor.buffer_text(), "hello");
+        assert_eq!(editor.point(), 0);
+    }
+
+    #[test]
+    fn delete_word_backward_undo() {
+        let mut editor = Editor::new_with_text("hello world");
+        editor.pane_tree.focused_pane_mut().point = 11;
+        editor.execute(Command::DeleteWordBackward);
+        assert_eq!(editor.buffer_text(), "hello ");
+        editor.commit_undo_group();
+        editor.execute(Command::Undo);
+        assert_eq!(editor.buffer_text(), "hello world");
     }
 }

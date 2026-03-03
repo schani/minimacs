@@ -21,6 +21,7 @@ pub enum Command {
     InsertTab,
     DeleteBackward,
     DeleteForward,
+    DeleteWordBackward,
     KillLine,
 
     // Undo/Redo
