@@ -42,30 +42,28 @@ pub struct StyledSpan {
 }
 
 /// Maps a highlight name index to a ratatui Style.
-fn style_for_highlight(idx: usize) -> Style {
+pub(crate) fn style_for_highlight(idx: usize) -> Style {
     let name = HIGHLIGHT_NAMES.get(idx).copied().unwrap_or("");
     match name {
-        "comment" => Style::default().fg(Color::Indexed(243)), // gray
-        "string" | "string.special" => Style::default().fg(Color::Indexed(113)), // green
-        "number" => Style::default().fg(Color::Indexed(176)), // magenta/pink
-        "keyword" => Style::default().fg(Color::Indexed(170)), // purple
+        "comment" => Style::default().fg(Color::Rgb(0, 128, 0)),          // #008000
+        "string" | "string.special" => Style::default().fg(Color::Rgb(163, 21, 21)), // #A31515
+        "number" => Style::default().fg(Color::Rgb(9, 134, 88)),          // #098658
+        "keyword" => Style::default().fg(Color::Rgb(0, 0, 255)),          // #0000FF
         "function" | "function.builtin" | "function.macro" => {
-            Style::default().fg(Color::Indexed(75))  // blue
+            Style::default().fg(Color::Rgb(121, 94, 38))                  // #795E26
         }
-        "type" | "type.builtin" => Style::default().fg(Color::Indexed(186)), // yellow
-        "constant" | "constant.builtin" => Style::default().fg(Color::Indexed(173)), // orange
-        "variable.builtin" => Style::default().fg(Color::Indexed(204)), // red
-        "variable.parameter" => Style::default().fg(Color::Indexed(252)), // light
-        "attribute" => Style::default().fg(Color::Indexed(186)), // yellow
-        "operator" => Style::default().fg(Color::Indexed(252)), // light
-        "constructor" => Style::default().fg(Color::Indexed(186)), // yellow
-        "escape" => Style::default().fg(Color::Indexed(173)), // orange
-        "tag" => Style::default().fg(Color::Indexed(204)), // red
-        "label" => Style::default().fg(Color::Indexed(75)), // blue
-        "property" => Style::default().fg(Color::Indexed(152)), // cyan-ish
-        "punctuation" | "punctuation.bracket" | "punctuation.delimiter"
-        | "punctuation.special" => Style::default().fg(Color::Indexed(248)), // light gray
-        "variable" => Style::default(),
+        "type" | "type.builtin" => Style::default().fg(Color::Rgb(38, 127, 153)), // #267F99
+        "constant" | "constant.builtin" => Style::default().fg(Color::Rgb(0, 112, 193)), // #0070C1
+        "variable.builtin" => Style::default().fg(Color::Rgb(0, 0, 255)), // #0000FF
+        "variable.parameter" => Style::default().fg(Color::Rgb(0, 16, 128)), // #001080
+        "variable" => Style::default().fg(Color::Rgb(0, 16, 128)),        // #001080
+        "attribute" => Style::default().fg(Color::Rgb(38, 127, 153)),     // #267F99
+        "constructor" => Style::default().fg(Color::Rgb(38, 127, 153)),   // #267F99
+        "escape" => Style::default().fg(Color::Rgb(238, 0, 0)),           // #EE0000
+        "tag" => Style::default().fg(Color::Rgb(128, 0, 0)),              // #800000
+        "property" => Style::default().fg(Color::Rgb(0, 16, 128)),        // #001080
+        "operator" | "label" | "punctuation" | "punctuation.bracket"
+        | "punctuation.delimiter" | "punctuation.special" => Style::default(),
         _ => Style::default(),
     }
 }
@@ -358,6 +356,101 @@ mod tests {
         let source = br#"{"key": "value", "num": 123}"#;
         let spans = state.highlight(source);
         assert!(!spans.is_empty());
+    }
+
+    /// Helper: look up the index of a highlight name.
+    fn highlight_index(name: &str) -> usize {
+        HIGHLIGHT_NAMES.iter().position(|&n| n == name).unwrap()
+    }
+
+    #[test]
+    fn vscode_light_comment_color() {
+        let style = style_for_highlight(highlight_index("comment"));
+        assert_eq!(style.fg, Some(Color::Rgb(0, 128, 0)));
+    }
+
+    #[test]
+    fn vscode_light_string_color() {
+        let style = style_for_highlight(highlight_index("string"));
+        assert_eq!(style.fg, Some(Color::Rgb(163, 21, 21)));
+    }
+
+    #[test]
+    fn vscode_light_keyword_color() {
+        let style = style_for_highlight(highlight_index("keyword"));
+        assert_eq!(style.fg, Some(Color::Rgb(0, 0, 255)));
+    }
+
+    #[test]
+    fn vscode_light_function_color() {
+        let style = style_for_highlight(highlight_index("function"));
+        assert_eq!(style.fg, Some(Color::Rgb(121, 94, 38)));
+    }
+
+    #[test]
+    fn vscode_light_type_color() {
+        let style = style_for_highlight(highlight_index("type"));
+        assert_eq!(style.fg, Some(Color::Rgb(38, 127, 153)));
+    }
+
+    #[test]
+    fn vscode_light_number_color() {
+        let style = style_for_highlight(highlight_index("number"));
+        assert_eq!(style.fg, Some(Color::Rgb(9, 134, 88)));
+    }
+
+    #[test]
+    fn vscode_light_constant_color() {
+        let style = style_for_highlight(highlight_index("constant"));
+        assert_eq!(style.fg, Some(Color::Rgb(0, 112, 193)));
+    }
+
+    #[test]
+    fn vscode_light_variable_builtin_color() {
+        let style = style_for_highlight(highlight_index("variable.builtin"));
+        assert_eq!(style.fg, Some(Color::Rgb(0, 0, 255)));
+    }
+
+    #[test]
+    fn vscode_light_variable_parameter_color() {
+        let style = style_for_highlight(highlight_index("variable.parameter"));
+        assert_eq!(style.fg, Some(Color::Rgb(0, 16, 128)));
+    }
+
+    #[test]
+    fn vscode_light_variable_color() {
+        let style = style_for_highlight(highlight_index("variable"));
+        assert_eq!(style.fg, Some(Color::Rgb(0, 16, 128)));
+    }
+
+    #[test]
+    fn vscode_light_escape_color() {
+        let style = style_for_highlight(highlight_index("escape"));
+        assert_eq!(style.fg, Some(Color::Rgb(238, 0, 0)));
+    }
+
+    #[test]
+    fn vscode_light_tag_color() {
+        let style = style_for_highlight(highlight_index("tag"));
+        assert_eq!(style.fg, Some(Color::Rgb(128, 0, 0)));
+    }
+
+    #[test]
+    fn vscode_light_property_color() {
+        let style = style_for_highlight(highlight_index("property"));
+        assert_eq!(style.fg, Some(Color::Rgb(0, 16, 128)));
+    }
+
+    #[test]
+    fn vscode_light_operator_default() {
+        let style = style_for_highlight(highlight_index("operator"));
+        assert_eq!(style, Style::default());
+    }
+
+    #[test]
+    fn vscode_light_punctuation_default() {
+        let style = style_for_highlight(highlight_index("punctuation"));
+        assert_eq!(style, Style::default());
     }
 
     #[test]
