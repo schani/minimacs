@@ -8,15 +8,27 @@ use crate::buffer::Buffer;
 use crate::editor::Editor;
 use crate::pane::Pane;
 
+/// Compute the multi-column layout for completions.
+///
+/// Returns `(num_cols, num_rows, col_width)`.
+pub fn completions_layout(num_candidates: usize, max_candidate_len: usize, width: usize) -> (usize, usize, usize) {
+    let col_width = (max_candidate_len + 2).max(1).min(width);
+    let num_cols = (width / col_width).max(1);
+    let num_rows = num_candidates.div_ceil(num_cols);
+    (num_cols, num_rows, col_width)
+}
+
 /// Compute the height of the completions area.
-pub fn completions_height(editor: &Editor, total_height: u16) -> u16 {
+pub fn completions_height(editor: &Editor, total_height: u16, total_width: u16) -> u16 {
     if !editor.minibuffer.is_active() {
         return 0;
     }
     match &editor.minibuffer.completions {
         Some(candidates) if !candidates.is_empty() => {
             let max_rows = ((total_height.saturating_sub(2)) / 3).max(1) as usize;
-            candidates.len().min(max_rows) as u16
+            let max_len = candidates.iter().map(|c| c.len()).max().unwrap_or(0);
+            let (_num_cols, num_rows, _col_width) = completions_layout(candidates.len(), max_len, total_width as usize);
+            num_rows.min(max_rows) as u16
         }
         _ => 0,
     }
@@ -26,7 +38,7 @@ pub fn completions_height(editor: &Editor, total_height: u16) -> u16 {
 pub fn render(frame: &mut Frame, editor: &Editor) {
     let area = frame.area();
 
-    let comp_height = completions_height(editor, area.height);
+    let comp_height = completions_height(editor, area.height, area.width);
     let (pane_area, completions_area, minibuffer_area) = if comp_height > 0 {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -126,7 +138,7 @@ pub fn render(frame: &mut Frame, editor: &Editor) {
 
     if let Some(comp_area) = completions_area {
         if let Some(candidates) = &editor.minibuffer.completions {
-            render_completions(frame, candidates, comp_area);
+            render_completions(frame, candidates, editor.minibuffer.completion_page, comp_area);
         }
     }
 
@@ -476,20 +488,21 @@ fn render_pane_mode_line(
     frame.render_widget(mode_line, area);
 }
 
-fn render_completions(frame: &mut Frame, candidates: &[String], area: Rect) {
+fn render_completions(frame: &mut Frame, candidates: &[String], page: usize, area: Rect) {
     let width = area.width as usize;
     let rows = area.height as usize;
     if width == 0 || rows == 0 {
         return;
     }
 
-    let col_width = candidates.iter().map(|c| c.len()).max().unwrap_or(0) + 2;
-    let col_width = col_width.max(1).min(width);
-    let num_cols = (width / col_width).max(1);
+    let max_len = candidates.iter().map(|c| c.len()).max().unwrap_or(0);
+    let (num_cols, _num_rows, col_width) = completions_layout(candidates.len(), max_len, width);
 
-    // How many candidates can we display?
+    // How many candidates can we display per page?
     let displayable = rows * num_cols;
-    let overflow = candidates.len().saturating_sub(displayable);
+    let page_count = candidates.len().div_ceil(displayable).max(1);
+    let page = page % page_count;
+    let start = page * displayable;
 
     let bg = Style::default().bg(Color::Indexed(236)).fg(Color::White);
 
@@ -497,8 +510,8 @@ fn render_completions(frame: &mut Frame, candidates: &[String], area: Rect) {
     for row in 0..rows {
         let mut text = String::new();
         for col in 0..num_cols {
-            let idx = col * rows + row;
-            if idx < candidates.len() && idx < displayable {
+            let idx = start + col * rows + row;
+            if idx < candidates.len() && idx < start + displayable {
                 let name = &candidates[idx];
                 if text.len() + name.len() <= width {
                     text.push_str(name);
@@ -506,7 +519,7 @@ fn render_completions(frame: &mut Frame, candidates: &[String], area: Rect) {
                     let padding = col_width.saturating_sub(name.len());
                     let remaining_width = width.saturating_sub(text.len());
                     let pad = padding.min(remaining_width);
-                    text.extend(std::iter::repeat_n(' ',pad));
+                    text.extend(std::iter::repeat_n(' ', pad));
                 } else {
                     // Truncate to fit
                     let remaining = width.saturating_sub(text.len());
@@ -518,12 +531,12 @@ fn render_completions(frame: &mut Frame, candidates: &[String], area: Rect) {
         }
         // Pad remaining width with spaces for background fill
         if text.len() < width {
-            text.extend(std::iter::repeat_n(' ',width - text.len()));
+            text.extend(std::iter::repeat_n(' ', width - text.len()));
         }
 
-        // If this is the last row and there's overflow, show "... and N more"
-        if row == rows - 1 && overflow > 0 {
-            let suffix = format!("... and {} more", overflow);
+        // If this is the last row and there are multiple pages, show page indicator
+        if row == rows - 1 && page_count > 1 {
+            let suffix = format!("[Page {}/{}]", page + 1, page_count);
             if suffix.len() <= width {
                 let start = width - suffix.len();
                 text.replace_range(start..width, &suffix);
@@ -601,12 +614,41 @@ mod tests {
         assert_eq!(visual_lines_for_length(36, 13), 3);
     }
 
+    // === completions_layout tests ===
+
+    #[test]
+    fn completions_layout_single_column() {
+        // max_len=10 => col_width=12, width=12 => 1 col, 3 rows
+        let (cols, rows, cw) = completions_layout(3, 10, 12);
+        assert_eq!(cols, 1);
+        assert_eq!(rows, 3);
+        assert_eq!(cw, 12);
+    }
+
+    #[test]
+    fn completions_layout_multi_column() {
+        // max_len=8 => col_width=10, width=40 => 4 cols, ceil(10/4)=3 rows
+        let (cols, rows, cw) = completions_layout(10, 8, 40);
+        assert_eq!(cols, 4);
+        assert_eq!(rows, 3);
+        assert_eq!(cw, 10);
+    }
+
+    #[test]
+    fn completions_layout_col_width_capped_at_terminal_width() {
+        // max_len=100 => col_width=min(102,20)=20, width=20 => 1 col
+        let (cols, rows, cw) = completions_layout(5, 100, 20);
+        assert_eq!(cols, 1);
+        assert_eq!(rows, 5);
+        assert_eq!(cw, 20);
+    }
+
     // === completions_height tests ===
 
     #[test]
     fn completions_height_no_prompt() {
         let editor = Editor::new();
-        assert_eq!(completions_height(&editor, 24), 0);
+        assert_eq!(completions_height(&editor, 24, 80), 0);
     }
 
     #[test]
@@ -616,7 +658,7 @@ mod tests {
             crate::minibuffer::PromptKind::FindFile,
             "Find file: ",
         );
-        assert_eq!(completions_height(&editor, 24), 0);
+        assert_eq!(completions_height(&editor, 24, 80), 0);
     }
 
     #[test]
@@ -627,8 +669,22 @@ mod tests {
             "Find file: ",
         );
         editor.minibuffer.completions = Some(vec!["a".into(), "b".into(), "c".into()]);
-        // height=24, max_rows = (24-2)/3 = 7, 3 candidates => 3
-        assert_eq!(completions_height(&editor, 24), 3);
+        // width=80, col_width=3, num_cols=26, num_rows=ceil(3/26)=1
+        // max_rows=(24-2)/3=7, min(1,7)=1
+        assert_eq!(completions_height(&editor, 24, 80), 1);
+    }
+
+    #[test]
+    fn completions_height_narrow_terminal() {
+        let mut editor = Editor::new();
+        editor.minibuffer.start_prompt(
+            crate::minibuffer::PromptKind::FindFile,
+            "Find file: ",
+        );
+        editor.minibuffer.completions = Some(vec!["a".into(), "b".into(), "c".into()]);
+        // width=1, col_width=1, num_cols=1, num_rows=3
+        // max_rows=(24-2)/3=7, min(3,7)=3
+        assert_eq!(completions_height(&editor, 24, 1), 3);
     }
 
     #[test]
@@ -640,8 +696,9 @@ mod tests {
         );
         let many: Vec<String> = (0..50).map(|i| format!("file{}.txt", i)).collect();
         editor.minibuffer.completions = Some(many);
-        // height=24, max_rows = (24-2)/3 = 7
-        assert_eq!(completions_height(&editor, 24), 7);
+        // max_len=11 ("file10.txt"...), col_width=13, width=80 => 6 cols
+        // num_rows=ceil(50/6)=9, capped at max_rows=(24-2)/3=7
+        assert_eq!(completions_height(&editor, 24, 80), 7);
     }
 
     #[test]
@@ -653,6 +710,23 @@ mod tests {
         );
         editor.minibuffer.completions = Some(vec!["a".into(), "b".into()]);
         // height=4, max_rows = (4-2)/3 = 0 -> max(1) = 1
-        assert_eq!(completions_height(&editor, 4), 1);
+        assert_eq!(completions_height(&editor, 4, 80), 1);
+    }
+
+    #[test]
+    fn completions_height_multicolumn_reduces_rows() {
+        let mut editor = Editor::new();
+        editor.minibuffer.start_prompt(
+            crate::minibuffer::PromptKind::FindFile,
+            "Find file: ",
+        );
+        // 30 short candidates in 80-wide terminal
+        let candidates: Vec<String> = (0..30).map(|i| format!("f{}", i)).collect();
+        editor.minibuffer.completions = Some(candidates);
+        // max_len=3 ("f10"...), col_width=5, width=80 => 16 cols
+        // num_rows=ceil(30/16)=2, max_rows=(24-2)/3=7, min(2,7)=2
+        let h = completions_height(&editor, 24, 80);
+        assert!(h < 30, "should be much less than candidate count");
+        assert_eq!(h, 2);
     }
 }

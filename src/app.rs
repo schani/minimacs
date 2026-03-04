@@ -113,6 +113,7 @@ where
                 }
                 _ => {
                     self.editor.minibuffer.completions = None;
+                    self.editor.minibuffer.completion_page = 0;
                     // Fall through to normal keymap processing
                 }
             }
@@ -201,6 +202,7 @@ where
     fn handle_minibuffer_tab(&mut self) {
         use crate::minibuffer::{complete_path_with_candidates, complete_buffer_with_candidates};
 
+        let had_completions = self.editor.minibuffer.completions.is_some();
         let kind = self.editor.minibuffer.prompt().map(|p| p.kind.clone());
         let input = self.editor.minibuffer_text();
         let (completed, candidates) = match kind {
@@ -231,6 +233,12 @@ where
             buf.insert(0, &completed);
             buf.history.commit();
             self.editor.minibuffer_pane.point = completed.chars().count();
+            self.editor.minibuffer.completion_page = 0;
+        } else if had_completions && self.editor.minibuffer.completions.is_some() {
+            // Completions were already showing and prefix didn't change: advance page
+            self.editor.minibuffer.completion_page += 1;
+        } else {
+            self.editor.minibuffer.completion_page = 0;
         }
     }
 
@@ -238,6 +246,7 @@ where
         // Sanitize: replace newlines with spaces when pasting into minibuffer
         let text = if self.editor.minibuffer.is_active() {
             self.editor.minibuffer.completions = None;
+            self.editor.minibuffer.completion_page = 0;
             text.replace("\r\n", " ").replace('\n', " ")
         } else {
             text.to_string()
@@ -255,7 +264,7 @@ where
 
     fn update_viewport(&mut self) {
         let size = self.terminal.size().unwrap_or_default();
-        let comp_height = render::completions_height(&self.editor, size.height);
+        let comp_height = render::completions_height(&self.editor, size.height, size.width);
         // Calculate the pane area (full area minus 1 row for minibuffer minus completions)
         let pane_area = ratatui::layout::Rect {
             x: 0,
@@ -1238,5 +1247,168 @@ mod tests {
         assert!(screen.contains("apple.txt"), "should show apple.txt: {}", screen);
         // Minibuffer prompt should still be visible
         assert!(screen.contains("Find file:"), "should show prompt: {}", screen);
+    }
+
+    #[test]
+    fn multi_column_completions_in_wide_terminal() {
+        let dir = tempfile::tempdir().unwrap();
+        for i in 0..10 {
+            std::fs::write(dir.path().join(format!("a{}.txt", i)), "").unwrap();
+        }
+
+        let mut events = open_find_file_with_clear();
+        for c in format!("{}/a", dir.path().display()).chars() {
+            events.push(char_key(c));
+        }
+        events.push(key(KeyCode::Tab));
+        let (mut app, mut events) = test_app(80, 24, events);
+        app.run_until_idle(&mut events).unwrap();
+        assert!(app.editor.minibuffer.completions.is_some());
+        let screen = capture_screen(&app.terminal);
+        // With 80 cols and short names, multiple candidates should appear on the same line
+        // Find a line that contains more than one candidate
+        let has_multi = screen.lines().any(|line| {
+            let count = (0..10)
+                .filter(|i| line.contains(&format!("a{}.txt", i)))
+                .count();
+            count > 1
+        });
+        assert!(has_multi, "should show multiple candidates per line:\n{}", screen);
+    }
+
+    #[test]
+    fn repeated_tab_advances_page() {
+        let dir = tempfile::tempdir().unwrap();
+        // Create enough files to require paging in a small terminal
+        for i in 0..30 {
+            std::fs::write(dir.path().join(format!("file{:02}.txt", i)), "").unwrap();
+        }
+
+        let mut events = open_find_file_with_clear();
+        for c in format!("{}/file", dir.path().display()).chars() {
+            events.push(char_key(c));
+        }
+        events.push(key(KeyCode::Tab));
+        events.push(key(KeyCode::Tab)); // second tab should advance page
+        let (mut app, mut events) = test_app(40, 12, events);
+        app.run_until_idle(&mut events).unwrap();
+        assert!(app.editor.minibuffer.completion_page > 0, "page should advance on repeated tab");
+    }
+
+    #[test]
+    fn repeated_tab_wraps_around() {
+        let dir = tempfile::tempdir().unwrap();
+        // Create files that will span a small number of pages
+        for i in 0..6 {
+            std::fs::write(dir.path().join(format!("longfilename{}.txt", i)), "").unwrap();
+        }
+
+        let mut events = open_find_file_with_clear();
+        for c in format!("{}/long", dir.path().display()).chars() {
+            events.push(char_key(c));
+        }
+        events.push(key(KeyCode::Tab)); // show completions
+        // Tab many times to cycle through all pages and wrap around
+        for _ in 0..100 {
+            events.push(key(KeyCode::Tab));
+        }
+        let (mut app, mut events) = test_app(40, 12, events);
+        app.run_until_idle(&mut events).unwrap();
+        // The page counter keeps incrementing but render wraps via modulo,
+        // so the rendering still works. Verify completions still showing.
+        assert!(app.editor.minibuffer.completions.is_some());
+    }
+
+    #[test]
+    fn typing_after_tab_resets_page() {
+        let dir = tempfile::tempdir().unwrap();
+        for i in 0..30 {
+            std::fs::write(dir.path().join(format!("file{:02}.txt", i)), "").unwrap();
+        }
+
+        let mut events = open_find_file_with_clear();
+        for c in format!("{}/file", dir.path().display()).chars() {
+            events.push(char_key(c));
+        }
+        events.push(key(KeyCode::Tab));
+        events.push(key(KeyCode::Tab)); // advance page
+        events.push(char_key('0')); // type a char
+        let (mut app, mut events) = test_app(40, 12, events);
+        app.run_until_idle(&mut events).unwrap();
+        assert_eq!(app.editor.minibuffer.completion_page, 0);
+    }
+
+    #[test]
+    fn cg_resets_page() {
+        let dir = tempfile::tempdir().unwrap();
+        for i in 0..30 {
+            std::fs::write(dir.path().join(format!("file{:02}.txt", i)), "").unwrap();
+        }
+
+        let mut events = open_find_file_with_clear();
+        for c in format!("{}/file", dir.path().display()).chars() {
+            events.push(char_key(c));
+        }
+        events.push(key(KeyCode::Tab));
+        events.push(key(KeyCode::Tab)); // advance page
+        events.push(ctrl('g'));
+        let (mut app, mut events) = test_app(40, 12, events);
+        app.run_until_idle(&mut events).unwrap();
+        assert_eq!(app.editor.minibuffer.completion_page, 0);
+    }
+
+    #[test]
+    fn paste_resets_page() {
+        let dir = tempfile::tempdir().unwrap();
+        for i in 0..30 {
+            std::fs::write(dir.path().join(format!("file{:02}.txt", i)), "").unwrap();
+        }
+
+        let mut events = open_find_file_with_clear();
+        for c in format!("{}/file", dir.path().display()).chars() {
+            events.push(char_key(c));
+        }
+        events.push(key(KeyCode::Tab));
+        events.push(key(KeyCode::Tab)); // advance page
+        events.push(Event::Paste("x".to_string()));
+        let (mut app, mut events) = test_app(40, 12, events);
+        app.run_until_idle(&mut events).unwrap();
+        assert_eq!(app.editor.minibuffer.completion_page, 0);
+    }
+
+    #[test]
+    fn page_indicator_shown_when_multiple_pages() {
+        let dir = tempfile::tempdir().unwrap();
+        // Create many files with long names so they don't fit in one page
+        for i in 0..30 {
+            std::fs::write(dir.path().join(format!("longfilename{:02}.txt", i)), "").unwrap();
+        }
+
+        let mut events = open_find_file_with_clear();
+        for c in format!("{}/long", dir.path().display()).chars() {
+            events.push(char_key(c));
+        }
+        events.push(key(KeyCode::Tab));
+        let (mut app, mut events) = test_app(40, 12, events);
+        app.run_until_idle(&mut events).unwrap();
+        let screen = capture_screen(&app.terminal);
+        assert!(screen.contains("[Page"), "should show page indicator:\n{}", screen);
+    }
+
+    #[test]
+    fn no_page_indicator_when_single_page() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("alpha.txt"), "").unwrap();
+        std::fs::write(dir.path().join("ants.txt"), "").unwrap();
+
+        let mut events = open_find_file_with_clear();
+        for c in format!("{}/a", dir.path().display()).chars() {
+            events.push(char_key(c));
+        }
+        events.push(key(KeyCode::Tab));
+        let (mut app, mut events) = test_app(80, 24, events);
+        app.run_until_idle(&mut events).unwrap();
+        let screen = capture_screen(&app.terminal);
+        assert!(!screen.contains("[Page"), "should not show page indicator:\n{}", screen);
     }
 }

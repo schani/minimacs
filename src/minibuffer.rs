@@ -169,6 +169,7 @@ pub struct Minibuffer {
     pub state: MinibufferState,
     pub message: Option<String>,
     pub completions: Option<Vec<String>>,
+    pub completion_page: usize,
 }
 
 impl Minibuffer {
@@ -177,6 +178,7 @@ impl Minibuffer {
             state: MinibufferState::Idle,
             message: None,
             completions: None,
+            completion_page: 0,
         }
     }
 
@@ -202,17 +204,20 @@ impl Minibuffer {
         self.state = MinibufferState::Prompt(Prompt::new(kind, label));
         self.message = None;
         self.completions = None;
+        self.completion_page = 0;
     }
 
     pub fn cancel(&mut self) {
         self.state = MinibufferState::Idle;
         self.message = Some("Quit".to_string());
         self.completions = None;
+        self.completion_page = 0;
     }
 
     pub fn finish(&mut self) {
         self.state = MinibufferState::Idle;
         self.completions = None;
+        self.completion_page = 0;
     }
 
     pub fn show_message(&mut self, msg: String) {
