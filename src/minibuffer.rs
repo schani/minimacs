@@ -35,12 +35,71 @@ impl Prompt {
     }
 }
 
+/// Normalize a path string by removing `.` components and resolving `..` components.
+/// Preserves trailing `/` if present.
+pub fn normalize_path_string(input: &str) -> String {
+    use std::path::Component;
+
+    let has_trailing_slash = input.ends_with('/');
+    let path = Path::new(input);
+    let mut components: Vec<&std::ffi::OsStr> = Vec::new();
+    let mut has_root = false;
+
+    for component in path.components() {
+        match component {
+            Component::RootDir => {
+                has_root = true;
+            }
+            Component::CurDir => {
+                // Skip `.`
+            }
+            Component::ParentDir => {
+                // Pop last component if possible
+                if !components.is_empty() {
+                    components.pop();
+                }
+            }
+            Component::Normal(name) => {
+                components.push(name);
+            }
+            Component::Prefix(_) => {}
+        }
+    }
+
+    let result = if has_root {
+        let mut p = PathBuf::from("/");
+        for c in &components {
+            p.push(c);
+        }
+        p
+    } else {
+        let mut p = PathBuf::new();
+        for c in &components {
+            p.push(c);
+        }
+        p
+    };
+
+    let mut s = result.to_string_lossy().into_owned();
+    if has_trailing_slash && !s.ends_with('/') {
+        s.push('/');
+    }
+    s
+}
+
 /// Tab completion for file paths. Returns the completed path string and display candidates.
 ///
 /// The first element is the completed prefix (same as `complete_path`).
 /// The second element is a list of display candidates (basenames, with trailing `/` for dirs).
 /// Empty if there is a unique match or no match.
 pub fn complete_path_with_candidates(input: &str) -> (String, Vec<String>) {
+    let normalized = if input.is_empty() {
+        input.to_string()
+    } else {
+        normalize_path_string(input)
+    };
+    let input = &normalized;
+
     let path = if input.is_empty() {
         PathBuf::from(".")
     } else {
@@ -407,5 +466,72 @@ mod tests {
         let (completed, candidates) = complete_buffer_with_candidates("zzz", &names);
         assert_eq!(completed, "zzz");
         assert!(candidates.is_empty());
+    }
+
+    // === normalize_path_string tests ===
+
+    #[test]
+    fn normalize_removes_dot_component() {
+        assert_eq!(normalize_path_string("/home/user/./foo"), "/home/user/foo");
+    }
+
+    #[test]
+    fn normalize_resolves_dotdot_component() {
+        assert_eq!(normalize_path_string("/home/user/../other"), "/home/other");
+    }
+
+    #[test]
+    fn normalize_preserves_trailing_slash() {
+        assert_eq!(normalize_path_string("/home/user/./"), "/home/user/");
+        assert_eq!(normalize_path_string("/home/user/../"), "/home/");
+    }
+
+    #[test]
+    fn normalize_no_change_for_clean_path() {
+        assert_eq!(normalize_path_string("/home/user/foo"), "/home/user/foo");
+    }
+
+    #[test]
+    fn normalize_dotdot_at_root() {
+        assert_eq!(normalize_path_string("/../foo"), "/foo");
+    }
+
+    #[test]
+    fn normalize_multiple_dots() {
+        assert_eq!(
+            normalize_path_string("/a/b/./c/../d"),
+            "/a/b/d"
+        );
+    }
+
+    #[test]
+    fn normalize_preserves_trailing_slash_after_dotdot() {
+        assert_eq!(normalize_path_string("/a/b/../"), "/a/");
+    }
+
+    #[test]
+    fn path_completion_normalizes_dot_in_path() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("alpha.txt"), "").unwrap();
+
+        // Input has /./  which should be normalized
+        let input = format!("{}/./{}", dir.path().display(), "a");
+        let result = complete_path(&input);
+        assert!(result.ends_with("alpha.txt"));
+        assert!(!result.contains("/./"), "Result should not contain /./: {}", result);
+    }
+
+    #[test]
+    fn path_completion_normalizes_dotdot_in_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        std::fs::write(dir.path().join("alpha.txt"), "").unwrap();
+
+        // Input navigates into sub then back up with ..
+        let input = format!("{}/sub/../a", dir.path().display());
+        let result = complete_path(&input);
+        assert!(result.ends_with("alpha.txt"));
+        assert!(!result.contains("/../"), "Result should not contain /../: {}", result);
     }
 }

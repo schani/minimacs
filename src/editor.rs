@@ -4,7 +4,7 @@ use ratatui::layout::Direction;
 
 use crate::buffer::Buffer;
 use crate::command::Command;
-use crate::minibuffer::{Minibuffer, PromptKind};
+use crate::minibuffer::{Minibuffer, PromptKind, normalize_path_string};
 use crate::pane::{Pane, PaneTree};
 
 /// Direction of incremental search.
@@ -381,7 +381,7 @@ impl Editor {
         match kind {
             PromptKind::FindFile => {
                 self.minibuffer.finish();
-                let path = PathBuf::from(&input);
+                let path = PathBuf::from(normalize_path_string(&input));
                 if let Err(e) = self.open_file(&path) {
                     self.minibuffer.show_message(format!("{}", e));
                 }
@@ -392,7 +392,7 @@ impl Editor {
             }
             PromptKind::WriteFile => {
                 self.minibuffer.finish();
-                let path = PathBuf::from(&input);
+                let path = PathBuf::from(normalize_path_string(&input));
                 self.current_buffer_mut().path = Some(path.clone());
                 self.current_buffer_mut().name = path
                     .file_name()
@@ -1525,6 +1525,40 @@ mod tests {
 
         assert_eq!(editor.buffer_text(), "hello");
         assert!(!editor.minibuffer.is_active());
+    }
+
+    #[test]
+    fn find_file_submit_normalizes_dot() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.txt");
+        std::fs::write(&file, "hello").unwrap();
+
+        let mut editor = Editor::new();
+        editor.execute(Command::FindFile);
+        // Use /./  in path — should still open the file
+        let input = format!("{}/./test.txt", dir.path().display());
+        editor.set_minibuffer_text(&input);
+        editor.submit_prompt();
+
+        assert_eq!(editor.buffer_text(), "hello");
+    }
+
+    #[test]
+    fn find_file_submit_normalizes_dotdot() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        let file = dir.path().join("test.txt");
+        std::fs::write(&file, "hello").unwrap();
+
+        let mut editor = Editor::new();
+        editor.execute(Command::FindFile);
+        // Use /../ in path — should still open the file
+        let input = format!("{}/sub/../test.txt", dir.path().display());
+        editor.set_minibuffer_text(&input);
+        editor.submit_prompt();
+
+        assert_eq!(editor.buffer_text(), "hello");
     }
 
     #[test]
