@@ -190,6 +190,11 @@ discarded branch, `clean_version` is set to `None` (unreachable).
 4. Loop until `editor.should_quit`.
 
 `Event::Paste(text)` inserts the pasted text at point as a single undo group.
+`Event::Mouse` handles left-button clicks. When the minibuffer is not active,
+a click determines which pane was clicked (using `calculate_rects()`), focuses
+that pane, and places the cursor at the clicked position. The position
+calculation accounts for gutter width, line wrapping, and scroll position.
+Clicks below all content place the cursor at the end of the buffer.
 `Event::Resize` is handled implicitly by the viewport update.
 
 ## Rendering

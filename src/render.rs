@@ -145,7 +145,7 @@ pub fn render(frame: &mut Frame, editor: &Editor) {
     render_minibuffer(frame, editor, minibuffer_area);
 }
 
-fn gutter_width(line_count: usize) -> usize {
+pub fn gutter_width(line_count: usize) -> usize {
     let digits = if line_count == 0 {
         1
     } else {
@@ -155,7 +155,7 @@ fn gutter_width(line_count: usize) -> usize {
 }
 
 /// Compute how many visual rows a buffer line occupies with wrapping.
-fn visual_lines_for_length(line_char_len: usize, text_width: usize) -> usize {
+pub fn visual_lines_for_length(line_char_len: usize, text_width: usize) -> usize {
     if text_width <= 1 || line_char_len <= text_width {
         return 1;
     }

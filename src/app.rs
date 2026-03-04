@@ -1,5 +1,5 @@
 use anyhow::Result;
-use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::backend::Backend;
 use ratatui::Terminal;
 
@@ -44,6 +44,9 @@ where
                     Event::Paste(text) => {
                         self.handle_paste(&text);
                     }
+                    Event::Mouse(mouse_event) => {
+                        self.handle_mouse(mouse_event);
+                    }
                     Event::Resize(_, _) => {}
                     _ => {}
                 }
@@ -75,6 +78,9 @@ where
                 }
                 Event::Paste(text) => {
                     self.handle_paste(&text);
+                }
+                Event::Mouse(mouse_event) => {
+                    self.handle_mouse(mouse_event);
                 }
                 Event::Resize(_, _) => {}
                 _ => {}
@@ -260,6 +266,109 @@ where
         let new_point = point + text.chars().count();
         self.editor.active_pane_mut().point = new_point;
         self.editor.active_buffer_mut().history.commit();
+    }
+
+    fn handle_mouse(&mut self, mouse: MouseEvent) {
+        // Only handle left-button down clicks
+        if !matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+            return;
+        }
+
+        // Ignore clicks when the minibuffer is active
+        if self.editor.minibuffer.is_active() {
+            return;
+        }
+
+        let click_x = mouse.column;
+        let click_y = mouse.row;
+
+        // Calculate pane areas (same logic as update_viewport/render)
+        let size = self.terminal.size().unwrap_or_default();
+        let comp_height = render::completions_height(&self.editor, size.height, size.width);
+        let pane_area = ratatui::layout::Rect {
+            x: 0,
+            y: 0,
+            width: size.width,
+            height: size.height.saturating_sub(1 + comp_height),
+        };
+
+        let pane_rects = self.editor.pane_tree.calculate_rects(pane_area);
+
+        // Find which pane was clicked
+        for (path, rect) in &pane_rects {
+            // Text area is the pane rect minus the 1-row mode line
+            let text_area = ratatui::layout::Rect {
+                x: rect.x,
+                y: rect.y,
+                width: rect.width,
+                height: rect.height.saturating_sub(1),
+            };
+
+            if click_x >= text_area.x
+                && click_x < text_area.x + text_area.width
+                && click_y >= text_area.y
+                && click_y < text_area.y + text_area.height
+            {
+                // Focus this pane
+                self.editor.pane_tree.set_focus_path(path.clone());
+
+                let pane = self.editor.pane_tree.focused_pane();
+                let buf = self.editor.buffer_by_id(pane.buffer_id);
+                let gw = render::gutter_width(buf.line_count());
+                let text_width = (text_area.width as usize).saturating_sub(gw);
+
+                let rel_x = (click_x - text_area.x) as usize;
+                let rel_y = (click_y - text_area.y) as usize;
+
+                // Convert column: subtract gutter width
+                let col_in_text = rel_x.saturating_sub(gw);
+
+                // Walk buffer lines from scroll_top to find which line the visual row maps to
+                let scroll_top = pane.scroll_top;
+                let total_lines = buf.line_count();
+                let mut visual_row: usize = 0;
+                let mut target_line = scroll_top;
+                let mut target_col = col_in_text;
+
+                let mut line_idx = scroll_top;
+                while line_idx < total_lines {
+                    let line_len = buf.line_len_chars(line_idx);
+                    let num_visual = render::visual_lines_for_length(line_len, text_width);
+
+                    if visual_row + num_visual > rel_y {
+                        // The click is within this line's visual rows
+                        target_line = line_idx;
+                        let row_within_line = rel_y - visual_row;
+
+                        if text_width > 1 && line_len > text_width {
+                            // Wrapped line: compute column from segment
+                            let chars_per_segment = text_width - 1;
+                            target_col = row_within_line * chars_per_segment + col_in_text;
+                        } else {
+                            target_col = col_in_text;
+                        }
+                        // Clamp to actual line length
+                        target_col = target_col.min(line_len.saturating_sub(1));
+                        break;
+                    }
+
+                    visual_row += num_visual;
+                    line_idx += 1;
+                }
+
+                if line_idx >= total_lines {
+                    // Clicked below all content — place at end of buffer
+                    let char_count = buf.char_count();
+                    self.editor.pane_tree.focused_pane_mut().point = char_count;
+                } else {
+                    let char_pos = buf.line_col_to_char(target_line, target_col);
+                    self.editor.pane_tree.focused_pane_mut().point = char_pos;
+                }
+
+                self.editor.pane_tree.focused_pane_mut().preferred_column = None;
+                return;
+            }
+        }
     }
 
     fn update_viewport(&mut self) {
@@ -1410,5 +1519,108 @@ mod tests {
         app.run_until_idle(&mut events).unwrap();
         let screen = capture_screen(&app.terminal);
         assert!(!screen.contains("[Page"), "should not show page indicator:\n{}", screen);
+    }
+
+    // === Mouse click tests ===
+
+    fn mouse_click(x: u16, y: u16) -> Event {
+        Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: x,
+            row: y,
+            modifiers: KeyModifiers::NONE,
+        })
+    }
+
+    #[test]
+    fn mouse_click_places_cursor() {
+        // 3-line text. Click on line 2, column 3 (after gutter).
+        let text = "hello\nworld\nfoo";
+        let events = vec![mouse_click(4, 1)]; // gutter="1 " (2 chars), so x=4 => col 2 in text
+        let (mut app, mut events) = test_app_with_text(40, 10, text, events);
+        app.run_until_idle(&mut events).unwrap();
+
+        let (line, col) = app
+            .editor
+            .current_buffer()
+            .char_to_line_col(app.editor.point());
+        assert_eq!(line, 1, "should be on line 1");
+        assert_eq!(col, 2, "should be at column 2");
+    }
+
+    #[test]
+    fn mouse_click_on_first_line() {
+        let text = "hello\nworld";
+        let events = vec![mouse_click(2, 0)]; // gutter is 2 chars, so x=2 => col 0
+        let (mut app, mut events) = test_app_with_text(40, 10, text, events);
+        app.run_until_idle(&mut events).unwrap();
+
+        let (line, col) = app
+            .editor
+            .current_buffer()
+            .char_to_line_col(app.editor.point());
+        assert_eq!(line, 0);
+        assert_eq!(col, 0);
+    }
+
+    #[test]
+    fn mouse_click_beyond_line_end_clamps() {
+        let text = "hi\nworld";
+        // Click far right on the first line (line "hi" has 2 chars)
+        let events = vec![mouse_click(30, 0)]; // way past end of "hi"
+        let (mut app, mut events) = test_app_with_text(40, 10, text, events);
+        app.run_until_idle(&mut events).unwrap();
+
+        let (line, col) = app
+            .editor
+            .current_buffer()
+            .char_to_line_col(app.editor.point());
+        assert_eq!(line, 0);
+        // Should clamp to last char of line
+        assert!(col <= 1, "col should be clamped to end of line, got {}", col);
+    }
+
+    #[test]
+    fn mouse_click_below_content_goes_to_end() {
+        let text = "hello";
+        // Click on row 5, well below the single line of content
+        let events = vec![mouse_click(2, 5)];
+        let (mut app, mut events) = test_app_with_text(40, 10, text, events);
+        app.run_until_idle(&mut events).unwrap();
+
+        assert_eq!(app.editor.point(), text.len());
+    }
+
+    #[test]
+    fn mouse_click_ignored_when_minibuffer_active() {
+        let text = "hello\nworld";
+        let mut events = vec![ctrl('x'), ctrl('f')]; // open find-file prompt
+        events.push(mouse_click(4, 1)); // click on line 2
+        let (mut app, mut events) = test_app_with_text(40, 10, text, events);
+        app.run_until_idle(&mut events).unwrap();
+
+        // Minibuffer should still be active
+        assert!(app.editor.minibuffer.is_active());
+        // Cursor should not have moved (still at 0 since we were in the minibuffer)
+        assert_eq!(app.editor.pane_tree.focused_pane().point, 0);
+    }
+
+    #[test]
+    fn mouse_click_switches_pane_focus() {
+        let text = "hello\nworld";
+        let mut events = vec![
+            ctrl('x'), key(KeyCode::Char('2')), // split horizontal
+        ];
+        // After split, top pane is focused. Click on the bottom half
+        // to switch focus. In a 10-row terminal with 1-row minibuffer,
+        // pane area is 9 rows, each pane gets ~4.5 rows.
+        // Bottom pane starts around row 5.
+        events.push(mouse_click(3, 6));
+        let (mut app, mut events) = test_app_with_text(40, 10, text, events);
+        app.run_until_idle(&mut events).unwrap();
+
+        // Should have switched focus to the second pane
+        let focus = app.editor.pane_tree.focus_path();
+        assert_eq!(focus, &[1], "should focus the second pane, got {:?}", focus);
     }
 }

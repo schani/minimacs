@@ -77,6 +77,11 @@ impl PaneTree {
         &self.focus_path
     }
 
+    /// Set the focus path directly (e.g., for mouse clicks).
+    pub fn set_focus_path(&mut self, path: Vec<usize>) {
+        self.focus_path = path;
+    }
+
     /// Get pane at a specific path (for rendering).
     pub fn pane_at_focus_path(&self, path: &[usize]) -> &Pane {
         self.pane_at_path(path)
