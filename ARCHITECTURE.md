@@ -264,9 +264,28 @@ Prompt nesting is prevented by two mechanisms: (1) `start_minibuffer_prompt()`
 returns early if a prompt is already active; (2) `isearch_start()`,
 `kill_buffer()`, and `quit()` have local guards.
 
-Tab completion is implemented as free functions `complete_path()` and
-`complete_buffer()` in `minibuffer.rs`. Completion replaces the buffer contents
-as a single undo group using `record_replace()`, making it undoable.
+Tab completion is implemented as free functions `complete_path_with_candidates()`
+and `complete_buffer_with_candidates()` in `minibuffer.rs`. Each returns
+`(completed_prefix, display_candidates)`. Path candidates use basenames with
+trailing `/` for directories; buffer candidates are sorted alphabetically.
+Completion replaces the buffer contents as a single undo group using
+`record_replace()`, making it undoable.
+
+### Completion List
+
+When Tab is pressed and multiple matches exist, `minibuffer.completions` is set
+to `Some(Vec<String>)` containing the display candidates. The completions field
+is cleared:
+- Before keymap processing on any non-Tab/Enter key when minibuffer is active
+- On paste events
+- In `cancel()`, `finish()`, and `start_prompt()` lifecycle methods
+
+Rendering uses `completions_height()` (shared by `render()` and
+`update_viewport()`) to conditionally insert a completions area between panes
+and minibuffer. Height is capped at `(screen_height - 2) / 3`, always leaving
+room for panes and minibuffer. Candidates display in a multi-column layout
+(like `ls` output) with a dark gray background. An overflow indicator shows
+when not all candidates fit.
 
 Pasted text has newlines replaced with spaces when pasting into the minibuffer.
 
