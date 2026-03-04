@@ -35,8 +35,12 @@ impl Prompt {
     }
 }
 
-/// Tab completion for file paths. Returns the completed path string.
-pub fn complete_path(input: &str) -> String {
+/// Tab completion for file paths. Returns the completed path string and display candidates.
+///
+/// The first element is the completed prefix (same as `complete_path`).
+/// The second element is a list of display candidates (basenames, with trailing `/` for dirs).
+/// Empty if there is a unique match or no match.
+pub fn complete_path_with_candidates(input: &str) -> (String, Vec<String>) {
     let path = if input.is_empty() {
         PathBuf::from(".")
     } else {
@@ -55,7 +59,7 @@ pub fn complete_path(input: &str) -> String {
     };
 
     let Ok(entries) = std::fs::read_dir(&dir) else {
-        return input.to_string();
+        return (input.to_string(), Vec::new());
     };
 
     let mut matches: Vec<PathBuf> = entries
@@ -74,33 +78,66 @@ pub fn complete_path(input: &str) -> String {
         if matches[0].is_dir() {
             completed.push('/');
         }
-        completed
+        (completed, Vec::new())
     } else if matches.len() > 1 {
-        let names: Vec<String> = matches
+        // Full paths for prefix computation
+        let full_names: Vec<String> = matches
             .iter()
             .map(|p| p.to_string_lossy().into_owned())
             .collect();
-        common_prefix(&names).unwrap_or_else(|| input.to_string())
+        let completed = common_prefix(&full_names).unwrap_or_else(|| input.to_string());
+
+        // Basenames for display
+        let candidates: Vec<String> = matches
+            .iter()
+            .map(|p| {
+                let mut name = p.file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                if p.is_dir() {
+                    name.push('/');
+                }
+                name
+            })
+            .collect();
+
+        (completed, candidates)
     } else {
-        input.to_string()
+        (input.to_string(), Vec::new())
     }
 }
 
-/// Tab completion for buffer names. Returns the completed name string.
-pub fn complete_buffer(input: &str, buffer_names: &[String]) -> String {
+/// Tab completion for file paths. Returns the completed path string.
+pub fn complete_path(input: &str) -> String {
+    complete_path_with_candidates(input).0
+}
+
+/// Tab completion for buffer names. Returns the completed name string and sorted display candidates.
+///
+/// The first element is the completed prefix (same as `complete_buffer`).
+/// The second element is a sorted list of matching buffer names. Empty if unique/no match.
+pub fn complete_buffer_with_candidates(input: &str, buffer_names: &[String]) -> (String, Vec<String>) {
     let matches: Vec<&String> = buffer_names
         .iter()
         .filter(|name| name.starts_with(input))
         .collect();
 
     if matches.len() == 1 {
-        matches[0].clone()
+        (matches[0].clone(), Vec::new())
     } else if matches.len() > 1 {
         let names: Vec<String> = matches.into_iter().cloned().collect();
-        common_prefix(&names).unwrap_or_else(|| input.to_string())
+        let completed = common_prefix(&names).unwrap_or_else(|| input.to_string());
+        let mut candidates = names;
+        candidates.sort();
+        (completed, candidates)
     } else {
-        input.to_string()
+        (input.to_string(), Vec::new())
     }
+}
+
+/// Tab completion for buffer names. Returns the completed name string.
+pub fn complete_buffer(input: &str, buffer_names: &[String]) -> String {
+    complete_buffer_with_candidates(input, buffer_names).0
 }
 
 /// Find the common prefix of a list of strings.
@@ -129,6 +166,7 @@ fn common_prefix(strings: &[String]) -> Option<String> {
 pub struct Minibuffer {
     pub state: MinibufferState,
     pub message: Option<String>,
+    pub completions: Option<Vec<String>>,
 }
 
 impl Minibuffer {
@@ -136,6 +174,7 @@ impl Minibuffer {
         Self {
             state: MinibufferState::Idle,
             message: None,
+            completions: None,
         }
     }
 
@@ -160,15 +199,18 @@ impl Minibuffer {
     pub fn start_prompt(&mut self, kind: PromptKind, label: &str) {
         self.state = MinibufferState::Prompt(Prompt::new(kind, label));
         self.message = None;
+        self.completions = None;
     }
 
     pub fn cancel(&mut self) {
         self.state = MinibufferState::Idle;
         self.message = Some("Quit".to_string());
+        self.completions = None;
     }
 
     pub fn finish(&mut self) {
         self.state = MinibufferState::Idle;
+        self.completions = None;
     }
 
     pub fn show_message(&mut self, msg: String) {
@@ -281,5 +323,82 @@ mod tests {
     #[test]
     fn common_prefix_empty_list() {
         assert_eq!(common_prefix(&[]), None);
+    }
+
+    // === _with_candidates tests ===
+
+    #[test]
+    fn path_candidates_multiple_matches() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("foobar.txt"), "").unwrap();
+        std::fs::write(dir.path().join("foobaz.txt"), "").unwrap();
+
+        let input = format!("{}/foo", dir.path().display());
+        let (completed, candidates) = complete_path_with_candidates(&input);
+        assert!(completed.contains("foob"));
+        assert_eq!(candidates.len(), 2);
+        assert!(candidates.contains(&"foobar.txt".to_string()));
+        assert!(candidates.contains(&"foobaz.txt".to_string()));
+    }
+
+    #[test]
+    fn path_candidates_single_match() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("unique.txt"), "").unwrap();
+
+        let input = format!("{}/uni", dir.path().display());
+        let (completed, candidates) = complete_path_with_candidates(&input);
+        assert!(completed.ends_with("unique.txt"));
+        assert!(candidates.is_empty());
+    }
+
+    #[test]
+    fn path_candidates_no_match() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("alpha.txt"), "").unwrap();
+
+        let input = format!("{}/zzz", dir.path().display());
+        let (completed, candidates) = complete_path_with_candidates(&input);
+        assert_eq!(completed, input);
+        assert!(candidates.is_empty());
+    }
+
+    #[test]
+    fn path_candidates_show_basenames_with_dir_slash() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("subdir")).unwrap();
+        std::fs::write(dir.path().join("subfile.txt"), "").unwrap();
+
+        let input = format!("{}/sub", dir.path().display());
+        let (_, candidates) = complete_path_with_candidates(&input);
+        assert_eq!(candidates.len(), 2);
+        // Dir candidate should have trailing /
+        assert!(candidates.iter().any(|c| c == "subdir/"));
+        // File candidate should not
+        assert!(candidates.iter().any(|c| c == "subfile.txt"));
+    }
+
+    #[test]
+    fn buffer_candidates_multiple_matches_sorted() {
+        let names = vec!["test.txt".into(), "todo.md".into(), "other.rs".into()];
+        let (completed, candidates) = complete_buffer_with_candidates("t", &names);
+        assert_eq!(completed, "t");
+        assert_eq!(candidates, vec!["test.txt", "todo.md"]);
+    }
+
+    #[test]
+    fn buffer_candidates_single_match() {
+        let names = vec!["test.txt".into(), "todo.md".into()];
+        let (completed, candidates) = complete_buffer_with_candidates("te", &names);
+        assert_eq!(completed, "test.txt");
+        assert!(candidates.is_empty());
+    }
+
+    #[test]
+    fn buffer_candidates_no_match() {
+        let names = vec!["test.txt".into(), "todo.md".into()];
+        let (completed, candidates) = complete_buffer_with_candidates("zzz", &names);
+        assert_eq!(completed, "zzz");
+        assert!(candidates.is_empty());
     }
 }
