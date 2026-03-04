@@ -600,4 +600,59 @@ mod tests {
         // seg1=12, remaining=24. excess=36-13=23. 1+ceil(23/12)=1+2=3.
         assert_eq!(visual_lines_for_length(36, 13), 3);
     }
+
+    // === completions_height tests ===
+
+    #[test]
+    fn completions_height_no_prompt() {
+        let editor = Editor::new();
+        assert_eq!(completions_height(&editor, 24), 0);
+    }
+
+    #[test]
+    fn completions_height_prompt_no_completions() {
+        let mut editor = Editor::new();
+        editor.minibuffer.start_prompt(
+            crate::minibuffer::PromptKind::FindFile,
+            "Find file: ",
+        );
+        assert_eq!(completions_height(&editor, 24), 0);
+    }
+
+    #[test]
+    fn completions_height_with_few_candidates() {
+        let mut editor = Editor::new();
+        editor.minibuffer.start_prompt(
+            crate::minibuffer::PromptKind::FindFile,
+            "Find file: ",
+        );
+        editor.minibuffer.completions = Some(vec!["a".into(), "b".into(), "c".into()]);
+        // height=24, max_rows = (24-2)/3 = 7, 3 candidates => 3
+        assert_eq!(completions_height(&editor, 24), 3);
+    }
+
+    #[test]
+    fn completions_height_capped() {
+        let mut editor = Editor::new();
+        editor.minibuffer.start_prompt(
+            crate::minibuffer::PromptKind::FindFile,
+            "Find file: ",
+        );
+        let many: Vec<String> = (0..50).map(|i| format!("file{}.txt", i)).collect();
+        editor.minibuffer.completions = Some(many);
+        // height=24, max_rows = (24-2)/3 = 7
+        assert_eq!(completions_height(&editor, 24), 7);
+    }
+
+    #[test]
+    fn completions_height_small_terminal() {
+        let mut editor = Editor::new();
+        editor.minibuffer.start_prompt(
+            crate::minibuffer::PromptKind::FindFile,
+            "Find file: ",
+        );
+        editor.minibuffer.completions = Some(vec!["a".into(), "b".into()]);
+        // height=4, max_rows = (4-2)/3 = 0 -> max(1) = 1
+        assert_eq!(completions_height(&editor, 4), 1);
+    }
 }

@@ -1087,4 +1087,156 @@ mod tests {
         assert!(app.editor.minibuffer.is_active());
         assert_eq!(app.editor.minibuffer_text(), "hello ");
     }
+
+    // === Completion list integration tests ===
+
+    fn open_find_file_with_clear() -> Vec<Event> {
+        let mut events = vec![ctrl('x'), ctrl('f')];
+        for _ in 0..200 {
+            events.push(key(KeyCode::Backspace));
+        }
+        events
+    }
+
+    #[test]
+    fn tab_with_multiple_matches_shows_completions() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("foobar.txt"), "").unwrap();
+        std::fs::write(dir.path().join("foobaz.txt"), "").unwrap();
+
+        let mut events = open_find_file_with_clear();
+        for c in format!("{}/foo", dir.path().display()).chars() {
+            events.push(char_key(c));
+        }
+        events.push(key(KeyCode::Tab));
+        let (mut app, mut events) = test_app(60, 12, events);
+        app.run_until_idle(&mut events).unwrap();
+        assert!(app.editor.minibuffer.completions.is_some());
+        let completions = app.editor.minibuffer.completions.as_ref().unwrap();
+        assert_eq!(completions.len(), 2);
+    }
+
+    #[test]
+    fn repeated_tab_keeps_completions() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("foobar.txt"), "").unwrap();
+        std::fs::write(dir.path().join("foobaz.txt"), "").unwrap();
+
+        let mut events = open_find_file_with_clear();
+        for c in format!("{}/foo", dir.path().display()).chars() {
+            events.push(char_key(c));
+        }
+        events.push(key(KeyCode::Tab));
+        events.push(key(KeyCode::Tab));
+        let (mut app, mut events) = test_app(60, 12, events);
+        app.run_until_idle(&mut events).unwrap();
+        assert!(app.editor.minibuffer.completions.is_some());
+    }
+
+    #[test]
+    fn typing_after_tab_dismisses_completions() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("foobar.txt"), "").unwrap();
+        std::fs::write(dir.path().join("foobaz.txt"), "").unwrap();
+
+        let mut events = open_find_file_with_clear();
+        for c in format!("{}/foo", dir.path().display()).chars() {
+            events.push(char_key(c));
+        }
+        events.push(key(KeyCode::Tab));
+        events.push(char_key('a')); // type a char
+        let (mut app, mut events) = test_app(60, 12, events);
+        app.run_until_idle(&mut events).unwrap();
+        assert!(app.editor.minibuffer.completions.is_none());
+    }
+
+    #[test]
+    fn cg_dismisses_completions() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("foobar.txt"), "").unwrap();
+        std::fs::write(dir.path().join("foobaz.txt"), "").unwrap();
+
+        let mut events = open_find_file_with_clear();
+        for c in format!("{}/foo", dir.path().display()).chars() {
+            events.push(char_key(c));
+        }
+        events.push(key(KeyCode::Tab));
+        events.push(ctrl('g'));
+        let (mut app, mut events) = test_app(60, 12, events);
+        app.run_until_idle(&mut events).unwrap();
+        assert!(app.editor.minibuffer.completions.is_none());
+    }
+
+    #[test]
+    fn enter_dismisses_completions() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("foobar.txt"), "").unwrap();
+        std::fs::write(dir.path().join("foobaz.txt"), "").unwrap();
+
+        let mut events = open_find_file_with_clear();
+        for c in format!("{}/foob", dir.path().display()).chars() {
+            events.push(char_key(c));
+        }
+        events.push(key(KeyCode::Tab));
+        events.push(key(KeyCode::Enter));
+        let (mut app, mut events) = test_app(60, 12, events);
+        app.run_until_idle(&mut events).unwrap();
+        assert!(app.editor.minibuffer.completions.is_none());
+    }
+
+    #[test]
+    fn paste_dismisses_completions() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("foobar.txt"), "").unwrap();
+        std::fs::write(dir.path().join("foobaz.txt"), "").unwrap();
+
+        let mut events = open_find_file_with_clear();
+        for c in format!("{}/foo", dir.path().display()).chars() {
+            events.push(char_key(c));
+        }
+        events.push(key(KeyCode::Tab));
+        events.push(Event::Paste("x".to_string()));
+        let (mut app, mut events) = test_app(60, 12, events);
+        app.run_until_idle(&mut events).unwrap();
+        assert!(app.editor.minibuffer.completions.is_none());
+    }
+
+    #[test]
+    fn tab_with_unique_match_no_completions() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("unique.txt"), "").unwrap();
+
+        let mut events = open_find_file_with_clear();
+        for c in format!("{}/uni", dir.path().display()).chars() {
+            events.push(char_key(c));
+        }
+        events.push(key(KeyCode::Tab));
+        let (mut app, mut events) = test_app(60, 12, events);
+        app.run_until_idle(&mut events).unwrap();
+        assert!(app.editor.minibuffer.completions.is_none());
+    }
+
+    #[test]
+    fn completions_render_shows_candidates() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("alpha.txt"), "").unwrap();
+        std::fs::write(dir.path().join("ants.txt"), "").unwrap();
+        std::fs::write(dir.path().join("apple.txt"), "").unwrap();
+
+        let mut events = open_find_file_with_clear();
+        for c in format!("{}/a", dir.path().display()).chars() {
+            events.push(char_key(c));
+        }
+        events.push(key(KeyCode::Tab));
+        let (mut app, mut events) = test_app(40, 12, events);
+        app.run_until_idle(&mut events).unwrap();
+        assert!(app.editor.minibuffer.completions.is_some());
+        let screen = capture_screen(&app.terminal);
+        // Completions should appear in the rendered output
+        assert!(screen.contains("alpha.txt"), "should show alpha.txt: {}", screen);
+        assert!(screen.contains("ants.txt"), "should show ants.txt: {}", screen);
+        assert!(screen.contains("apple.txt"), "should show apple.txt: {}", screen);
+        // Minibuffer prompt should still be visible
+        assert!(screen.contains("Find file:"), "should show prompt: {}", screen);
+    }
 }
