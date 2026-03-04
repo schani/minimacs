@@ -112,6 +112,7 @@ where
                     return;
                 }
                 _ => {
+                    self.editor.minibuffer.completions = None;
                     // Fall through to normal keymap processing
                 }
             }
@@ -198,26 +199,33 @@ where
     }
 
     fn handle_minibuffer_tab(&mut self) {
-        use crate::minibuffer::{complete_path, complete_buffer};
+        use crate::minibuffer::{complete_path_with_candidates, complete_buffer_with_candidates};
 
         let kind = self.editor.minibuffer.prompt().map(|p| p.kind.clone());
         let input = self.editor.minibuffer_text();
-        let completed = match kind {
+        let (completed, candidates) = match kind {
             Some(PromptKind::FindFile) | Some(PromptKind::WriteFile) => {
-                complete_path(&input)
+                complete_path_with_candidates(&input)
             }
             Some(PromptKind::SwitchBuffer) => {
                 let names = self.editor.buffer_names();
-                complete_buffer(&input, &names)
+                complete_buffer_with_candidates(&input, &names)
             }
             _ => return,
         };
+
+        // Always update completions list
+        self.editor.minibuffer.completions = if candidates.is_empty() {
+            None
+        } else {
+            Some(candidates)
+        };
+
+        // Only replace buffer text if the completion advanced the prefix
         if completed != input {
-            // Replace buffer contents with completed text, as a single undo group
             let buf = &mut self.editor.minibuffer_buffer;
-            buf.history.commit(); // commit any pending edits first
+            buf.history.commit();
             let old_len = buf.char_count();
-            // Record as a single replacement edit (delete old + insert new in one group)
             buf.history.record_replace(0, &input, &completed);
             buf.remove(0, old_len);
             buf.insert(0, &completed);
@@ -229,6 +237,7 @@ where
     fn handle_paste(&mut self, text: &str) {
         // Sanitize: replace newlines with spaces when pasting into minibuffer
         let text = if self.editor.minibuffer.is_active() {
+            self.editor.minibuffer.completions = None;
             text.replace("\r\n", " ").replace('\n', " ")
         } else {
             text.to_string()

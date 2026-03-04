@@ -108,6 +108,7 @@ pub fn complete_path_with_candidates(input: &str) -> (String, Vec<String>) {
 }
 
 /// Tab completion for file paths. Returns the completed path string.
+#[cfg(test)]
 pub fn complete_path(input: &str) -> String {
     complete_path_with_candidates(input).0
 }
@@ -136,6 +137,7 @@ pub fn complete_buffer_with_candidates(input: &str, buffer_names: &[String]) -> 
 }
 
 /// Tab completion for buffer names. Returns the completed name string.
+#[cfg(test)]
 pub fn complete_buffer(input: &str, buffer_names: &[String]) -> String {
     complete_buffer_with_candidates(input, buffer_names).0
 }
