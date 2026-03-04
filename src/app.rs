@@ -255,12 +255,13 @@ where
 
     fn update_viewport(&mut self) {
         let size = self.terminal.size().unwrap_or_default();
-        // Calculate the pane area (full area minus 1 row for minibuffer)
+        let comp_height = render::completions_height(&self.editor, size.height);
+        // Calculate the pane area (full area minus 1 row for minibuffer minus completions)
         let pane_area = ratatui::layout::Rect {
             x: 0,
             y: 0,
             width: size.width,
-            height: size.height.saturating_sub(1),
+            height: size.height.saturating_sub(1 + comp_height),
         };
 
         let pane_rects = self.editor.pane_tree.calculate_rects(pane_area);

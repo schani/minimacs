@@ -8,21 +8,42 @@ use crate::buffer::Buffer;
 use crate::editor::Editor;
 use crate::pane::Pane;
 
+/// Compute the height of the completions area.
+pub fn completions_height(editor: &Editor, total_height: u16) -> u16 {
+    if !editor.minibuffer.is_active() {
+        return 0;
+    }
+    match &editor.minibuffer.completions {
+        Some(candidates) if !candidates.is_empty() => {
+            let max_rows = ((total_height.saturating_sub(2)) / 3).max(1) as usize;
+            candidates.len().min(max_rows) as u16
+        }
+        _ => 0,
+    }
+}
+
 /// Render the entire editor UI into the given frame.
 pub fn render(frame: &mut Frame, editor: &Editor) {
     let area = frame.area();
 
-    // Layout: pane area + minibuffer (1 row)
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Min(1),    // pane area
-            Constraint::Length(1), // minibuffer
-        ])
-        .split(area);
-
-    let pane_area = chunks[0];
-    let minibuffer_area = chunks[1];
+    let comp_height = completions_height(editor, area.height);
+    let (pane_area, completions_area, minibuffer_area) = if comp_height > 0 {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Min(1),
+                Constraint::Length(comp_height),
+                Constraint::Length(1),
+            ])
+            .split(area);
+        (chunks[0], Some(chunks[1]), chunks[2])
+    } else {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(1), Constraint::Length(1)])
+            .split(area);
+        (chunks[0], None, chunks[1])
+    };
 
     // Calculate rects for all panes
     let pane_rects = editor.pane_tree.calculate_rects(pane_area);
@@ -100,6 +121,12 @@ pub fn render(frame: &mut Frame, editor: &Editor) {
             if screen_col < text_area.x + text_area.width && screen_line < text_area.height {
                 frame.set_cursor_position((text_area.x + screen_col, text_area.y + screen_line));
             }
+        }
+    }
+
+    if let Some(comp_area) = completions_area {
+        if let Some(candidates) = &editor.minibuffer.completions {
+            render_completions(frame, candidates, comp_area);
         }
     }
 
@@ -447,6 +474,67 @@ fn render_pane_mode_line(
 
     let mode_line = Paragraph::new(Line::from(Span::styled(mode_line_text, style)));
     frame.render_widget(mode_line, area);
+}
+
+fn render_completions(frame: &mut Frame, candidates: &[String], area: Rect) {
+    let width = area.width as usize;
+    let rows = area.height as usize;
+    if width == 0 || rows == 0 {
+        return;
+    }
+
+    let col_width = candidates.iter().map(|c| c.len()).max().unwrap_or(0) + 2;
+    let col_width = col_width.max(1).min(width);
+    let num_cols = (width / col_width).max(1);
+
+    // How many candidates can we display?
+    let displayable = rows * num_cols;
+    let overflow = candidates.len().saturating_sub(displayable);
+
+    let bg = Style::default().bg(Color::Indexed(236)).fg(Color::White);
+
+    let mut lines: Vec<Line> = Vec::with_capacity(rows);
+    for row in 0..rows {
+        let mut text = String::new();
+        for col in 0..num_cols {
+            let idx = col * rows + row;
+            if idx < candidates.len() && idx < displayable {
+                let name = &candidates[idx];
+                if text.len() + name.len() <= width {
+                    text.push_str(name);
+                    // Pad to column width
+                    let padding = col_width.saturating_sub(name.len());
+                    let remaining_width = width.saturating_sub(text.len());
+                    let pad = padding.min(remaining_width);
+                    text.extend(std::iter::repeat_n(' ',pad));
+                } else {
+                    // Truncate to fit
+                    let remaining = width.saturating_sub(text.len());
+                    if remaining > 0 {
+                        text.push_str(&name[..remaining.min(name.len())]);
+                    }
+                }
+            }
+        }
+        // Pad remaining width with spaces for background fill
+        if text.len() < width {
+            text.extend(std::iter::repeat_n(' ',width - text.len()));
+        }
+
+        // If this is the last row and there's overflow, show "... and N more"
+        if row == rows - 1 && overflow > 0 {
+            let suffix = format!("... and {} more", overflow);
+            if suffix.len() <= width {
+                let start = width - suffix.len();
+                text.replace_range(start..width, &suffix);
+            }
+        }
+
+        lines.push(Line::from(Span::styled(text, bg)));
+    }
+
+    let paragraph = Paragraph::new(lines);
+    frame.render_widget(paragraph, area);
 }
 
 fn render_minibuffer(frame: &mut Frame, editor: &Editor, area: Rect) {
