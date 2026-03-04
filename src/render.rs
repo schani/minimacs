@@ -204,7 +204,7 @@ fn render_pane_text(
             let line_num = format!("{:>width$} ", line_idx + 1, width = gw - 1);
             let mut spans = vec![Span::styled(
                 line_num,
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(Color::Rgb(35, 120, 147)),
             )];
 
             if !line_chars.is_empty() {
@@ -242,7 +242,7 @@ fn render_pane_text(
                 };
                 let mut spans = vec![Span::styled(
                     gutter_text,
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(Color::Rgb(35, 120, 147)),
                 )];
 
                 build_styled_spans(
@@ -261,7 +261,7 @@ fn render_pane_text(
                 if !is_last {
                     spans.push(Span::styled(
                         "\\",
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(Color::Rgb(35, 120, 147)),
                     ));
                 }
 
@@ -279,7 +279,7 @@ fn render_pane_text(
         let padding = " ".repeat(gw);
         output_lines.push(Line::from(Span::styled(
             format!("{}~", padding),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(Color::Rgb(35, 120, 147)),
         )));
     }
 
@@ -318,7 +318,7 @@ fn build_styled_spans(
                 .unwrap_or(false);
 
             if in_region {
-                Style::default().bg(Color::White).fg(Color::Black)
+                Style::default().bg(Color::Rgb(173, 214, 255))
             } else {
                 let is_current_match = current_match.is_some_and(|cm| {
                     search_matches
@@ -330,9 +330,9 @@ fn build_styled_spans(
                     .any(|(pos, len)| char_pos >= *pos && char_pos < *pos + *len);
 
                 if is_current_match {
-                    Style::default().bg(Color::Yellow).fg(Color::Black)
+                    Style::default().bg(Color::Rgb(168, 172, 148)).fg(Color::Black)
                 } else if is_other_match {
-                    Style::default().bg(Color::Indexed(58)).fg(Color::White)
+                    Style::default().bg(Color::Rgb(248, 201, 171)).fg(Color::Black)
                 } else if let Some(ref syn) = syntax_styles {
                     syn.get(&(line_idx, col)).copied().unwrap_or_default()
                 } else {
@@ -475,13 +475,13 @@ fn render_pane_mode_line(
 
     let style = if is_focused {
         Style::default()
-            .bg(Color::White)
-            .fg(Color::Black)
+            .bg(Color::Rgb(0, 122, 204))
+            .fg(Color::White)
             .add_modifier(Modifier::BOLD)
     } else {
         Style::default()
-            .bg(Color::DarkGray)
-            .fg(Color::White)
+            .bg(Color::Rgb(223, 223, 223))
+            .fg(Color::Rgb(51, 51, 51))
     };
 
     let mode_line = Paragraph::new(Line::from(Span::styled(mode_line_text, style)));
@@ -504,7 +504,7 @@ fn render_completions(frame: &mut Frame, candidates: &[String], page: usize, are
     let page = page % page_count;
     let start = page * displayable;
 
-    let bg = Style::default().bg(Color::Indexed(236)).fg(Color::White);
+    let bg = Style::default().bg(Color::Rgb(243, 243, 243)).fg(Color::Black);
 
     let mut lines: Vec<Line> = Vec::with_capacity(rows);
     for row in 0..rows {
