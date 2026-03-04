@@ -482,18 +482,24 @@ impl Editor {
     fn do_kill_buffer(&mut self, buffer_id: usize) {
         self.buffers.retain(|b| b.id != buffer_id);
 
-        if self.buffers.is_empty() {
+        let new_id = if self.buffers.is_empty() {
             let buf = Buffer::new_scratch(self.next_buffer_id);
             self.next_buffer_id += 1;
             let id = buf.id;
             self.buffers.push(buf);
-            self.pane_tree.focused_pane_mut().buffer_id = id;
+            id
         } else {
-            self.pane_tree.focused_pane_mut().buffer_id = self.buffers[0].id;
-        }
-        let pane = self.pane_tree.focused_pane_mut();
-        pane.point = 0;
-        pane.scroll_top = 0;
+            self.buffers[0].id
+        };
+
+        // Update all panes that referenced the killed buffer.
+        self.pane_tree.for_each_pane_mut(&mut |pane| {
+            if pane.buffer_id == buffer_id {
+                pane.buffer_id = new_id;
+                pane.point = 0;
+                pane.scroll_top = 0;
+            }
+        });
     }
 
     // === Movement commands ===

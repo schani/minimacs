@@ -930,6 +930,22 @@ mod tests {
         assert!(mode_line_count >= 2, "Expected 2 mode lines, screen:\n{}", screen);
     }
 
+    #[test]
+    fn kill_buffer_after_split_does_not_crash() {
+        // C-x 2 splits the window (both panes view same buffer), then C-x k kills it.
+        // This used to crash because do_kill_buffer only updated the focused pane,
+        // leaving the other pane pointing to a deleted buffer.
+        let events = vec![
+            ctrl('x'), char_key('2'), // split window
+            ctrl('x'), char_key('k'), // kill buffer
+        ];
+        let (mut app, mut events) = test_app(40, 12, events);
+        app.run_until_idle(&mut events).unwrap();
+        // Should not crash, and both panes should be valid
+        let screen = capture_screen(&app.terminal);
+        assert!(!screen.is_empty());
+    }
+
     // === Region rendering ===
 
     #[test]

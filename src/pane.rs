@@ -347,6 +347,21 @@ impl PaneTree {
         }
     }
 
+    pub fn for_each_pane_mut<F: FnMut(&mut Pane)>(&mut self, f: &mut F) {
+        Self::visit_panes_mut(&mut self.root, f);
+    }
+
+    fn visit_panes_mut<F: FnMut(&mut Pane)>(node: &mut PaneNode, f: &mut F) {
+        match node {
+            PaneNode::Leaf(pane) => f(pane),
+            PaneNode::Split { children, .. } => {
+                for child in children {
+                    Self::visit_panes_mut(child, f);
+                }
+            }
+        }
+    }
+
     /// Update viewport dimensions for a pane at a given path.
     pub fn update_pane_viewport(&mut self, path: &[usize], height: usize, width: usize) {
         let pane = self.pane_at_path_mut(path);
