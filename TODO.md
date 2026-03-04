@@ -1,3 +1,5 @@
+- [x] Make the color pallette equivalent to "VSCode Light+". We only need to support "light" terminals right now.
+- [ ] Find file should not accept `.` and `..` as parts of the path, and should also not use them as completions
 - [x] Ctrl-/ to undo doesn't work
 - [x] Alt-Backspace doesn't delete word backwards
 - [x] Add a pre-commit hook that runs the build and unit tests, and doesn't allow committing if they fail

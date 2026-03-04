@@ -232,7 +232,7 @@ method takes a byte slice, runs tree-sitter-highlight, and returns a list of
 to per-character `Style` entries in a `HashMap<(line, col), Style>` that it
 consults when building `Span`s.
 
-The color theme is a built-in dark palette using 256-color indices.
+The color theme is a built-in light palette matching VSCode's Light+ theme, using true color (RGB) values.
 
 ## Minibuffer
 
