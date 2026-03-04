@@ -282,10 +282,17 @@ is cleared:
 
 Rendering uses `completions_height()` (shared by `render()` and
 `update_viewport()`) to conditionally insert a completions area between panes
-and minibuffer. Height is capped at `(screen_height - 2) / 3`, always leaving
+and minibuffer. The shared `completions_layout()` helper computes column width,
+column count, and row count from the candidates and terminal width. Height is
+the number of layout rows, capped at `(screen_height - 2) / 3`, always leaving
 room for panes and minibuffer. Candidates display in a multi-column layout
-(like `ls` output) with a dark gray background. An overflow indicator shows
-when not all candidates fit.
+(like `ls` output) with a dark gray background.
+
+When candidates overflow a single page, pressing Tab again advances the page
+(`completion_page` on `Minibuffer`). The renderer wraps the page counter via
+modulo. A `[Page X/Y]` indicator appears in the bottom-right of the completions
+area when multiple pages exist. `completion_page` resets to 0 on typing, paste,
+`C-g`, Enter, or when the completion prefix changes.
 
 Pasted text has newlines replaced with spaces when pasting into the minibuffer.
 
