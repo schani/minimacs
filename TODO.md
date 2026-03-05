@@ -1,3 +1,5 @@
+- [x] Remove the line number gutter
+- [ ] Implement: C-l (recenter-top-bottom): This command clears the screen and redisplays the current line at the top, center, or bottom of the window. It also serves to generally refresh the display in the process. Repeating C-l cycles the current line's position.
 - [x] Make the color pallette equivalent to "VSCode Light+". We only need to support "light" terminals right now.
 - [x] Find file should not accept `.` and `..` as parts of the path, and should also not use them as completions
 - [x] Support mouse clicks, which should place the cursor at the point clicked at. It probably shouldn't do that when the minibuffer is active.

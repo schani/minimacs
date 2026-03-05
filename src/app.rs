@@ -314,14 +314,12 @@ where
 
                 let pane = self.editor.pane_tree.focused_pane();
                 let buf = self.editor.buffer_by_id(pane.buffer_id);
-                let gw = render::gutter_width(buf.line_count());
-                let text_width = (text_area.width as usize).saturating_sub(gw);
+                let text_width = text_area.width as usize;
 
                 let rel_x = (click_x - text_area.x) as usize;
                 let rel_y = (click_y - text_area.y) as usize;
 
-                // Convert column: subtract gutter width
-                let col_in_text = rel_x.saturating_sub(gw);
+                let col_in_text = rel_x;
 
                 // Walk buffer lines from scroll_top to find which line the visual row maps to
                 let scroll_top = pane.scroll_top;
@@ -617,52 +615,44 @@ mod tests {
     #[test]
     fn long_line_wraps_with_continuation_marker() {
         // Terminal: 20 wide, 6 tall (4 text rows + 1 mode line + 1 minibuffer)
-        // Gutter for 1 line: 2 chars ("1 ")
-        // Available text width: 18
-        // Chars per wrapped visual line: 17 (18 - 1 for '\')
-        let text = "abcdefghijklmnopqrstuvwxyz"; // 26 chars > 17
+        // Text width: 20
+        // Chars per wrapped visual line: 19 (20 - 1 for '\')
+        let text = "abcdefghijklmnopqrstuvwxyz"; // 26 chars > 20
         let (mut app, mut events) = test_app_with_text(20, 6, text, vec![]);
         app.run_until_idle(&mut events).unwrap();
         let screen = capture_screen(&app.terminal);
         let lines: Vec<&str> = screen.lines().collect();
-        // First visual line: gutter + 17 chars + "\"
+        // First visual line: 19 chars + "\"
         assert!(
             lines[0].ends_with('\\'),
             "Expected continuation marker '\\', got: '{}'",
             lines[0]
         );
-        // Second visual line: blank gutter + remaining 9 chars "rstuvwxyz"
+        // Second visual line: remaining 7 chars "tuvwxyz"
         assert!(
-            lines[1].contains("rstuvwxyz"),
-            "Expected wrapped text 'rstuvwxyz', got: '{}'",
+            lines[1].contains("tuvwxyz"),
+            "Expected wrapped text 'tuvwxyz', got: '{}'",
             lines[1]
         );
     }
 
     #[test]
-    fn continuation_line_has_blank_gutter() {
-        // Same setup as above
+    fn continuation_line_has_no_gutter() {
         let text = "abcdefghijklmnopqrstuvwxyz"; // 26 chars
         let (mut app, mut events) = test_app_with_text(20, 6, text, vec![]);
         app.run_until_idle(&mut events).unwrap();
         let screen = capture_screen(&app.terminal);
         let lines: Vec<&str> = screen.lines().collect();
-        // First line starts with "1 " (line number)
+        // First line starts directly with text content (no gutter)
         assert!(
-            lines[0].starts_with("1 "),
-            "Expected line number, got: '{}'",
+            lines[0].starts_with("abcdefg"),
+            "Expected text content, got: '{}'",
             lines[0]
         );
-        // Continuation line starts with "  " (blank gutter)
+        // Continuation line also starts directly with text
         assert!(
-            lines[1].starts_with("  "),
-            "Expected blank gutter on continuation line, got: '{}'",
-            lines[1]
-        );
-        // But the continuation line should NOT start with a digit
-        assert!(
-            !lines[1].trim_start().starts_with(|c: char| c.is_ascii_digit()),
-            "Continuation line should not have a line number: '{}'",
+            lines[1].starts_with("tuvwxyz"),
+            "Expected continuation text, got: '{}'",
             lines[1]
         );
     }
@@ -670,24 +660,20 @@ mod tests {
     #[test]
     fn wrapped_line_uses_multiple_visual_rows() {
         // Terminal: 20 wide, 8 tall (6 text rows + 1 mode line + 1 minibuffer)
+        // Text width: 20, chars per segment: 19
         // Two buffer lines, first one wraps into 2 visual lines
         let text = "abcdefghijklmnopqrstuvwxyz\nshort";
         let (mut app, mut events) = test_app_with_text(20, 8, text, vec![]);
         app.run_until_idle(&mut events).unwrap();
         let screen = capture_screen(&app.terminal);
         let lines: Vec<&str> = screen.lines().collect();
-        // Line 1 visual row 1: "1 abcdefghijklmnopq\" (gutter 2, 17 chars, \)
-        // Line 1 visual row 2: "  rstuvwxyz" (blank gutter, remaining)
-        // Line 2 visual row 1: "2 short"
+        // Line 1 visual row 1: 19 chars + "\"
+        // Line 1 visual row 2: remaining "tuvwxyz"
+        // Line 2 visual row 1: "short"
         assert!(
             lines[0].contains("abcdefg"),
             "First visual line should have start of long line: '{}'",
             lines[0]
-        );
-        assert!(
-            lines[2].starts_with("2 "),
-            "Second buffer line should appear on 3rd visual row with line number '2': '{}'",
-            lines[2]
         );
         assert!(
             lines[2].contains("short"),
@@ -698,18 +684,14 @@ mod tests {
 
     #[test]
     fn cursor_on_wrapped_portion() {
-        // Place cursor at char 20 of a long line, which is on the wrapped part
+        // Place cursor at end of a long line, which is on the wrapped part
         // Terminal: 20 wide, 6 tall
-        // Gutter: 2, text width: 18, chars per wrap: 17
+        // Text width: 20, chars per wrap: 19
         let text = "abcdefghijklmnopqrstuvwxyz";
         let events = vec![ctrl('e')]; // go to end of line (char 25)
         let (mut app, mut events) = test_app_with_text(20, 6, text, events);
         app.run_until_idle(&mut events).unwrap();
 
-        // The cursor should be on visual row 1 (the wrapped part),
-        // not on visual row 0
-        let _buf = app.terminal.backend().buffer();
-        // Check that the cursor was set (we can verify point is at end)
         // "abcdefghijklmnopqrstuvwxyz" has 26 chars, C-e goes to position 26
         assert_eq!(app.editor.point(), 26);
 
@@ -723,19 +705,17 @@ mod tests {
     fn triple_wrap_line() {
         // A very long line that wraps 3 times
         // Terminal: 15 wide, 8 tall (6 text rows + mode + minibuf)
-        // Gutter for 1 line: 2 chars
-        // Text width: 13, chars per wrap: 12
+        // Text width: 15, chars per wrap: 14
         let text = "abcdefghijklmnopqrstuvwxyz0123456789"; // 36 chars
-        // wraps into ceil(36/12) = 3 visual lines
         let (mut app, mut events) = test_app_with_text(15, 8, text, vec![]);
         app.run_until_idle(&mut events).unwrap();
         let screen = capture_screen(&app.terminal);
         let lines: Vec<&str> = screen.lines().collect();
-        // Visual line 0: "1 " + 12 chars + "\"
+        // Visual line 0: 14 chars + "\"
         assert!(lines[0].ends_with('\\'), "First wrap: '{}'", lines[0]);
-        // Visual line 1: "  " + 12 chars + "\"
+        // Visual line 1: 14 chars + "\"
         assert!(lines[1].ends_with('\\'), "Second wrap: '{}'", lines[1]);
-        // Visual line 2: "  " + remaining 12 chars (no \)
+        // Visual line 2: remaining 8 chars (no \)
         assert!(!lines[2].ends_with('\\'), "Last segment shouldn't wrap: '{}'", lines[2]);
     }
 
@@ -1550,9 +1530,9 @@ mod tests {
 
     #[test]
     fn mouse_click_places_cursor() {
-        // 3-line text. Click on line 2, column 3 (after gutter).
+        // 3-line text. Click on line 2, column 2.
         let text = "hello\nworld\nfoo";
-        let events = vec![mouse_click(4, 1)]; // gutter="1 " (2 chars), so x=4 => col 2 in text
+        let events = vec![mouse_click(2, 1)]; // x=2 => col 2 in text
         let (mut app, mut events) = test_app_with_text(40, 10, text, events);
         app.run_until_idle(&mut events).unwrap();
 
@@ -1567,7 +1547,7 @@ mod tests {
     #[test]
     fn mouse_click_on_first_line() {
         let text = "hello\nworld";
-        let events = vec![mouse_click(2, 0)]; // gutter is 2 chars, so x=2 => col 0
+        let events = vec![mouse_click(0, 0)]; // x=0 => col 0
         let (mut app, mut events) = test_app_with_text(40, 10, text, events);
         app.run_until_idle(&mut events).unwrap();
 

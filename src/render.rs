@@ -107,8 +107,7 @@ pub fn render(frame: &mut Frame, editor: &Editor) {
         // Set cursor position for the focused pane
         if is_focused && !editor.minibuffer.is_active() {
             let (cursor_line, cursor_col) = buf.char_to_line_col(pane.point);
-            let gw = gutter_width(buf.line_count());
-            let text_width = (text_area.width as usize).saturating_sub(gw);
+            let text_width = text_area.width as usize;
 
             // Compute visual row from scroll_top, accounting for wrapping
             let mut visual_row: usize = 0;
@@ -128,7 +127,7 @@ pub fn render(frame: &mut Frame, editor: &Editor) {
             visual_row += row_in_line;
 
             let screen_line = visual_row as u16;
-            let screen_col = gw as u16 + col_in_segment as u16;
+            let screen_col = col_in_segment as u16;
 
             if screen_col < text_area.x + text_area.width && screen_line < text_area.height {
                 frame.set_cursor_position((text_area.x + screen_col, text_area.y + screen_line));
@@ -143,15 +142,6 @@ pub fn render(frame: &mut Frame, editor: &Editor) {
     }
 
     render_minibuffer(frame, editor, minibuffer_area);
-}
-
-pub fn gutter_width(line_count: usize) -> usize {
-    let digits = if line_count == 0 {
-        1
-    } else {
-        (line_count as f64).log10().floor() as usize + 1
-    };
-    digits + 1 // +1 for separator space
 }
 
 /// Compute how many visual rows a buffer line occupies with wrapping.
@@ -178,8 +168,7 @@ fn render_pane_text(
     let scroll_top = pane.scroll_top;
     let max_visual_rows = area.height as usize;
     let total_lines = buf.line_count();
-    let gw = gutter_width(total_lines);
-    let text_width = (area.width as usize).saturating_sub(gw);
+    let text_width = area.width as usize;
 
     // Compute per-character syntax styles for visible buffer lines
     let syntax_styles = compute_syntax_char_styles(buf, scroll_top, max_visual_rows);
@@ -201,11 +190,7 @@ fn render_pane_text(
 
         if line_chars.len() <= text_width {
             // Line fits in one visual row — no wrapping needed
-            let line_num = format!("{:>width$} ", line_idx + 1, width = gw - 1);
-            let mut spans = vec![Span::styled(
-                line_num,
-                Style::default().fg(Color::Rgb(35, 120, 147)),
-            )];
+            let mut spans = Vec::new();
 
             if !line_chars.is_empty() {
                 build_styled_spans(
@@ -227,23 +212,13 @@ fn render_pane_text(
             // Line needs wrapping
             let chars_per_segment = (text_width - 1).max(1);
             let mut offset = 0;
-            let mut is_first = true;
 
             while offset < line_chars.len() && output_lines.len() < max_visual_rows {
                 let remaining = line_chars.len() - offset;
                 let is_last = remaining <= text_width;
                 let segment_len = if is_last { remaining } else { chars_per_segment };
 
-                // Gutter: line number for first visual line, blank for continuation
-                let gutter_text = if is_first {
-                    format!("{:>width$} ", line_idx + 1, width = gw - 1)
-                } else {
-                    " ".repeat(gw)
-                };
-                let mut spans = vec![Span::styled(
-                    gutter_text,
-                    Style::default().fg(Color::Rgb(35, 120, 147)),
-                )];
+                let mut spans = Vec::new();
 
                 build_styled_spans(
                     &mut spans,
@@ -267,7 +242,6 @@ fn render_pane_text(
 
                 output_lines.push(Line::from(spans));
                 offset += segment_len;
-                is_first = false;
             }
         }
 
@@ -276,9 +250,8 @@ fn render_pane_text(
 
     // Fill remaining rows with ~
     while output_lines.len() < max_visual_rows {
-        let padding = " ".repeat(gw);
         output_lines.push(Line::from(Span::styled(
-            format!("{}~", padding),
+            "~",
             Style::default().fg(Color::Rgb(35, 120, 147)),
         )));
     }
@@ -574,16 +547,6 @@ fn render_minibuffer(frame: &mut Frame, editor: &Editor, area: Rect) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn gutter_width_for_small_files() {
-        assert_eq!(gutter_width(0), 2);   // "_ " (zero lines)
-        assert_eq!(gutter_width(1), 2);   // "1 "
-        assert_eq!(gutter_width(9), 2);   // "9 "
-        assert_eq!(gutter_width(10), 3);  // "10 "
-        assert_eq!(gutter_width(99), 3);  // "99 "
-        assert_eq!(gutter_width(100), 4); // "100 "
-    }
 
     #[test]
     fn visual_lines_no_wrap() {

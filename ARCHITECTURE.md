@@ -193,7 +193,7 @@ discarded branch, `clean_version` is set to `None` (unreachable).
 `Event::Mouse` handles left-button clicks. When the minibuffer is not active,
 a click determines which pane was clicked (using `calculate_rects()`), focuses
 that pane, and places the cursor at the clicked position. The position
-calculation accounts for gutter width, line wrapping, and scroll position.
+calculation accounts for line wrapping and scroll position.
 Clicks below all content place the cursor at the end of the buffer.
 `Event::Resize` is handled implicitly by the viewport update.
 
@@ -205,17 +205,13 @@ Clicks below all content place the cursor at the end of the buffer.
 2. Walks `pane_tree.calculate_rects()` to get per-pane rectangles.
 3. For each pane:
    - Splits the pane rect into a text area and a 1-row mode line.
-   - Computes gutter width from the buffer's line count.
    - For each visible line: if syntax state exists, computes per-character
      styles from tree-sitter highlight spans; otherwise uses default style.
    - Long lines are wrapped with a `\` continuation marker in the last column.
-     Wrapped segments get blank gutters; only the first visual row shows the
-     line number.
    - Overlays region highlighting (white background between mark and point).
    - Overlays search match highlighting (yellow for current match, dark for
      others).
-   - Gutter line numbers and text content are rendered together as spans
-     within a single `Paragraph` widget.
+   - Text content is rendered as spans within a single `Paragraph` widget.
    - Renders the mode line: modified flag, buffer name, `(line,col)`,
      position percentage, and any pending key chord prefix.
    - Focused pane gets a white-background bold mode line; unfocused panes
