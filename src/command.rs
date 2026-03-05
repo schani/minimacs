@@ -19,6 +19,8 @@ pub enum Command {
     InsertChar(char),
     InsertNewline,
     InsertTab,
+    IndentLine,
+    DedentLine,
     DeleteBackward,
     DeleteForward,
     DeleteWordBackward,

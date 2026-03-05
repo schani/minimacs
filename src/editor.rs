@@ -7,6 +7,8 @@ use crate::command::Command;
 use crate::minibuffer::{Minibuffer, PromptKind, normalize_path_string};
 use crate::pane::{Pane, PaneTree};
 
+const INDENT_WIDTH: usize = 4;
+
 /// Position for recenter-top-bottom cycling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RecenterPosition {
@@ -231,7 +233,7 @@ impl Editor {
                     self.submit_prompt();
                     return;
                 }
-                Command::InsertTab => {
+                Command::InsertTab | Command::IndentLine | Command::DedentLine => {
                     // Tab completion is handled in app.rs key routing
                     return;
                 }
@@ -242,6 +244,7 @@ impl Editor {
         // Mark non-edit actions for undo grouping
         match &cmd {
             Command::InsertChar(_) | Command::InsertNewline | Command::InsertTab => {}
+            Command::IndentLine | Command::DedentLine => {}
             Command::DeleteBackward | Command::DeleteForward | Command::DeleteWordBackward
             | Command::KillLine => {}
             Command::Undo | Command::Redo => {}
@@ -272,6 +275,8 @@ impl Editor {
             Command::InsertChar(c) => self.insert_char(c),
             Command::InsertNewline => self.insert_newline(),
             Command::InsertTab => self.insert_tab(),
+            Command::IndentLine => self.indent_line(),
+            Command::DedentLine => self.dedent_line(),
             Command::DeleteBackward => self.delete_backward(),
             Command::DeleteForward => self.delete_forward(),
             Command::DeleteWordBackward => self.delete_word_backward(),
@@ -753,23 +758,300 @@ impl Editor {
 
     fn insert_newline(&mut self) {
         let pos = self.active_pane().point;
-        let le = self.active_buffer().line_ending.as_str().to_string();
-        self.active_buffer_mut().history.record_insert(pos, &le);
-        self.active_buffer_mut().insert(pos, &le);
+        let buf = self.active_buffer();
+        let le = buf.line_ending.as_str().to_string();
+
+        // Get current line's leading whitespace (spaces only)
+        let (line, _) = buf.char_to_line_col(pos);
+        let line_start = buf.line_col_to_char(line, 0);
+        let line_len = buf.line_len_chars(line);
+        let mut indent = String::new();
+        for i in 0..line_len {
+            let ch = buf.text.char(line_start + i);
+            if ch == ' ' {
+                indent.push(' ');
+            } else if ch == '\t' {
+                // Convert tabs to spaces
+                let spaces = INDENT_WIDTH - (indent.len() % INDENT_WIDTH);
+                for _ in 0..spaces {
+                    indent.push(' ');
+                }
+            } else {
+                break;
+            }
+        }
+
+        let insert_str = format!("{}{}", le, indent);
+        self.active_buffer_mut()
+            .history
+            .record_insert(pos, &insert_str);
+        self.active_buffer_mut().insert(pos, &insert_str);
         let pane = self.active_pane_mut();
-        pane.point = pos + le.len();
+        pane.point = pos + insert_str.len();
         pane.preferred_column = None;
     }
 
     fn insert_tab(&mut self) {
         let pos = self.active_pane().point;
-        let spaces = "    ";
+        let spaces = " ".repeat(INDENT_WIDTH);
         self.active_buffer_mut()
             .history
-            .record_insert(pos, spaces);
-        self.active_buffer_mut().insert(pos, spaces);
+            .record_insert(pos, &spaces);
+        self.active_buffer_mut().insert(pos, &spaces);
         let pane = self.active_pane_mut();
-        pane.point = pos + 4;
+        pane.point = pos + INDENT_WIDTH;
+        pane.preferred_column = None;
+    }
+
+    fn indent_line(&mut self) {
+        if self.active_region().is_some() {
+            self.indent_region();
+            return;
+        }
+        let buf = self.active_buffer();
+        let (line, _) = buf.char_to_line_col(self.active_pane().point);
+        let line_start = buf.line_col_to_char(line, 0);
+
+        // Get current leading whitespace
+        let line_len = buf.line_len_chars(line);
+        let mut ws_len = 0;
+        for i in 0..line_len {
+            if buf.text.char(line_start + i) == ' ' {
+                ws_len += 1;
+            } else {
+                break;
+            }
+        }
+        let old_ws: String = " ".repeat(ws_len);
+        let new_ws = format!("{}{}", " ".repeat(INDENT_WIDTH), old_ws);
+
+        self.active_buffer_mut()
+            .history
+            .record_replace(line_start, &old_ws, &new_ws);
+        self.active_buffer_mut().remove(line_start, line_start + ws_len);
+        self.active_buffer_mut().insert(line_start, &new_ws);
+        self.active_buffer_mut().history.commit();
+        let pane = self.active_pane_mut();
+        pane.point += INDENT_WIDTH;
+        pane.preferred_column = None;
+    }
+
+    fn dedent_line(&mut self) {
+        if self.active_region().is_some() {
+            self.dedent_region();
+            return;
+        }
+        let buf = self.active_buffer();
+        let (line, _) = buf.char_to_line_col(self.active_pane().point);
+        let line_start = buf.line_col_to_char(line, 0);
+
+        // Count leading spaces (up to INDENT_WIDTH)
+        let line_len = buf.line_len_chars(line);
+        let mut remove_count = 0;
+        for i in 0..line_len.min(INDENT_WIDTH) {
+            if buf.text.char(line_start + i) == ' ' {
+                remove_count += 1;
+            } else {
+                break;
+            }
+        }
+
+        if remove_count == 0 {
+            return;
+        }
+
+        // We remove these spaces, so new whitespace is empty for those chars
+        let remaining_ws_len = {
+            let buf = self.active_buffer();
+            let line_len = buf.line_len_chars(line);
+            let mut total = 0;
+            for i in 0..line_len {
+                if buf.text.char(line_start + i) == ' ' {
+                    total += 1;
+                } else {
+                    break;
+                }
+            }
+            total
+        };
+        let new_ws: String = " ".repeat(remaining_ws_len - remove_count);
+
+        self.active_buffer_mut()
+            .history
+            .record_replace(line_start, &" ".repeat(remaining_ws_len), &new_ws);
+        self.active_buffer_mut()
+            .remove(line_start, line_start + remaining_ws_len);
+        self.active_buffer_mut().insert(line_start, &new_ws);
+        self.active_buffer_mut().history.commit();
+
+        let pane = self.active_pane_mut();
+        // Adjust point, but don't go before line start
+        let point_col = pane.point - line_start;
+        if point_col <= remove_count {
+            pane.point = line_start;
+        } else {
+            pane.point -= remove_count;
+        }
+        pane.preferred_column = None;
+    }
+
+    fn indent_region(&mut self) {
+        let (region_start, region_end) = match self.active_region() {
+            Some(r) => r,
+            None => return,
+        };
+        let buf = self.active_buffer();
+        let (first_line, _) = buf.char_to_line_col(region_start);
+        let (last_line_candidate, last_col) = buf.char_to_line_col(region_end);
+        // Exclude last line if region end is exactly at column 0
+        let last_line = if last_col == 0 && last_line_candidate > first_line {
+            last_line_candidate - 1
+        } else {
+            last_line_candidate
+        };
+
+        let span_start = buf.line_col_to_char(first_line, 0);
+        // span_end: end of the last line's content (including newline if present)
+        let span_end = if last_line + 1 < buf.line_count() {
+            buf.line_col_to_char(last_line + 1, 0)
+        } else {
+            buf.char_count()
+        };
+
+        let old_text: String = buf.text.slice(span_start..span_end).chars().collect();
+        let indent_str = " ".repeat(INDENT_WIDTH);
+
+        // Build new text and track per-line delta for cursor adjustment
+        let mut new_text = String::new();
+        let pane = self.active_pane();
+        let point = pane.point;
+        let mark = pane.mark.unwrap_or(point);
+
+        let mut new_point = point;
+        let mut new_mark = mark;
+
+        for line_idx in first_line..=last_line {
+            let line_start = buf.line_col_to_char(line_idx, 0);
+            let next_line_start = if line_idx + 1 < buf.line_count() {
+                buf.line_col_to_char(line_idx + 1, 0)
+            } else {
+                buf.char_count()
+            };
+            let line_text: String = buf.text.slice(line_start..next_line_start).chars().collect();
+
+            new_text.push_str(&indent_str);
+            new_text.push_str(&line_text);
+
+            // Adjust point and mark if they're on this line
+            if point >= line_start
+                && (point < next_line_start
+                    || (line_idx == last_line && point == next_line_start))
+            {
+                new_point = point + INDENT_WIDTH * (line_idx - first_line + 1);
+            }
+            if mark >= line_start
+                && (mark < next_line_start
+                    || (line_idx == last_line && mark == next_line_start))
+            {
+                new_mark = mark + INDENT_WIDTH * (line_idx - first_line + 1);
+            }
+
+        }
+
+        self.active_buffer_mut()
+            .history
+            .record_replace(span_start, &old_text, &new_text);
+        self.active_buffer_mut().remove(span_start, span_end);
+        self.active_buffer_mut().insert(span_start, &new_text);
+        self.active_buffer_mut().history.commit();
+
+        let pane = self.active_pane_mut();
+        pane.point = new_point;
+        pane.mark = Some(new_mark);
+        pane.preferred_column = None;
+    }
+
+    fn dedent_region(&mut self) {
+        let (region_start, region_end) = match self.active_region() {
+            Some(r) => r,
+            None => return,
+        };
+        let buf = self.active_buffer();
+        let (first_line, _) = buf.char_to_line_col(region_start);
+        let (last_line_candidate, last_col) = buf.char_to_line_col(region_end);
+        let last_line = if last_col == 0 && last_line_candidate > first_line {
+            last_line_candidate - 1
+        } else {
+            last_line_candidate
+        };
+
+        let span_start = buf.line_col_to_char(first_line, 0);
+        let span_end = if last_line + 1 < buf.line_count() {
+            buf.line_col_to_char(last_line + 1, 0)
+        } else {
+            buf.char_count()
+        };
+
+        let old_text: String = buf.text.slice(span_start..span_end).chars().collect();
+
+        let pane = self.active_pane();
+        let point = pane.point;
+        let mark = pane.mark.unwrap_or(point);
+
+        let mut new_point = point;
+        let mut new_mark = mark;
+        let mut new_text = String::new();
+        let mut cumulative_delta: usize = 0;
+
+        for line_idx in first_line..=last_line {
+            let line_start = buf.line_col_to_char(line_idx, 0);
+            let next_line_start = if line_idx + 1 < buf.line_count() {
+                buf.line_col_to_char(line_idx + 1, 0)
+            } else {
+                buf.char_count()
+            };
+            let line_text: String = buf.text.slice(line_start..next_line_start).chars().collect();
+
+            // Count leading spaces to remove (up to INDENT_WIDTH)
+            let remove_count = line_text.chars().take(INDENT_WIDTH).take_while(|&c| c == ' ').count();
+
+            new_text.push_str(&line_text[remove_count..]);
+            cumulative_delta += remove_count;
+
+            // Adjust point
+            if point >= line_start && (point < next_line_start || (line_idx == last_line && point == next_line_start)) {
+                let col = point - line_start;
+                if col <= remove_count {
+                    new_point = line_start - (cumulative_delta - remove_count);
+                } else {
+                    new_point = point - cumulative_delta;
+                }
+            }
+            // Adjust mark
+            if mark >= line_start && (mark < next_line_start || (line_idx == last_line && mark == next_line_start)) {
+                let col = mark - line_start;
+                if col <= remove_count {
+                    new_mark = line_start - (cumulative_delta - remove_count);
+                } else {
+                    new_mark = mark - cumulative_delta;
+                }
+            }
+        }
+
+        if cumulative_delta == 0 {
+            return;
+        }
+
+        self.active_buffer_mut()
+            .history
+            .record_replace(span_start, &old_text, &new_text);
+        self.active_buffer_mut().remove(span_start, span_end);
+        self.active_buffer_mut().insert(span_start, &new_text);
+        self.active_buffer_mut().history.commit();
+
+        let pane = self.active_pane_mut();
+        pane.point = new_point;
+        pane.mark = Some(new_mark);
         pane.preferred_column = None;
     }
 
@@ -2429,5 +2711,142 @@ mod tests {
             !editor.current_buffer().modified,
             "Should be unmodified after undoing to last save point"
         );
+    }
+
+    // === Indentation tests ===
+
+    #[test]
+    fn insert_newline_copies_indentation() {
+        let mut editor = Editor::new_with_text("    hello");
+        // Place cursor at end of "hello"
+        editor.pane_tree.focused_pane_mut().point = 9;
+        editor.execute(Command::InsertNewline);
+        assert_eq!(editor.buffer_text(), "    hello\n    ");
+        assert_eq!(editor.point(), 14); // after the 4 spaces on new line
+    }
+
+    #[test]
+    fn insert_newline_no_indent_at_column_zero() {
+        let mut editor = Editor::new_with_text("hello");
+        editor.pane_tree.focused_pane_mut().point = 5;
+        editor.execute(Command::InsertNewline);
+        assert_eq!(editor.buffer_text(), "hello\n");
+        assert_eq!(editor.point(), 6);
+    }
+
+    #[test]
+    fn insert_newline_mid_line_preserves_indent() {
+        let mut editor = Editor::new_with_text("    helloworld");
+        editor.pane_tree.focused_pane_mut().point = 9; // between "hello" and "world"
+        editor.execute(Command::InsertNewline);
+        assert_eq!(editor.buffer_text(), "    hello\n    world");
+        assert_eq!(editor.point(), 14);
+    }
+
+    #[test]
+    fn indent_line_single() {
+        let mut editor = Editor::new_with_text("hello");
+        editor.pane_tree.focused_pane_mut().point = 2;
+        editor.execute(Command::IndentLine);
+        assert_eq!(editor.buffer_text(), "    hello");
+        assert_eq!(editor.point(), 6); // 2 + 4
+    }
+
+    #[test]
+    fn indent_line_with_region() {
+        let mut editor = Editor::new_with_text("aaa\nbbb\nccc");
+        // Select all three lines
+        let pane = editor.pane_tree.focused_pane_mut();
+        pane.point = 0;
+        pane.mark = Some(11); // end of "ccc"
+        editor.execute(Command::IndentLine);
+        assert_eq!(editor.buffer_text(), "    aaa\n    bbb\n    ccc");
+    }
+
+    #[test]
+    fn dedent_line_single() {
+        let mut editor = Editor::new_with_text("    hello");
+        editor.pane_tree.focused_pane_mut().point = 6; // on 'l'
+        editor.execute(Command::DedentLine);
+        assert_eq!(editor.buffer_text(), "hello");
+        assert_eq!(editor.point(), 2); // 6 - 4
+    }
+
+    #[test]
+    fn dedent_line_partial_spaces() {
+        let mut editor = Editor::new_with_text("  hello");
+        editor.pane_tree.focused_pane_mut().point = 4;
+        editor.execute(Command::DedentLine);
+        assert_eq!(editor.buffer_text(), "hello");
+        assert_eq!(editor.point(), 2); // 4 - 2
+    }
+
+    #[test]
+    fn dedent_line_no_leading_spaces() {
+        let mut editor = Editor::new_with_text("hello");
+        editor.pane_tree.focused_pane_mut().point = 2;
+        editor.execute(Command::DedentLine);
+        assert_eq!(editor.buffer_text(), "hello");
+        assert_eq!(editor.point(), 2); // unchanged
+    }
+
+    #[test]
+    fn dedent_line_with_region() {
+        let mut editor = Editor::new_with_text("    aaa\n    bbb\n    ccc");
+        let pane = editor.pane_tree.focused_pane_mut();
+        pane.point = 0;
+        pane.mark = Some(23); // end of text
+        editor.execute(Command::DedentLine);
+        assert_eq!(editor.buffer_text(), "aaa\nbbb\nccc");
+    }
+
+    #[test]
+    fn region_end_at_col0_excludes_last_line() {
+        let mut editor = Editor::new_with_text("aaa\nbbb\nccc");
+        // Region covers first two lines, but end is at start of "ccc"
+        let pane = editor.pane_tree.focused_pane_mut();
+        pane.point = 0;
+        pane.mark = Some(8); // start of "ccc" line (col 0)
+        editor.execute(Command::IndentLine);
+        assert_eq!(editor.buffer_text(), "    aaa\n    bbb\nccc");
+    }
+
+    #[test]
+    fn undo_reverses_indent() {
+        let mut editor = Editor::new_with_text("hello");
+        editor.pane_tree.focused_pane_mut().point = 2;
+        editor.execute(Command::IndentLine);
+        assert_eq!(editor.buffer_text(), "    hello");
+        editor.execute(Command::Undo);
+        assert_eq!(editor.buffer_text(), "hello");
+    }
+
+    #[test]
+    fn undo_reverses_region_indent() {
+        let mut editor = Editor::new_with_text("aaa\nbbb\nccc");
+        let pane = editor.pane_tree.focused_pane_mut();
+        pane.point = 0;
+        pane.mark = Some(11);
+        editor.execute(Command::IndentLine);
+        assert_eq!(editor.buffer_text(), "    aaa\n    bbb\n    ccc");
+        editor.execute(Command::Undo);
+        assert_eq!(editor.buffer_text(), "aaa\nbbb\nccc");
+    }
+
+    #[test]
+    fn preferred_column_cleared_after_indent() {
+        let mut editor = Editor::new_with_text("hello");
+        editor.pane_tree.focused_pane_mut().preferred_column = Some(5);
+        editor.execute(Command::IndentLine);
+        assert_eq!(editor.pane_tree.focused_pane().preferred_column, None);
+    }
+
+    #[test]
+    fn preferred_column_cleared_after_dedent() {
+        let mut editor = Editor::new_with_text("    hello");
+        editor.pane_tree.focused_pane_mut().preferred_column = Some(5);
+        editor.pane_tree.focused_pane_mut().point = 6;
+        editor.execute(Command::DedentLine);
+        assert_eq!(editor.pane_tree.focused_pane().preferred_column, None);
     }
 }

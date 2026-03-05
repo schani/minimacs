@@ -34,6 +34,7 @@ impl Key {
             KeyCode::Char(c) => s.push(c),
             KeyCode::Enter => s.push_str("RET"),
             KeyCode::Tab => s.push_str("TAB"),
+            KeyCode::BackTab => s.push_str("S-TAB"),
             KeyCode::Backspace => s.push_str("DEL"),
             KeyCode::Delete => s.push_str("Delete"),
             KeyCode::Left => s.push_str("Left"),
@@ -234,7 +235,8 @@ pub fn default_keymap() -> KeymapNode {
     root.bind(&[ctrl('d')], Command::DeleteForward);
     root.bind(&[plain(KeyCode::Delete)], Command::DeleteForward);
     root.bind(&[ctrl('k')], Command::KillLine);
-    root.bind(&[plain(KeyCode::Tab)], Command::InsertTab);
+    root.bind(&[plain(KeyCode::Tab)], Command::IndentLine);
+    root.bind(&[plain(KeyCode::BackTab)], Command::DedentLine);
     root.bind(
         &[alt_key(KeyCode::Backspace)],
         Command::DeleteWordBackward,

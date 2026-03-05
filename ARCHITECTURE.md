@@ -259,8 +259,9 @@ lists. Its `History` is reset each time a prompt starts. The shared clipboard
 means kill/yank in the minibuffer uses the same clipboard as the main editor.
 
 Key routing: Enter submits the prompt, Tab triggers completion (both intercepted
-before the keymap). All other keys go through the normal keymap. `InsertNewline`
-and `InsertTab` are intercepted in `execute()` when the minibuffer is active.
+before the keymap). All other keys go through the normal keymap. `InsertNewline`,
+`InsertTab`, `IndentLine`, and `DedentLine` are intercepted in `execute()` when
+the minibuffer is active.
 
 Prompt nesting is prevented by two mechanisms: (1) `start_minibuffer_prompt()`
 returns early if a prompt is already active; (2) `isearch_start()`,
@@ -313,6 +314,23 @@ Enter accepts the position. `C-g` restores the original position.
 
 All matches are collected by `isearch_matches()` for rendering. The current
 match is highlighted in yellow; other matches in a dim color.
+
+## Indentation
+
+Indentation uses spaces only, with a centralized `INDENT_WIDTH` constant (4).
+
+- **RET** (`InsertNewline`): inserts a newline followed by the current line's
+  leading whitespace (spaces only; tabs are converted to spaces). Cursor lands
+  after the copied indentation.
+- **TAB** (`IndentLine`): prepends `INDENT_WIDTH` spaces at the start of the
+  current line. If a region is active, indents all lines intersecting the
+  region (excluding the last line if the region end is at column 0).
+- **Shift+TAB** (`DedentLine`): removes up to `INDENT_WIDTH` leading spaces
+  from the current line. Region behavior mirrors `IndentLine`.
+
+Region indent/dedent replaces the entire affected span in a single
+`record_replace()` call, making it one undo step. Point and mark are adjusted
+by tracking the cumulative character delta per line.
 
 ## Testing
 
