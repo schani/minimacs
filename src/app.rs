@@ -748,6 +748,24 @@ mod tests {
         );
     }
 
+    // === Recenter integration tests ===
+
+    #[test]
+    fn cl_recenter_via_app() {
+        // 20 lines, terminal is 12 tall (10 text rows + mode + minibuf)
+        let text = (0..20).map(|i| format!("line{}", i)).collect::<Vec<_>>().join("\n");
+        // Move cursor to line 10 (C-n 10 times), then C-l
+        let mut events: Vec<Event> = (0..10).map(|_| ctrl('n')).collect();
+        events.push(ctrl('l')); // recenter
+        let (mut app, mut events) = test_app_with_text(40, 12, &text, events);
+        app.run_until_idle(&mut events).unwrap();
+        // Cursor should be on line 10
+        let (line, _) = app.editor.current_buffer().char_to_line_col(app.editor.point());
+        assert_eq!(line, 10);
+        // After center: scroll_top = 10 - 10/2 = 5
+        assert_eq!(app.editor.pane_tree.focused_pane().scroll_top, 5);
+    }
+
     // === Isearch integration tests ===
 
     #[test]

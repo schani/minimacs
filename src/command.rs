@@ -53,6 +53,9 @@ pub enum Command {
     ISearchForward,
     ISearchBackward,
 
+    // Display
+    RecenterTopBottom,
+
     // Misc
     Cancel,
     Quit,

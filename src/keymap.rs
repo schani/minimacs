@@ -288,6 +288,9 @@ pub fn default_keymap() -> KeymapNode {
     );
     root.bind(&[ctrl('x'), ctrl('x')], Command::SwapPointAndMark);
 
+    // Display
+    root.bind(&[ctrl('l')], Command::RecenterTopBottom);
+
     // Search
     root.bind(&[ctrl('s')], Command::ISearchForward);
     root.bind(&[ctrl('r')], Command::ISearchBackward);

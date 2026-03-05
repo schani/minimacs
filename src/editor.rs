@@ -7,6 +7,14 @@ use crate::command::Command;
 use crate::minibuffer::{Minibuffer, PromptKind, normalize_path_string};
 use crate::pane::{Pane, PaneTree};
 
+/// Position for recenter-top-bottom cycling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecenterPosition {
+    Center,
+    Top,
+    Bottom,
+}
+
 /// Direction of incremental search.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SearchDirection {
@@ -39,6 +47,8 @@ pub struct Editor {
     pub minibuffer_buffer: Buffer,
     pub minibuffer_pane: Pane,
     pub isearch: Option<ISearchState>,
+    /// Tracks last recenter position for C-l cycling.
+    last_recenter: Option<RecenterPosition>,
 }
 
 #[allow(dead_code)]
@@ -59,6 +69,7 @@ impl Editor {
             minibuffer_buffer: Buffer::from_str(usize::MAX, "*minibuffer*", ""),
             minibuffer_pane: mb_pane,
             isearch: None,
+            last_recenter: None,
         }
     }
 
@@ -78,6 +89,7 @@ impl Editor {
             minibuffer_buffer: Buffer::from_str(usize::MAX, "*minibuffer*", ""),
             minibuffer_pane: mb_pane,
             isearch: None,
+            last_recenter: None,
         }
     }
 
@@ -238,6 +250,11 @@ impl Editor {
             }
         }
 
+        // Reset recenter state on any command except recenter itself
+        if cmd != Command::RecenterTopBottom {
+            self.last_recenter = None;
+        }
+
         match cmd {
             Command::ForwardChar => self.forward_char(),
             Command::BackwardChar => self.backward_char(),
@@ -251,6 +268,7 @@ impl Editor {
             Command::BufferEnd => self.buffer_end(),
             Command::PageDown => self.page_down(),
             Command::PageUp => self.page_up(),
+            Command::RecenterTopBottom => self.recenter_top_bottom(),
             Command::InsertChar(c) => self.insert_char(c),
             Command::InsertNewline => self.insert_newline(),
             Command::InsertTab => self.insert_tab(),
@@ -697,6 +715,28 @@ impl Editor {
         let pane = self.active_pane_mut();
         pane.point = new_point;
         pane.preferred_column = Some(target_col);
+    }
+
+    fn recenter_top_bottom(&mut self) {
+        let pane = self.active_pane();
+        let buf = self.active_buffer();
+        let (cursor_line, _) = buf.char_to_line_col(pane.point);
+        let height = pane.viewport_height;
+
+        let position = match self.last_recenter {
+            None | Some(RecenterPosition::Bottom) => RecenterPosition::Center,
+            Some(RecenterPosition::Center) => RecenterPosition::Top,
+            Some(RecenterPosition::Top) => RecenterPosition::Bottom,
+        };
+
+        let new_scroll_top = match position {
+            RecenterPosition::Center => cursor_line.saturating_sub(height / 2),
+            RecenterPosition::Top => cursor_line,
+            RecenterPosition::Bottom => cursor_line.saturating_sub(height.saturating_sub(1)),
+        };
+
+        self.active_pane_mut().scroll_top = new_scroll_top;
+        self.last_recenter = Some(position);
     }
 
     // === Editing commands ===
@@ -1420,6 +1460,81 @@ mod tests {
             .current_buffer()
             .char_to_line_col(editor.point());
         assert_eq!(line, 0);
+    }
+
+    // === Recenter tests ===
+
+    #[test]
+    fn recenter_centers_cursor_line() {
+        // 10 lines, viewport height 5, cursor on line 5
+        let mut editor = Editor::new_with_text("a\nb\nc\nd\ne\nf\ng\nh\ni\nj");
+        editor.pane_tree.focused_pane_mut().viewport_height = 5;
+        editor.pane_tree.focused_pane_mut().viewport_width = 40;
+        // Move cursor to line 5 (the "f" line)
+        for _ in 0..5 {
+            editor.execute(Command::NextLine);
+        }
+        editor.execute(Command::RecenterTopBottom);
+        // Center: scroll_top = 5 - 5/2 = 3
+        assert_eq!(editor.pane_tree.focused_pane().scroll_top, 3);
+    }
+
+    #[test]
+    fn recenter_cycles_center_top_bottom() {
+        let mut editor = Editor::new_with_text("a\nb\nc\nd\ne\nf\ng\nh\ni\nj");
+        editor.pane_tree.focused_pane_mut().viewport_height = 5;
+        editor.pane_tree.focused_pane_mut().viewport_width = 40;
+        // Move cursor to line 5
+        for _ in 0..5 {
+            editor.execute(Command::NextLine);
+        }
+        // First C-l: center (scroll_top = 3)
+        editor.execute(Command::RecenterTopBottom);
+        assert_eq!(editor.pane_tree.focused_pane().scroll_top, 3);
+        // Second C-l: top (scroll_top = 5)
+        editor.execute(Command::RecenterTopBottom);
+        assert_eq!(editor.pane_tree.focused_pane().scroll_top, 5);
+        // Third C-l: bottom (scroll_top = 5 - 4 = 1)
+        editor.execute(Command::RecenterTopBottom);
+        assert_eq!(editor.pane_tree.focused_pane().scroll_top, 1);
+        // Fourth C-l: center again (scroll_top = 3)
+        editor.execute(Command::RecenterTopBottom);
+        assert_eq!(editor.pane_tree.focused_pane().scroll_top, 3);
+    }
+
+    #[test]
+    fn recenter_resets_on_other_command() {
+        let mut editor = Editor::new_with_text("a\nb\nc\nd\ne\nf\ng\nh\ni\nj");
+        editor.pane_tree.focused_pane_mut().viewport_height = 5;
+        editor.pane_tree.focused_pane_mut().viewport_width = 40;
+        for _ in 0..5 {
+            editor.execute(Command::NextLine);
+        }
+        // First C-l: center
+        editor.execute(Command::RecenterTopBottom);
+        assert_eq!(editor.pane_tree.focused_pane().scroll_top, 3);
+        // Any other command resets the cycle
+        editor.execute(Command::ForwardChar);
+        // Next C-l should be center again, not top
+        editor.execute(Command::RecenterTopBottom);
+        assert_eq!(editor.pane_tree.focused_pane().scroll_top, 3);
+    }
+
+    #[test]
+    fn recenter_at_beginning_of_buffer() {
+        let mut editor = Editor::new_with_text("a\nb\nc\nd\ne");
+        editor.pane_tree.focused_pane_mut().viewport_height = 5;
+        editor.pane_tree.focused_pane_mut().viewport_width = 40;
+        // Cursor at line 0
+        editor.execute(Command::RecenterTopBottom);
+        // Center: 0.saturating_sub(2) = 0
+        assert_eq!(editor.pane_tree.focused_pane().scroll_top, 0);
+        // Top: scroll_top = 0
+        editor.execute(Command::RecenterTopBottom);
+        assert_eq!(editor.pane_tree.focused_pane().scroll_top, 0);
+        // Bottom: 0.saturating_sub(4) = 0
+        editor.execute(Command::RecenterTopBottom);
+        assert_eq!(editor.pane_tree.focused_pane().scroll_top, 0);
     }
 
     #[test]
