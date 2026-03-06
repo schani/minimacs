@@ -85,7 +85,8 @@ struct Editor {
     minibuffer_buffer: Buffer,  // id=usize::MAX, not in buffers vec
     minibuffer_pane: Pane,      // viewport_height=1
     isearch: Option<ISearchState>,
-    last_recenter: Option<RecenterPosition>,
+    last_command: Option<Command>,
+    last_recenter_position: Option<RecenterPosition>,
 }
 ```
 

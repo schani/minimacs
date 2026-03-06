@@ -49,8 +49,10 @@ pub struct Editor {
     pub minibuffer_buffer: Buffer,
     pub minibuffer_pane: Pane,
     pub isearch: Option<ISearchState>,
+    /// Tracks the previously executed command (for consecutive-command detection).
+    last_command: Option<Command>,
     /// Tracks last recenter position for C-l cycling.
-    last_recenter: Option<RecenterPosition>,
+    last_recenter_position: Option<RecenterPosition>,
 }
 
 #[allow(dead_code)]
@@ -71,7 +73,8 @@ impl Editor {
             minibuffer_buffer: Buffer::from_str(usize::MAX, "*minibuffer*", ""),
             minibuffer_pane: mb_pane,
             isearch: None,
-            last_recenter: None,
+            last_command: None,
+            last_recenter_position: None,
         }
     }
 
@@ -91,7 +94,8 @@ impl Editor {
             minibuffer_buffer: Buffer::from_str(usize::MAX, "*minibuffer*", ""),
             minibuffer_pane: mb_pane,
             isearch: None,
-            last_recenter: None,
+            last_command: None,
+            last_recenter_position: None,
         }
     }
 
@@ -137,6 +141,10 @@ impl Editor {
         pane.scroll_top = 0;
         self.minibuffer.show_message(msg);
         Ok(())
+    }
+
+    pub fn clear_last_command(&mut self) {
+        self.last_command = None;
     }
 
     pub fn current_buffer(&self) -> &Buffer {
@@ -253,10 +261,7 @@ impl Editor {
             }
         }
 
-        // Reset recenter state on any command except recenter itself
-        if cmd != Command::RecenterTopBottom {
-            self.last_recenter = None;
-        }
+        let cmd_clone = cmd.clone();
 
         match cmd {
             Command::ForwardChar => self.forward_char(),
@@ -304,6 +309,9 @@ impl Editor {
             Command::Cancel => self.cancel(),
             Command::Quit => self.quit(),
         }
+
+        self.last_command = Some(cmd_clone);
+
         // After any command, ensure cursor is visible (skip for minibuffer)
         if !self.minibuffer.is_active() {
             let point = self.pane_tree.focused_pane().point;
@@ -728,7 +736,8 @@ impl Editor {
         let (cursor_line, _) = buf.char_to_line_col(pane.point);
         let height = pane.viewport_height;
 
-        let position = match self.last_recenter {
+        let is_consecutive = self.last_command == Some(Command::RecenterTopBottom);
+        let position = match if is_consecutive { self.last_recenter_position } else { None } {
             None | Some(RecenterPosition::Bottom) => RecenterPosition::Center,
             Some(RecenterPosition::Center) => RecenterPosition::Top,
             Some(RecenterPosition::Top) => RecenterPosition::Bottom,
@@ -741,7 +750,7 @@ impl Editor {
         };
 
         self.active_pane_mut().scroll_top = new_scroll_top;
-        self.last_recenter = Some(position);
+        self.last_recenter_position = Some(position);
     }
 
     // === Editing commands ===
@@ -1093,6 +1102,7 @@ impl Editor {
     }
 
     fn kill_line(&mut self) {
+        let append = self.last_command == Some(Command::KillLine);
         let buf = self.active_buffer();
         let pos = self.active_pane().point;
         let (line, col) = buf.char_to_line_col(pos);
@@ -1106,7 +1116,11 @@ impl Editor {
                     .history
                     .record_delete(pos, &deleted);
                 self.active_buffer_mut().remove(pos, pos + 1);
-                self.clipboard = deleted;
+                if append {
+                    self.clipboard.push_str(&deleted);
+                } else {
+                    self.clipboard = deleted;
+                }
             }
         } else {
             let end = buf.line_col_to_char(line, line_len);
@@ -1115,7 +1129,11 @@ impl Editor {
                 .history
                 .record_delete(pos, &deleted);
             self.active_buffer_mut().remove(pos, end);
-            self.clipboard = deleted;
+            if append {
+                self.clipboard.push_str(&deleted);
+            } else {
+                self.clipboard = deleted;
+            }
         }
         self.active_buffer_mut().history.commit();
         self.active_pane_mut().preferred_column = None;
@@ -2848,5 +2866,49 @@ mod tests {
         editor.pane_tree.focused_pane_mut().point = 6;
         editor.execute(Command::DedentLine);
         assert_eq!(editor.pane_tree.focused_pane().preferred_column, None);
+    }
+
+    // === Consecutive kill-line accumulation tests ===
+
+    #[test]
+    fn kill_line_consecutive_accumulates() {
+        // "hello\nworld\n" — three C-k's from the start should accumulate
+        let mut editor = Editor::new_with_text("hello\nworld\n");
+        // C-k 1: kills "hello" (rest of line), clipboard = "hello"
+        editor.execute(Command::KillLine);
+        assert_eq!(editor.clipboard, "hello");
+        // C-k 2: kills "\n" (at EOL), clipboard = "hello\n"
+        editor.execute(Command::KillLine);
+        assert_eq!(editor.clipboard, "hello\n");
+        // C-k 3: kills "world" (rest of line), clipboard = "hello\nworld"
+        editor.execute(Command::KillLine);
+        assert_eq!(editor.clipboard, "hello\nworld");
+    }
+
+    #[test]
+    fn kill_line_non_consecutive_resets() {
+        let mut editor = Editor::new_with_text("hello\nworld");
+        // First C-k: kills "hello"
+        editor.execute(Command::KillLine);
+        assert_eq!(editor.clipboard, "hello");
+        // Non-kill command breaks the chain
+        editor.execute(Command::ForwardChar);
+        // After killing "hello", buffer is "\nworld", point is at 0.
+        // ForwardChar moves to pos 1 ('w'). Kill_line kills "world".
+        // Since last_command was ForwardChar, clipboard is replaced.
+        editor.execute(Command::KillLine);
+        assert_eq!(editor.clipboard, "world");
+    }
+
+    #[test]
+    fn kill_line_accumulate_then_paste() {
+        let mut editor = Editor::new_with_text("aaa\nbbb\nccc");
+        // Kill first two segments: "aaa" then "\n"
+        editor.execute(Command::KillLine);
+        editor.execute(Command::KillLine);
+        assert_eq!(editor.clipboard, "aaa\n");
+        // Paste should insert the accumulated text
+        editor.execute(Command::Paste);
+        assert_eq!(editor.buffer_text(), "aaa\nbbb\nccc");
     }
 }

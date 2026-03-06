@@ -249,6 +249,7 @@ where
     }
 
     fn handle_paste(&mut self, text: &str) {
+        self.editor.clear_last_command();
         // Sanitize: replace newlines with spaces when pasting into minibuffer
         let text = if self.editor.minibuffer.is_active() {
             self.editor.minibuffer.completions = None;
@@ -278,6 +279,8 @@ where
         if self.editor.minibuffer.is_active() {
             return;
         }
+
+        self.editor.clear_last_command();
 
         let click_x = mouse.column;
         let click_y = mouse.row;
