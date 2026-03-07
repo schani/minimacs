@@ -82,25 +82,61 @@ pub enum Language {
     Html,
     Bash,
     Yaml,
+    Env,
 }
 
-/// Detect language from file extension.
-pub fn detect_language(path: &std::path::Path) -> Option<Language> {
-    let ext = path.extension()?.to_str()?;
-    match ext {
-        "rs" => Some(Language::Rust),
-        "js" | "mjs" | "cjs" | "jsx" => Some(Language::JavaScript),
-        "ts" | "mts" | "cts" => Some(Language::TypeScript),
-        "tsx" => Some(Language::Tsx),
-        "json" => Some(Language::Json),
-        "toml" => Some(Language::Toml),
-        "md" | "markdown" => Some(Language::Markdown),
-        "go" => Some(Language::Go),
-        "html" | "htm" => Some(Language::Html),
-        "sh" | "bash" | "zsh" => Some(Language::Bash),
-        "yml" | "yaml" => Some(Language::Yaml),
-        _ => None,
+impl Language {
+    /// Human-readable name for display in the mode line.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Language::Rust => "Rust",
+            Language::JavaScript => "JavaScript",
+            Language::TypeScript => "TypeScript",
+            Language::Tsx => "TSX",
+            Language::Json => "JSON",
+            Language::Toml => "TOML",
+            Language::Markdown => "Markdown",
+            Language::Go => "Go",
+            Language::Html => "HTML",
+            Language::Bash => "Bash",
+            Language::Yaml => "YAML",
+            Language::Env => "Env",
+        }
     }
+}
+
+/// Detect language from file extension or filename.
+pub fn detect_language(path: &std::path::Path) -> Option<Language> {
+    // Try extension first.
+    let by_ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .and_then(|ext| match ext {
+            "rs" => Some(Language::Rust),
+            "js" | "mjs" | "cjs" | "jsx" => Some(Language::JavaScript),
+            "ts" | "mts" | "cts" => Some(Language::TypeScript),
+            "tsx" => Some(Language::Tsx),
+            "json" => Some(Language::Json),
+            "toml" => Some(Language::Toml),
+            "md" | "markdown" => Some(Language::Markdown),
+            "go" => Some(Language::Go),
+            "html" | "htm" => Some(Language::Html),
+            "sh" | "bash" | "zsh" => Some(Language::Bash),
+            "yml" | "yaml" => Some(Language::Yaml),
+            "env" => Some(Language::Env),
+            _ => None,
+        });
+    if by_ext.is_some() {
+        return by_ext;
+    }
+
+    // Fall back to filename matching.
+    let name = path.file_name()?.to_str()?;
+    if name == ".env" || name.starts_with(".env.") {
+        return Some(Language::Env);
+    }
+
+    None
 }
 
 /// Get the language function and query strings for a language.
@@ -168,7 +204,7 @@ fn language_config(lang: Language) -> (LanguageFn, String, String, String) {
             tree_sitter_html::INJECTIONS_QUERY.to_string(),
             String::new(),
         ),
-        Language::Bash => (
+        Language::Bash | Language::Env => (
             tree_sitter_bash::LANGUAGE,
             tree_sitter_bash::HIGHLIGHT_QUERY.to_string(),
             String::new(),
@@ -468,6 +504,7 @@ mod tests {
             Language::Html,
             Language::Bash,
             Language::Yaml,
+            Language::Env,
         ];
         for lang in languages {
             assert!(
@@ -476,5 +513,25 @@ mod tests {
                 lang
             );
         }
+    }
+
+    #[test]
+    fn detect_env() {
+        assert_eq!(detect_language(Path::new(".env")), Some(Language::Env));
+        assert_eq!(
+            detect_language(Path::new(".env.local")),
+            Some(Language::Env)
+        );
+        assert_eq!(
+            detect_language(Path::new("foo.env")),
+            Some(Language::Env)
+        );
+    }
+
+    #[test]
+    fn language_name() {
+        assert_eq!(Language::Rust.name(), "Rust");
+        assert_eq!(Language::Env.name(), "Env");
+        assert_eq!(Language::Json.name(), "JSON");
     }
 }
