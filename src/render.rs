@@ -417,6 +417,12 @@ fn render_pane_mode_line(
         format!("{}%", line * 100 / total_lines)
     };
 
+    let language_display = buf
+        .syntax
+        .as_ref()
+        .map(|s| format!("  ({})", s.language.name()))
+        .unwrap_or_default();
+
     let pending = &editor.pending_keys;
     let pending_display = if is_focused && !pending.is_empty() {
         format!("  {}", pending)
@@ -425,12 +431,13 @@ fn render_pane_mode_line(
     };
 
     let left = format!(
-        " {} {} ({},{})  {}",
+        " {} {} ({},{})  {}{}",
         modified_indicator,
         name,
         line + 1,
         col,
-        position
+        position,
+        language_display
     );
     let right = format!("{} ", pending_display);
 

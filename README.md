@@ -11,7 +11,7 @@ users. It is not extensible -- it ships one good editor, not a platform.
   (`C-x C-s`, `C-x C-f`, `M-g g`, etc.)
 - **Multiple buffers** -- open, switch, and kill buffers
 - **Pane splits** -- vertical and horizontal splits with per-pane cursors
-- **Syntax highlighting** -- tree-sitter based, supporting 11 languages
+- **Syntax highlighting** -- tree-sitter based, supporting 12 languages
 - **Incremental search** -- `C-s`/`C-r` with live match highlighting
 - **Undo/redo** -- grouped edits with automatic boundary detection
 - **OS clipboard** -- copy/paste integrates with the system clipboard
@@ -20,9 +20,11 @@ users. It is not extensible -- it ships one good editor, not a platform.
 
 ## Supported Languages
 
-Rust, JavaScript, TypeScript, TSX, JSON, TOML, Go, HTML, Bash, YAML, Markdown.
+Rust, JavaScript, TypeScript, TSX, JSON, TOML, Go, HTML, Bash, YAML, Markdown,
+Env (`.env` files, using bash grammar).
 
-Language is auto-detected from file extension.
+Language is auto-detected from file extension or filename. The detected language
+is shown in the mode line.
 
 ## Installation
 

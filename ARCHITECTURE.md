@@ -215,7 +215,8 @@ Clicks below all content place the cursor at the end of the buffer.
      others).
    - Text content is rendered as spans within a single `Paragraph` widget.
    - Renders the mode line: modified flag, buffer name, `(line,col)`,
-     position percentage, and any pending key chord prefix.
+     position percentage, language name (if syntax is active), and any
+     pending key chord prefix.
    - Focused pane gets a white-background bold mode line; unfocused panes
      get dark gray background with white text.
 4. Renders the minibuffer (prompt or message).
@@ -225,7 +226,9 @@ Clicks below all content place the cursor at the end of the buffer.
 
 ## Syntax Highlighting
 
-Language is detected from file extension at load time. Each buffer with a
+Language is detected from file extension or filename at load time (e.g. `.env`
+files are matched by filename). Each `Language` variant has a `name()` method
+returning a human-readable string displayed in the mode line. Each buffer with a
 recognized language gets a `SyntaxState` containing a tree-sitter
 `HighlightConfiguration`.
 
