@@ -24,6 +24,20 @@ Rust, JavaScript, TypeScript, TSX, JSON, TOML, Go, HTML, Bash, YAML, Markdown.
 
 Language is auto-detected from file extension.
 
+## Installation
+
+```sh
+cargo install --git https://github.com/schani/minimacs
+```
+
+This requires the Rust toolchain and a C compiler (for tree-sitter grammars).
+
+To install without OS clipboard support:
+
+```sh
+cargo install --git https://github.com/schani/minimacs --no-default-features
+```
+
 ## Building
 
 Requires Rust 1.70+ and a C compiler (for tree-sitter grammars).
