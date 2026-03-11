@@ -295,7 +295,7 @@ where
             height: size.height.saturating_sub(1 + comp_height),
         };
 
-        let pane_rects = self.editor.pane_tree.calculate_rects(pane_area);
+        let (pane_rects, _separators) = self.editor.pane_tree.calculate_rects(pane_area);
 
         // Find which pane was clicked
         for (path, rect) in &pane_rects {
@@ -383,7 +383,7 @@ where
             height: size.height.saturating_sub(1 + comp_height),
         };
 
-        let pane_rects = self.editor.pane_tree.calculate_rects(pane_area);
+        let (pane_rects, _separators) = self.editor.pane_tree.calculate_rects(pane_area);
         for (path, rect) in &pane_rects {
             // Each pane rect includes 1 row for mode line
             let text_height = rect.height.saturating_sub(1) as usize;

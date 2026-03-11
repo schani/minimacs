@@ -227,10 +227,13 @@ impl PaneTree {
     }
 
     /// Calculate rects for all panes in the tree.
-    pub fn calculate_rects(&self, area: Rect) -> Vec<(Vec<usize>, Rect)> {
-        let mut result = Vec::new();
-        Self::calc_rects_recursive(&self.root, area, &mut vec![], &mut result);
-        result
+    /// Returns (pane_rects, separator_rects) where separator_rects are 1-column
+    /// vertical bars between horizontally-arranged panes.
+    pub fn calculate_rects(&self, area: Rect) -> (Vec<(Vec<usize>, Rect)>, Vec<Rect>) {
+        let mut panes = Vec::new();
+        let mut separators = Vec::new();
+        Self::calc_rects_recursive(&self.root, area, &mut vec![], &mut panes, &mut separators);
+        (panes, separators)
     }
 
     fn calc_rects_recursive(
@@ -238,6 +241,7 @@ impl PaneTree {
         area: Rect,
         path: &mut Vec<usize>,
         result: &mut Vec<(Vec<usize>, Rect)>,
+        separators: &mut Vec<Rect>,
     ) {
         match node {
             PaneNode::Leaf(_) => {
@@ -251,17 +255,42 @@ impl PaneTree {
                 if n == 0 {
                     return;
                 }
-                let constraints: Vec<Constraint> =
-                    children.iter().map(|_| Constraint::Ratio(1, n.into())).collect();
-                let chunks = Layout::default()
-                    .direction(*direction)
-                    .constraints(constraints)
-                    .split(area);
 
-                for (i, (child, chunk)) in children.iter().zip(chunks.iter()).enumerate() {
-                    path.push(i);
-                    Self::calc_rects_recursive(child, *chunk, path, result);
-                    path.pop();
+                if *direction == Direction::Horizontal && n > 1 {
+                    // For horizontal splits, reserve 1 column between each pair
+                    // of children for a separator bar.
+                    let num_separators = n - 1;
+                    let available_width = area.width.saturating_sub(num_separators);
+                    let base_width = available_width / n;
+                    let extra = (available_width % n) as usize;
+
+                    let mut x = area.x;
+                    for (i, child) in children.iter().enumerate() {
+                        let w = base_width + if i < extra { 1 } else { 0 };
+                        let child_rect = Rect::new(x, area.y, w, area.height);
+                        path.push(i);
+                        Self::calc_rects_recursive(child, child_rect, path, result, separators);
+                        path.pop();
+                        x += w;
+
+                        if (i as u16) < n - 1 {
+                            separators.push(Rect::new(x, area.y, 1, area.height));
+                            x += 1;
+                        }
+                    }
+                } else {
+                    let constraints: Vec<Constraint> =
+                        children.iter().map(|_| Constraint::Ratio(1, n.into())).collect();
+                    let chunks = Layout::default()
+                        .direction(*direction)
+                        .constraints(constraints)
+                        .split(area);
+
+                    for (i, (child, chunk)) in children.iter().zip(chunks.iter()).enumerate() {
+                        path.push(i);
+                        Self::calc_rects_recursive(child, *chunk, path, result, separators);
+                        path.pop();
+                    }
                 }
             }
         }
@@ -437,12 +466,50 @@ mod tests {
     fn calculate_rects() {
         let mut tree = PaneTree::new(0);
         tree.split(Direction::Vertical, 1);
-        let rects = tree.calculate_rects(Rect::new(0, 0, 80, 24));
+        let (rects, separators) = tree.calculate_rects(Rect::new(0, 0, 80, 24));
         assert_eq!(rects.len(), 2);
+        // Vertical splits have no separators
+        assert_eq!(separators.len(), 0);
         // Both should have the full width, each half the height
         assert_eq!(rects[0].1.width, 80);
         assert_eq!(rects[1].1.width, 80);
         assert_eq!(rects[0].1.height + rects[1].1.height, 24);
+    }
+
+    #[test]
+    fn horizontal_split_has_separator() {
+        let mut tree = PaneTree::new(0);
+        tree.split(Direction::Horizontal, 1);
+        let (rects, separators) = tree.calculate_rects(Rect::new(0, 0, 80, 24));
+        assert_eq!(rects.len(), 2);
+        assert_eq!(separators.len(), 1);
+        // Separator should be 1 column wide, full height
+        assert_eq!(separators[0].width, 1);
+        assert_eq!(separators[0].height, 24);
+        // Pane widths + separator = total width
+        assert_eq!(rects[0].1.width + 1 + rects[1].1.width, 80);
+        // Separator is between the two panes
+        assert_eq!(separators[0].x, rects[0].1.x + rects[0].1.width);
+        assert_eq!(rects[1].1.x, separators[0].x + 1);
+    }
+
+    #[test]
+    fn three_way_horizontal_split_has_two_separators() {
+        let mut tree = PaneTree::new(0);
+        tree.split(Direction::Horizontal, 1);
+        // Focus first child, split it again
+        tree.split(Direction::Horizontal, 2);
+        // Now root is Horizontal with children:
+        //   child 0: Split(Horizontal) { Leaf(0), Leaf(2) }
+        //   child 1: Leaf(1)
+        let (rects, separators) = tree.calculate_rects(Rect::new(0, 0, 81, 24));
+        assert_eq!(rects.len(), 3);
+        assert_eq!(separators.len(), 2);
+        // All separators are 1 column wide
+        for sep in &separators {
+            assert_eq!(sep.width, 1);
+            assert_eq!(sep.height, 24);
+        }
     }
 
     #[test]

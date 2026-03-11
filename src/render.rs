@@ -58,7 +58,7 @@ pub fn render(frame: &mut Frame, editor: &Editor) {
     };
 
     // Calculate rects for all panes
-    let pane_rects = editor.pane_tree.calculate_rects(pane_area);
+    let (pane_rects, separator_rects) = editor.pane_tree.calculate_rects(pane_area);
     let focus_path = editor.pane_tree.focus_path();
 
     for (path, rect) in &pane_rects {
@@ -133,6 +133,18 @@ pub fn render(frame: &mut Frame, editor: &Editor) {
                 frame.set_cursor_position((text_area.x + screen_col, text_area.y + screen_line));
             }
         }
+    }
+
+    // Render separator bars between horizontally-split panes
+    for sep_rect in &separator_rects {
+        let sep_style = Style::default()
+            .fg(Color::Rgb(200, 200, 200))
+            .bg(Color::Rgb(255, 255, 255));
+        let lines: Vec<Line> = (0..sep_rect.height)
+            .map(|_| Line::from(Span::styled("│", sep_style)))
+            .collect();
+        let sep_widget = Paragraph::new(lines);
+        frame.render_widget(sep_widget, *sep_rect);
     }
 
     if let Some(comp_area) = completions_area {

@@ -134,7 +134,9 @@ struct PaneTree {
 
 The focus path is a sequence of child indices that navigate from the root to the
 currently focused pane. Operations like `focused_pane()` walk this path.
-`calculate_rects(area)` recursively divides a `Rect` into per-pane rectangles.
+`calculate_rects(area)` recursively divides a `Rect` into per-pane rectangles
+and separator rects. Horizontal splits reserve 1-column gaps between children
+for vertical separator bars (│).
 
 ### Keymap
 
