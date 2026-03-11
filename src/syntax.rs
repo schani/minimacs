@@ -1,11 +1,11 @@
 use std::cell::RefCell;
 
 use ratatui::style::{Color, Modifier, Style};
-use tree_sitter_highlight::{HighlightConfiguration, HighlightEvent, Highlighter};
+use tree_sitter::{Language as TsLanguage, Node, Parser, Point, Query, QueryCursor, StreamingIterator, Tree};
 use tree_sitter_language::LanguageFn;
 
 /// The highlight names we recognize, in order. The index into this array
-/// is what `Highlight.0` will be in HighlightEvents.
+/// is what `highlight_map` entries refer to.
 const HIGHLIGHT_NAMES: &[&str] = &[
     "attribute",
     "comment",
@@ -175,6 +175,7 @@ pub fn detect_language(path: &std::path::Path) -> Option<Language> {
 }
 
 /// Get the language function and query strings for a language.
+/// Returns (language_fn, highlights, injections, locals).
 fn language_config(lang: Language) -> (LanguageFn, String, String, String) {
     match lang {
         Language::Rust => (
@@ -257,6 +258,112 @@ fn language_config(lang: Language) -> (LanguageFn, String, String, String) {
     }
 }
 
+/// Holds the compiled query and metadata for highlighting a single language.
+struct HighlightConfig {
+    language: TsLanguage,
+    query: Query,
+    /// Index of the first pattern that belongs to the highlights section.
+    /// Patterns before this are injections/locals.
+    highlights_pattern_index: usize,
+    /// Maps capture index → HIGHLIGHT_NAMES index. None means the capture is not a highlight.
+    highlight_map: Vec<Option<usize>>,
+    injection_content_capture_index: Option<u32>,
+    injection_language_capture_index: Option<u32>,
+}
+
+/// Match a capture name against HIGHLIGHT_NAMES using dot-prefix matching.
+/// Returns the index of the best (longest) matching highlight name.
+///
+/// Example: capture "function.builtin" matches both "function" (1 part)
+/// and "function.builtin" (2 parts). The 2-part match wins.
+fn best_highlight_match(capture_name: &str) -> Option<usize> {
+    let capture_parts: Vec<&str> = capture_name.split('.').collect();
+    let mut best_index = None;
+    let mut best_match_len = 0;
+
+    for (j, recognized_name) in HIGHLIGHT_NAMES.iter().enumerate() {
+        let mut matches = true;
+        let mut match_len = 0;
+        for (i, part) in recognized_name.split('.').enumerate() {
+            match capture_parts.get(i) {
+                Some(capture_part) if *capture_part == part => {
+                    match_len += 1;
+                }
+                _ => {
+                    matches = false;
+                    break;
+                }
+            }
+        }
+        if matches && match_len > best_match_len {
+            best_index = Some(j);
+            best_match_len = match_len;
+        }
+    }
+
+    best_index
+}
+
+impl HighlightConfig {
+    /// Create a new HighlightConfig from the given language and query strings.
+    /// Query source is built by concatenating injections + locals + highlights
+    /// (same order as tree-sitter-highlight).
+    fn new(
+        language_fn: LanguageFn,
+        highlights: &str,
+        injections: &str,
+        locals: &str,
+    ) -> Option<Self> {
+        let language: TsLanguage = language_fn.into();
+
+        // Concatenate: injections, then locals, then highlights
+        let mut combined = String::new();
+        combined.push_str(injections);
+        combined.push_str(locals);
+        let highlights_start_offset = combined.len();
+        combined.push_str(highlights);
+
+        let query = match Query::new(&language, &combined) {
+            Ok(q) => q,
+            Err(e) => {
+                eprintln!("Failed to create query: {:?}", e);
+                return None;
+            }
+        };
+
+        // Find the first pattern that starts at or after the highlights section
+        let mut highlights_pattern_index = query.pattern_count();
+        for i in 0..query.pattern_count() {
+            if query.start_byte_for_pattern(i) >= highlights_start_offset {
+                highlights_pattern_index = i;
+                break;
+            }
+        }
+
+        // Build highlight_map: for each capture, find the best HIGHLIGHT_NAMES match
+        let highlight_map: Vec<Option<usize>> = query
+            .capture_names()
+            .iter()
+            .map(|name| best_highlight_match(name))
+            .collect();
+
+        // Find injection capture indices
+        let injection_content_capture_index =
+            query.capture_index_for_name("injection.content");
+        let injection_language_capture_index =
+            query.capture_index_for_name("injection.language");
+
+        Some(HighlightConfig {
+            language,
+            query,
+            highlights_pattern_index,
+            highlight_map,
+            injection_content_capture_index,
+            injection_language_capture_index,
+        })
+    }
+}
+
 struct HighlightCache {
     version: usize,
     cached_end_byte: usize,
@@ -267,9 +374,11 @@ struct HighlightCache {
 #[allow(dead_code)]
 pub struct SyntaxState {
     pub language: Language,
-    config: HighlightConfiguration,
+    config: HighlightConfig,
     /// Additional language configs for injection (e.g. markdown inline).
-    injection_configs: Vec<(String, HighlightConfiguration)>,
+    injection_configs: Vec<(String, HighlightConfig)>,
+    parser: RefCell<Parser>,
+    tree: RefCell<Option<Tree>>,
     cache: RefCell<Option<HighlightCache>>,
 }
 
@@ -277,27 +386,21 @@ impl SyntaxState {
     /// Create a new syntax state for the given language.
     pub fn new(lang: Language) -> Option<Self> {
         let (language_fn, highlights, injections, locals) = language_config(lang);
-        let result =
-            HighlightConfiguration::new(language_fn.into(), "source", &highlights, &injections, &locals);
-        let mut config = match result {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!("Failed to create highlight config for {:?}: {:?}", lang, e);
-                return None;
-            }
-        };
-        config.configure(HIGHLIGHT_NAMES);
+        let config = HighlightConfig::new(language_fn, &highlights, &injections, &locals)?;
+
+        let mut parser = Parser::new();
+        if parser.set_language(&config.language).is_err() {
+            return None;
+        }
 
         let mut injection_configs = Vec::new();
         if lang == Language::Markdown {
-            if let Ok(mut inline_config) = HighlightConfiguration::new(
-                tree_sitter_md::INLINE_LANGUAGE.into(),
-                "source",
+            if let Some(inline_config) = HighlightConfig::new(
+                tree_sitter_md::INLINE_LANGUAGE,
                 tree_sitter_md::HIGHLIGHT_QUERY_INLINE,
                 tree_sitter_md::INJECTION_QUERY_INLINE,
                 "",
             ) {
-                inline_config.configure(HIGHLIGHT_NAMES);
                 injection_configs.push(("markdown_inline".to_string(), inline_config));
             }
         }
@@ -306,6 +409,8 @@ impl SyntaxState {
             language: lang,
             config,
             injection_configs,
+            parser: RefCell::new(parser),
+            tree: RefCell::new(None),
             cache: RefCell::new(None),
         })
     }
@@ -313,39 +418,150 @@ impl SyntaxState {
     /// Highlight a slice of source code bytes and return styled spans.
     /// The spans have byte offsets relative to the input `source`.
     pub fn highlight(&self, source: &[u8]) -> Vec<StyledSpan> {
-        let mut highlighter = Highlighter::new();
-        let events = match highlighter.highlight(&self.config, source, None, |lang_name| {
-            self.injection_configs
-                .iter()
-                .find(|(name, _)| name == lang_name)
-                .map(|(_, config)| config)
-        }) {
-            Ok(events) => events,
-            Err(_) => return Vec::new(),
+        // Parse the source
+        let tree = {
+            let mut parser = self.parser.borrow_mut();
+            parser.set_language(&self.config.language).ok();
+            // Reset included ranges in case they were set for an injection
+            let _ = parser.set_included_ranges(&[]);
+            match parser.parse(source, None) {
+                Some(t) => t,
+                None => return Vec::new(),
+            }
         };
 
-        let mut spans = Vec::new();
-        let mut style_stack: Vec<Style> = Vec::new();
+        // Run highlight captures on the main language
+        let mut spans = run_highlight_captures(&self.config, tree.root_node(), source);
 
-        for event in events {
-            match event {
-                Ok(HighlightEvent::Source { start, end }) => {
-                    let style = style_stack.last().copied().unwrap_or_default();
-                    if start < end {
-                        spans.push(StyledSpan { start, end, style });
-                    }
-                }
-                Ok(HighlightEvent::HighlightStart(highlight)) => {
-                    style_stack.push(style_for_highlight(highlight.0));
-                }
-                Ok(HighlightEvent::HighlightEnd) => {
-                    style_stack.pop();
-                }
-                Err(_) => break,
-            }
-        }
+        // Process injections
+        self.process_injections(source, tree.root_node(), &mut spans);
+
+        // Store tree for potential incremental reuse
+        *self.tree.borrow_mut() = Some(tree);
 
         spans
+    }
+
+    /// Process language injections (e.g., markdown inline content).
+    fn process_injections(
+        &self,
+        source: &[u8],
+        root_node: Node,
+        spans: &mut Vec<StyledSpan>,
+    ) {
+        let config = &self.config;
+
+        // Only process if there are injection captures
+        if config.injection_content_capture_index.is_none() {
+            return;
+        }
+        let content_capture_idx = config.injection_content_capture_index.unwrap();
+
+        let mut cursor = QueryCursor::new();
+        cursor.set_byte_range(0..source.len());
+
+        // Use matches() to get full pattern matches with all captures
+        let mut matches = cursor.matches(&config.query, root_node, source);
+        // Collect injection info: (language_name, ranges, include_children)
+        let mut injections: Vec<(String, Vec<std::ops::Range<usize>>, bool)> = Vec::new();
+
+        while let Some(m) = matches.next() {
+            // Only process injection patterns (before highlights_pattern_index)
+            if m.pattern_index >= config.highlights_pattern_index {
+                continue;
+            }
+
+            // Extract language name from capture or property setting
+            let mut lang_name = None;
+            let mut content_ranges = Vec::new();
+
+            // Check property settings for #set! injection.language
+            for prop in config.query.property_settings(m.pattern_index) {
+                if prop.key.as_ref() == "injection.language" {
+                    if let Some(ref val) = prop.value {
+                        lang_name = Some(val.to_string());
+                    }
+                }
+            }
+
+            // Check #set! injection.include-children
+            let include_children = config.query.property_settings(m.pattern_index).iter()
+                .any(|p| p.key.as_ref() == "injection.include-children");
+
+            for cap in m.captures {
+                if cap.index == content_capture_idx {
+                    content_ranges.push(cap.node.byte_range());
+                }
+                if let Some(lang_cap_idx) = config.injection_language_capture_index {
+                    if cap.index == lang_cap_idx {
+                        let text = &source[cap.node.byte_range()];
+                        if let Ok(s) = std::str::from_utf8(text) {
+                            lang_name = Some(s.to_string());
+                        }
+                    }
+                }
+            }
+
+            if let Some(name) = lang_name {
+                if !content_ranges.is_empty() {
+                    injections.push((name, content_ranges, include_children));
+                }
+            }
+        }
+        // Stop borrowing cursor through matches
+        drop(matches);
+
+        // Group injections by language name
+        let mut grouped: std::collections::HashMap<String, Vec<(std::ops::Range<usize>, bool)>> =
+            std::collections::HashMap::new();
+        for (name, ranges, include_children) in injections {
+            grouped
+                .entry(name)
+                .or_default()
+                .push((ranges.into_iter().next().unwrap(), include_children));
+        }
+
+        // Process each injection language
+        for (lang_name, entries) in &grouped {
+            let injection_config = match self.injection_configs.iter()
+                .find(|(name, _)| name == lang_name)
+            {
+                Some((_, config)) => config,
+                None => continue,
+            };
+
+            // Build tree-sitter Ranges for set_included_ranges
+            let ts_ranges: Vec<tree_sitter::Range> = entries.iter().map(|(range, _include_children)| {
+                let (start_byte, end_byte) = (range.start, range.end);
+                // Compute proper points from byte offsets
+                let (start_row, start_col) = byte_to_point(source, start_byte);
+                let (end_row, end_col) = byte_to_point(source, end_byte);
+                tree_sitter::Range {
+                    start_byte,
+                    end_byte,
+                    start_point: Point { row: start_row, column: start_col },
+                    end_point: Point { row: end_row, column: end_col },
+                }
+            }).collect();
+
+            // Parse the injection
+            let mut inj_parser = Parser::new();
+            if inj_parser.set_language(&injection_config.language).is_err() {
+                continue;
+            }
+            if inj_parser.set_included_ranges(&ts_ranges).is_err() {
+                continue;
+            }
+
+            let inj_tree = match inj_parser.parse(source, None) {
+                Some(t) => t,
+                None => continue,
+            };
+
+            // Run highlight captures on the injection tree
+            let inj_spans = run_highlight_captures(injection_config, inj_tree.root_node(), source);
+            spans.extend(inj_spans);
+        }
     }
 
     /// Check if the cached highlight result covers the needed range at the right version.
@@ -371,6 +587,56 @@ impl SyntaxState {
     pub fn cached_spans(&self) -> std::cell::Ref<'_, Vec<StyledSpan>> {
         std::cell::Ref::map(self.cache.borrow(), |c| &c.as_ref().unwrap().spans)
     }
+}
+
+/// Run highlight captures on a tree node and return styled spans.
+fn run_highlight_captures(
+    config: &HighlightConfig,
+    root_node: Node,
+    source: &[u8],
+) -> Vec<StyledSpan> {
+    let mut spans = Vec::new();
+    let mut cursor = QueryCursor::new();
+    cursor.set_byte_range(0..source.len());
+
+    let mut captures = cursor.captures(&config.query, root_node, source);
+    while let Some((m, capture_index)) = captures.next() {
+        // Only process highlight patterns
+        if m.pattern_index < config.highlights_pattern_index {
+            continue;
+        }
+
+        let capture = &m.captures[*capture_index];
+        if let Some(highlight_idx) = config.highlight_map.get(capture.index as usize).copied().flatten() {
+            let style = style_for_highlight(highlight_idx);
+            if style != Style::default() {
+                let node = capture.node;
+                spans.push(StyledSpan {
+                    start: node.start_byte(),
+                    end: node.end_byte(),
+                    style,
+                });
+            }
+        }
+    }
+
+    spans
+}
+
+/// Convert a byte offset in source to (row, column).
+fn byte_to_point(source: &[u8], byte_offset: usize) -> (usize, usize) {
+    let mut row = 0;
+    let mut last_newline = 0; // byte position after last newline (or 0 for first line)
+    for (i, &b) in source.iter().enumerate() {
+        if i >= byte_offset {
+            break;
+        }
+        if b == b'\n' {
+            row += 1;
+            last_newline = i + 1;
+        }
+    }
+    (row, byte_offset - last_newline)
 }
 
 #[cfg(test)]
@@ -473,11 +739,9 @@ mod tests {
         let spans = state.highlight(source);
         // Should produce some spans
         assert!(!spans.is_empty());
-        // The spans should cover the entire source
-        let min_start = spans.iter().map(|s| s.start).min().unwrap();
-        let max_end = spans.iter().map(|s| s.end).max().unwrap();
-        assert_eq!(min_start, 0);
-        assert_eq!(max_end, source.len());
+        // The spans should cover "fn" and "42" at minimum
+        let has_keyword = spans.iter().any(|s| s.start == 0 && s.end == 2);
+        assert!(has_keyword, "Should have a span for 'fn', got: {:?}", spans);
     }
 
     #[test]
@@ -713,5 +977,27 @@ mod tests {
             "Markdown code span should be styled, got: {:?}",
             spans,
         );
+    }
+
+    #[test]
+    fn best_highlight_match_exact() {
+        assert_eq!(best_highlight_match("keyword"), Some(highlight_index("keyword")));
+    }
+
+    #[test]
+    fn best_highlight_match_prefix() {
+        // A capture name like "keyword.return" should match "keyword"
+        assert_eq!(best_highlight_match("keyword.return"), Some(highlight_index("keyword")));
+    }
+
+    #[test]
+    fn best_highlight_match_specific() {
+        // "function.builtin" should match "function.builtin" (not just "function")
+        assert_eq!(best_highlight_match("function.builtin"), Some(highlight_index("function.builtin")));
+    }
+
+    #[test]
+    fn best_highlight_match_none() {
+        assert_eq!(best_highlight_match("nonexistent"), None);
     }
 }
