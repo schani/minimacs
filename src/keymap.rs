@@ -216,6 +216,8 @@ pub fn default_keymap() -> KeymapNode {
     root.bind(&[alt('v')], Command::PageUp);
     root.bind(&[alt('f')], Command::ForwardWord);
     root.bind(&[alt('b')], Command::BackwardWord);
+    root.bind(&[alt_key(KeyCode::Right)], Command::ForwardWord);
+    root.bind(&[alt_key(KeyCode::Left)], Command::BackwardWord);
     root.bind(&[alt('<')], Command::BufferBeginning);
     root.bind(&[alt('>')], Command::BufferEnd);
 
@@ -410,6 +412,24 @@ mod tests {
         match state.process_key(event) {
             KeymapResult::Matched(cmd) => assert_eq!(cmd, Command::PageUp),
             other => panic!("Expected Matched(PageUp), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn alt_arrow_keys() {
+        let keymap = default_keymap();
+        let mut state = KeymapState::new(keymap);
+        let event = KeyEvent::new(KeyCode::Left, KeyModifiers::ALT);
+        match state.process_key(event) {
+            KeymapResult::Matched(cmd) => assert_eq!(cmd, Command::BackwardWord),
+            other => panic!("Expected Matched(BackwardWord), got {:?}", other),
+        }
+
+        let mut state = KeymapState::new(default_keymap());
+        let event = KeyEvent::new(KeyCode::Right, KeyModifiers::ALT);
+        match state.process_key(event) {
+            KeymapResult::Matched(cmd) => assert_eq!(cmd, Command::ForwardWord),
+            other => panic!("Expected Matched(ForwardWord), got {:?}", other),
         }
     }
 
