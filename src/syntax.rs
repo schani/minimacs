@@ -460,14 +460,30 @@ impl SyntaxState {
         })
     }
 
-    /// Highlight from a Rope and return styled spans with byte offsets.
-    pub fn highlight_rope(&self, rope: &Rope) -> Vec<StyledSpan> {
+    /// Highlight from a Rope with incremental parsing support.
+    /// `pending_edits` are InputEdits recorded since the last highlight; they are
+    /// applied to the old tree so tree-sitter can reuse unchanged subtrees.
+    pub fn highlight_rope(&self, rope: &Rope, pending_edits: &[tree_sitter::InputEdit]) -> Vec<StyledSpan> {
+        // Apply pending edits to old tree for incremental reuse.
+        // If too many edits accumulated, drop the tree and do a full parse.
+        let old_tree = if pending_edits.len() > 1000 {
+            None
+        } else {
+            let mut tree_ref = self.tree.borrow_mut();
+            if let Some(ref mut tree) = *tree_ref {
+                for edit in pending_edits {
+                    tree.edit(edit);
+                }
+            }
+            tree_ref.take()
+        };
+
         // Parse using zero-copy callback from Rope chunks
         let tree = {
             let mut parser = self.parser.borrow_mut();
             parser.set_language(&self.config.language).ok();
             let _ = parser.set_included_ranges(&[]);
-            match parse_rope(&mut parser, rope, None) {
+            match parse_rope(&mut parser, rope, old_tree.as_ref()) {
                 Some(t) => t,
                 None => return Vec::new(),
             }
@@ -479,10 +495,18 @@ impl SyntaxState {
         // Process injections
         self.process_injections(rope, tree.root_node(), &mut spans);
 
-        // Store tree for potential incremental reuse
+        // Store tree for next incremental parse
         *self.tree.borrow_mut() = Some(tree);
 
         spans
+    }
+
+    /// Drop the cached tree, forcing a full reparse on next highlight.
+    /// Call this when the buffer content is replaced entirely (file load, revert).
+    #[allow(dead_code)]
+    pub fn reset_tree(&self) {
+        *self.tree.borrow_mut() = None;
+        *self.cache.borrow_mut() = None;
     }
 
     /// Process language injections (e.g., markdown inline content).
@@ -604,8 +628,15 @@ impl SyntaxState {
     }
 
     /// Run highlight on a Rope and store the result in the cache.
-    pub fn highlight_and_cache(&self, rope: &Rope, end_byte: usize, version: usize) {
-        let spans = self.highlight_rope(rope);
+    /// Drains pending_edits for incremental tree reuse.
+    pub fn highlight_and_cache(
+        &self,
+        rope: &Rope,
+        end_byte: usize,
+        version: usize,
+        pending_edits: Vec<tree_sitter::InputEdit>,
+    ) {
+        let spans = self.highlight_rope(rope, &pending_edits);
         *self.cache.borrow_mut() = Some(HighlightCache {
             version,
             cached_end_byte: end_byte,
@@ -754,7 +785,7 @@ mod tests {
     fn highlight_rust_code() {
         let state = SyntaxState::new(Language::Rust).unwrap();
         let r = rope("fn main() { let x = 42; }");
-        let spans = state.highlight_rope(&r);
+        let spans = state.highlight_rope(&r, &[]);
         assert!(!spans.is_empty());
         let has_keyword = spans.iter().any(|s| s.start == 0 && s.end == 2);
         assert!(has_keyword, "Should have a span for 'fn', got: {:?}", spans);
@@ -764,7 +795,7 @@ mod tests {
     fn highlight_json() {
         let state = SyntaxState::new(Language::Json).unwrap();
         let r = rope(r#"{"key": "value", "num": 123}"#);
-        let spans = state.highlight_rope(&r);
+        let spans = state.highlight_rope(&r, &[]);
         assert!(!spans.is_empty());
     }
 
@@ -908,7 +939,7 @@ mod tests {
         let len = r.len_bytes();
         assert!(!state.cache_is_valid(0, len));
 
-        state.highlight_and_cache(&r, len, 0);
+        state.highlight_and_cache(&r, len, 0, vec![]);
         assert!(state.cache_is_valid(0, len));
         assert!(state.cache_is_valid(0, 10));
     }
@@ -918,7 +949,7 @@ mod tests {
         let state = SyntaxState::new(Language::Rust).unwrap();
         let r = rope("fn main() { let x = 42; }");
         let len = r.len_bytes();
-        state.highlight_and_cache(&r, len, 0);
+        state.highlight_and_cache(&r, len, 0, vec![]);
         assert!(state.cache_is_valid(0, len));
         assert!(!state.cache_is_valid(1, len));
     }
@@ -928,7 +959,7 @@ mod tests {
         let state = SyntaxState::new(Language::Rust).unwrap();
         let r = rope("fn main() {}");
         let len = r.len_bytes();
-        state.highlight_and_cache(&r, len, 0);
+        state.highlight_and_cache(&r, len, 0, vec![]);
         assert!(state.cache_is_valid(0, len));
         assert!(!state.cache_is_valid(0, len + 100));
     }
@@ -944,7 +975,7 @@ mod tests {
     fn highlight_markdown_heading() {
         let state = SyntaxState::new(Language::Markdown).unwrap();
         let r = rope("# Hello World\n\nSome text.\n");
-        let spans = state.highlight_rope(&r);
+        let spans = state.highlight_rope(&r, &[]);
         assert!(!spans.is_empty());
         assert!(
             spans.iter().any(|s| s.style != Style::default()),
@@ -957,7 +988,7 @@ mod tests {
     fn highlight_markdown_inline_emphasis() {
         let state = SyntaxState::new(Language::Markdown).unwrap();
         let r = rope("This is *emphasis* and **strong**.\n");
-        let spans = state.highlight_rope(&r);
+        let spans = state.highlight_rope(&r, &[]);
         assert!(!spans.is_empty(), "Should produce spans, got: {:?}", spans);
         let has_italic = spans
             .iter()
@@ -977,7 +1008,7 @@ mod tests {
     fn highlight_markdown_code_span() {
         let state = SyntaxState::new(Language::Markdown).unwrap();
         let r = rope("Use `code` here.\n");
-        let spans = state.highlight_rope(&r);
+        let spans = state.highlight_rope(&r, &[]);
         assert!(
             !spans.is_empty(),
             "Should produce spans, got: {:?}",
@@ -1008,5 +1039,114 @@ mod tests {
     #[test]
     fn best_highlight_match_none() {
         assert_eq!(best_highlight_match("nonexistent"), None);
+    }
+
+    #[test]
+    fn incremental_parse_matches_fresh_parse() {
+        let state = SyntaxState::new(Language::Rust).unwrap();
+
+        // Initial parse
+        let r1 = rope("fn main() { let x = 42; }");
+        let spans1 = state.highlight_rope(&r1, &[]);
+
+        // Simulate editing: insert "hello" at byte 12 ("let" -> "hellolet")
+        let edit = tree_sitter::InputEdit {
+            start_byte: 12,
+            old_end_byte: 12,
+            new_end_byte: 17,
+            start_position: Point { row: 0, column: 0 },
+            old_end_position: Point { row: 0, column: 0 },
+            new_end_position: Point { row: 0, column: 0 },
+        };
+        let r2 = rope("fn main() { hellolet x = 42; }");
+        let spans_incremental = state.highlight_rope(&r2, &[edit]);
+
+        // Fresh parse of the same text (no old tree)
+        let state2 = SyntaxState::new(Language::Rust).unwrap();
+        let spans_fresh = state2.highlight_rope(&r2, &[]);
+
+        // Both should produce the same spans
+        assert_eq!(spans_incremental.len(), spans_fresh.len(),
+            "Incremental ({}) and fresh ({}) parse should produce same number of spans",
+            spans_incremental.len(), spans_fresh.len());
+        for (i, (inc, fresh)) in spans_incremental.iter().zip(spans_fresh.iter()).enumerate() {
+            assert_eq!(inc.start, fresh.start, "Span {} start mismatch", i);
+            assert_eq!(inc.end, fresh.end, "Span {} end mismatch", i);
+            assert_eq!(inc.style, fresh.style, "Span {} style mismatch", i);
+        }
+    }
+
+    #[test]
+    fn incremental_parse_delete() {
+        let state = SyntaxState::new(Language::Rust).unwrap();
+
+        // Initial parse
+        let r1 = rope("fn main() { let x = 42; }");
+        let _spans1 = state.highlight_rope(&r1, &[]);
+
+        // Simulate deleting "let " (bytes 12..16)
+        let edit = tree_sitter::InputEdit {
+            start_byte: 12,
+            old_end_byte: 16,
+            new_end_byte: 12,
+            start_position: Point { row: 0, column: 0 },
+            old_end_position: Point { row: 0, column: 0 },
+            new_end_position: Point { row: 0, column: 0 },
+        };
+        let r2 = rope("fn main() { x = 42; }");
+        let spans_incremental = state.highlight_rope(&r2, &[edit]);
+
+        // Fresh parse
+        let state2 = SyntaxState::new(Language::Rust).unwrap();
+        let spans_fresh = state2.highlight_rope(&r2, &[]);
+
+        assert_eq!(spans_incremental.len(), spans_fresh.len());
+        for (inc, fresh) in spans_incremental.iter().zip(spans_fresh.iter()) {
+            assert_eq!(inc.start, fresh.start);
+            assert_eq!(inc.end, fresh.end);
+            assert_eq!(inc.style, fresh.style);
+        }
+    }
+
+    #[test]
+    fn incremental_parse_multi_edit() {
+        let state = SyntaxState::new(Language::Rust).unwrap();
+
+        // Initial: "fn main() {}"
+        let r1 = rope("fn main() {}");
+        let _spans1 = state.highlight_rope(&r1, &[]);
+
+        // Edit 1: insert " " at byte 11 -> "fn main() { }"
+        let edit1 = tree_sitter::InputEdit {
+            start_byte: 11,
+            old_end_byte: 11,
+            new_end_byte: 12,
+            start_position: Point { row: 0, column: 0 },
+            old_end_position: Point { row: 0, column: 0 },
+            new_end_position: Point { row: 0, column: 0 },
+        };
+        // Edit 2: insert "42" at byte 12 -> "fn main() { 42}"
+        let edit2 = tree_sitter::InputEdit {
+            start_byte: 12,
+            old_end_byte: 12,
+            new_end_byte: 14,
+            start_position: Point { row: 0, column: 0 },
+            old_end_position: Point { row: 0, column: 0 },
+            new_end_position: Point { row: 0, column: 0 },
+        };
+
+        let r2 = rope("fn main() { 42}");
+        let spans_incremental = state.highlight_rope(&r2, &[edit1, edit2]);
+
+        // Fresh parse
+        let state2 = SyntaxState::new(Language::Rust).unwrap();
+        let spans_fresh = state2.highlight_rope(&r2, &[]);
+
+        assert_eq!(spans_incremental.len(), spans_fresh.len());
+        for (inc, fresh) in spans_incremental.iter().zip(spans_fresh.iter()) {
+            assert_eq!(inc.start, fresh.start);
+            assert_eq!(inc.end, fresh.end);
+            assert_eq!(inc.style, fresh.style);
+        }
     }
 }

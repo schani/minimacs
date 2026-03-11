@@ -1,7 +1,10 @@
-use anyhow::{bail, Result};
-use ropey::Rope;
+use std::cell::RefCell;
 use std::fs;
 use std::path::{Path, PathBuf};
+
+use anyhow::{bail, Result};
+use ropey::Rope;
+use tree_sitter::{InputEdit, Point};
 
 use crate::history::History;
 use crate::syntax::{self, SyntaxState};
@@ -35,6 +38,9 @@ pub struct Buffer {
     pub history: History,
     pub syntax: Option<SyntaxState>,
     pub edit_generation: usize,
+    /// Pending tree-sitter InputEdits accumulated since last highlight.
+    /// The render path drains these via `take_pending_edits()`.
+    pub pending_ts_edits: RefCell<Vec<InputEdit>>,
 }
 
 #[allow(dead_code)]
@@ -51,6 +57,7 @@ impl Buffer {
             history: History::new(),
             syntax: None,
             edit_generation: 0,
+            pending_ts_edits: RefCell::new(Vec::new()),
         }
     }
 
@@ -72,6 +79,7 @@ impl Buffer {
             history: History::new(),
             syntax: syntax_state,
             edit_generation: 0,
+            pending_ts_edits: RefCell::new(Vec::new()),
         }
     }
 
@@ -87,6 +95,7 @@ impl Buffer {
             history: History::new(),
             syntax: None,
             edit_generation: 0,
+            pending_ts_edits: RefCell::new(Vec::new()),
         }
     }
 
@@ -131,6 +140,7 @@ impl Buffer {
             history: History::new(),
             syntax: syntax_state,
             edit_generation: 0,
+            pending_ts_edits: RefCell::new(Vec::new()),
         })
     }
 
@@ -194,6 +204,16 @@ impl Buffer {
 
     /// Insert a string at the given char offset.
     pub fn insert(&mut self, char_idx: usize, text: &str) {
+        // Record InputEdit BEFORE mutating the Rope (byte offsets are against current state).
+        let start_byte = self.text.char_to_byte(char_idx);
+        self.pending_ts_edits.borrow_mut().push(InputEdit {
+            start_byte,
+            old_end_byte: start_byte,
+            new_end_byte: start_byte + text.len(),
+            start_position: Point { row: 0, column: 0 },
+            old_end_position: Point { row: 0, column: 0 },
+            new_end_position: Point { row: 0, column: 0 },
+        });
         self.text.insert(char_idx, text);
         self.modified = true;
         self.edit_generation += 1;
@@ -202,10 +222,26 @@ impl Buffer {
     /// Remove chars in range [start..end).
     pub fn remove(&mut self, start: usize, end: usize) {
         if start < end {
+            // Record InputEdit BEFORE mutating the Rope.
+            let start_byte = self.text.char_to_byte(start);
+            let old_end_byte = self.text.char_to_byte(end);
+            self.pending_ts_edits.borrow_mut().push(InputEdit {
+                start_byte,
+                old_end_byte,
+                new_end_byte: start_byte,
+                start_position: Point { row: 0, column: 0 },
+                old_end_position: Point { row: 0, column: 0 },
+                new_end_position: Point { row: 0, column: 0 },
+            });
             self.text.remove(start..end);
             self.modified = true;
             self.edit_generation += 1;
         }
+    }
+
+    /// Take all pending tree-sitter edits, leaving the vec empty.
+    pub fn take_pending_edits(&self) -> Vec<InputEdit> {
+        std::mem::take(&mut self.pending_ts_edits.borrow_mut())
     }
 
     /// Update the modified flag based on undo history clean state.
@@ -356,5 +392,60 @@ mod tests {
         fs::write(&file, "valid utf-8 text").unwrap();
         let buf = Buffer::from_file(0, &file).unwrap();
         assert_eq!(buf.text.to_string(), "valid utf-8 text");
+    }
+
+    #[test]
+    fn pending_edits_insert_single_char() {
+        let mut buf = Buffer::from_str(0, "test", "hello");
+        buf.insert(5, "!");
+        let edits = buf.take_pending_edits();
+        assert_eq!(edits.len(), 1);
+        assert_eq!(edits[0].start_byte, 5);
+        assert_eq!(edits[0].old_end_byte, 5);
+        assert_eq!(edits[0].new_end_byte, 6);
+    }
+
+    #[test]
+    fn pending_edits_delete() {
+        let mut buf = Buffer::from_str(0, "test", "hello world");
+        // Remove " world" (chars 5..11)
+        buf.remove(5, 11);
+        let edits = buf.take_pending_edits();
+        assert_eq!(edits.len(), 1);
+        assert_eq!(edits[0].start_byte, 5);
+        assert_eq!(edits[0].old_end_byte, 11);
+        assert_eq!(edits[0].new_end_byte, 5);
+    }
+
+    #[test]
+    fn pending_edits_accumulate() {
+        let mut buf = Buffer::from_str(0, "test", "hello");
+        buf.insert(5, " world");
+        buf.insert(11, "!");
+        buf.remove(0, 5); // remove "hello"
+        let edits = buf.take_pending_edits();
+        assert_eq!(edits.len(), 3);
+    }
+
+    #[test]
+    fn take_pending_edits_drains() {
+        let mut buf = Buffer::from_str(0, "test", "hello");
+        buf.insert(5, "!");
+        let edits = buf.take_pending_edits();
+        assert_eq!(edits.len(), 1);
+        // Second take should be empty
+        let edits2 = buf.take_pending_edits();
+        assert!(edits2.is_empty());
+    }
+
+    #[test]
+    fn pending_edits_multibyte_char() {
+        let mut buf = Buffer::from_str(0, "test", "café");
+        // 'é' is 2 bytes, so "café" = 5 bytes (c=1, a=1, f=1, é=2)
+        // Insert at char 4 (after 'é')
+        buf.insert(4, "!");
+        let edits = buf.take_pending_edits();
+        assert_eq!(edits[0].start_byte, 5); // byte offset after "café"
+        assert_eq!(edits[0].new_end_byte, 6);
     }
 }
