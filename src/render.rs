@@ -373,14 +373,10 @@ fn compute_syntax_char_styles(
         buf.text.len_bytes()
     };
 
-    // Check cache before extracting bytes — cache hits skip both the byte
-    // copy and the re-parse (the common case on non-edit frames).
+    // Check cache before re-parsing — cache hits skip the re-parse entirely
+    // (the common case on non-edit frames).
     if !syntax.cache_is_valid(buf.edit_generation, last_byte) {
-        let mut highlight_bytes = Vec::with_capacity(last_byte);
-        for chunk in buf.text.byte_slice(0..last_byte).chunks() {
-            highlight_bytes.extend_from_slice(chunk.as_bytes());
-        }
-        syntax.highlight_and_cache(&highlight_bytes, buf.edit_generation);
+        syntax.highlight_and_cache(&buf.text, last_byte, buf.edit_generation);
     }
 
     // Borrow cached spans and build the HashMap for visible lines.

@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 
 use ratatui::style::{Color, Modifier, Style};
+use ropey::Rope;
 use tree_sitter::{Language as TsLanguage, Node, Parser, Point, Query, QueryCursor, StreamingIterator, Tree};
 use tree_sitter_language::LanguageFn;
 
@@ -382,6 +383,50 @@ pub struct SyntaxState {
     cache: RefCell<Option<HighlightCache>>,
 }
 
+/// TextProvider implementation for Rope. Yields byte chunks for query predicate evaluation.
+/// Uses Vec<u8> per node (predicates are evaluated infrequently).
+struct RopeProvider<'a>(&'a Rope);
+
+impl<'a> tree_sitter::TextProvider<Vec<u8>> for RopeProvider<'a> {
+    type I = std::iter::Once<Vec<u8>>;
+
+    fn text(&mut self, node: Node) -> Self::I {
+        let range = node.start_byte()..node.end_byte();
+        let mut bytes = Vec::with_capacity(range.len());
+        for chunk in self.0.byte_slice(range).chunks() {
+            bytes.extend_from_slice(chunk.as_bytes());
+        }
+        std::iter::once(bytes)
+    }
+}
+
+/// Parse a Rope using tree-sitter's parse_with_options callback for zero-copy access.
+fn parse_rope(parser: &mut Parser, rope: &Rope, old_tree: Option<&Tree>) -> Option<Tree> {
+    let rope_len = rope.len_bytes();
+    parser.parse_with_options(
+        &mut |byte_offset: usize, _: Point| -> &[u8] {
+            if byte_offset >= rope_len {
+                return &[];
+            }
+            let (chunk, chunk_start, _, _) = rope.chunk_at_byte(byte_offset);
+            &chunk.as_bytes()[(byte_offset - chunk_start)..]
+        },
+        old_tree,
+        None,
+    )
+}
+
+/// Convert a byte offset in a Rope to (row, column).
+fn rope_byte_to_point(rope: &Rope, byte_offset: usize) -> Point {
+    let byte_offset = byte_offset.min(rope.len_bytes());
+    let row = rope.byte_to_line(byte_offset);
+    let line_start = rope.line_to_byte(row);
+    Point {
+        row,
+        column: byte_offset - line_start,
+    }
+}
+
 impl SyntaxState {
     /// Create a new syntax state for the given language.
     pub fn new(lang: Language) -> Option<Self> {
@@ -415,26 +460,24 @@ impl SyntaxState {
         })
     }
 
-    /// Highlight a slice of source code bytes and return styled spans.
-    /// The spans have byte offsets relative to the input `source`.
-    pub fn highlight(&self, source: &[u8]) -> Vec<StyledSpan> {
-        // Parse the source
+    /// Highlight from a Rope and return styled spans with byte offsets.
+    pub fn highlight_rope(&self, rope: &Rope) -> Vec<StyledSpan> {
+        // Parse using zero-copy callback from Rope chunks
         let tree = {
             let mut parser = self.parser.borrow_mut();
             parser.set_language(&self.config.language).ok();
-            // Reset included ranges in case they were set for an injection
             let _ = parser.set_included_ranges(&[]);
-            match parser.parse(source, None) {
+            match parse_rope(&mut parser, rope, None) {
                 Some(t) => t,
                 None => return Vec::new(),
             }
         };
 
         // Run highlight captures on the main language
-        let mut spans = run_highlight_captures(&self.config, tree.root_node(), source);
+        let mut spans = run_highlight_captures(&self.config, tree.root_node(), rope);
 
         // Process injections
-        self.process_injections(source, tree.root_node(), &mut spans);
+        self.process_injections(rope, tree.root_node(), &mut spans);
 
         // Store tree for potential incremental reuse
         *self.tree.borrow_mut() = Some(tree);
@@ -445,37 +488,31 @@ impl SyntaxState {
     /// Process language injections (e.g., markdown inline content).
     fn process_injections(
         &self,
-        source: &[u8],
+        rope: &Rope,
         root_node: Node,
         spans: &mut Vec<StyledSpan>,
     ) {
         let config = &self.config;
 
-        // Only process if there are injection captures
         if config.injection_content_capture_index.is_none() {
             return;
         }
         let content_capture_idx = config.injection_content_capture_index.unwrap();
 
         let mut cursor = QueryCursor::new();
-        cursor.set_byte_range(0..source.len());
+        cursor.set_byte_range(0..rope.len_bytes());
 
-        // Use matches() to get full pattern matches with all captures
-        let mut matches = cursor.matches(&config.query, root_node, source);
-        // Collect injection info: (language_name, ranges, include_children)
+        let mut matches = cursor.matches(&config.query, root_node, RopeProvider(rope));
         let mut injections: Vec<(String, Vec<std::ops::Range<usize>>, bool)> = Vec::new();
 
         while let Some(m) = matches.next() {
-            // Only process injection patterns (before highlights_pattern_index)
             if m.pattern_index >= config.highlights_pattern_index {
                 continue;
             }
 
-            // Extract language name from capture or property setting
             let mut lang_name = None;
             let mut content_ranges = Vec::new();
 
-            // Check property settings for #set! injection.language
             for prop in config.query.property_settings(m.pattern_index) {
                 if prop.key.as_ref() == "injection.language" {
                     if let Some(ref val) = prop.value {
@@ -484,8 +521,7 @@ impl SyntaxState {
                 }
             }
 
-            // Check #set! injection.include-children
-            let include_children = config.query.property_settings(m.pattern_index).iter()
+            let _include_children = config.query.property_settings(m.pattern_index).iter()
                 .any(|p| p.key.as_ref() == "injection.include-children");
 
             for cap in m.captures {
@@ -494,35 +530,34 @@ impl SyntaxState {
                 }
                 if let Some(lang_cap_idx) = config.injection_language_capture_index {
                     if cap.index == lang_cap_idx {
-                        let text = &source[cap.node.byte_range()];
-                        if let Ok(s) = std::str::from_utf8(text) {
-                            lang_name = Some(s.to_string());
-                        }
+                        // Read the node text from the Rope
+                        let range = cap.node.byte_range();
+                        let text: String = rope.byte_slice(range).into();
+                        lang_name = Some(text);
                     }
                 }
             }
 
             if let Some(name) = lang_name {
                 if !content_ranges.is_empty() {
-                    injections.push((name, content_ranges, include_children));
+                    injections.push((name, content_ranges, _include_children));
                 }
             }
         }
-        // Stop borrowing cursor through matches
         drop(matches);
 
         // Group injections by language name
-        let mut grouped: std::collections::HashMap<String, Vec<(std::ops::Range<usize>, bool)>> =
+        let mut grouped: std::collections::HashMap<String, Vec<std::ops::Range<usize>>> =
             std::collections::HashMap::new();
-        for (name, ranges, include_children) in injections {
+        for (name, ranges, _include_children) in injections {
             grouped
                 .entry(name)
                 .or_default()
-                .push((ranges.into_iter().next().unwrap(), include_children));
+                .push(ranges.into_iter().next().unwrap());
         }
 
         // Process each injection language
-        for (lang_name, entries) in &grouped {
+        for (lang_name, ranges) in &grouped {
             let injection_config = match self.injection_configs.iter()
                 .find(|(name, _)| name == lang_name)
             {
@@ -530,21 +565,17 @@ impl SyntaxState {
                 None => continue,
             };
 
-            // Build tree-sitter Ranges for set_included_ranges
-            let ts_ranges: Vec<tree_sitter::Range> = entries.iter().map(|(range, _include_children)| {
-                let (start_byte, end_byte) = (range.start, range.end);
-                // Compute proper points from byte offsets
-                let (start_row, start_col) = byte_to_point(source, start_byte);
-                let (end_row, end_col) = byte_to_point(source, end_byte);
+            // Build tree-sitter Ranges with proper points computed from the Rope
+            let ts_ranges: Vec<tree_sitter::Range> = ranges.iter().map(|range| {
                 tree_sitter::Range {
-                    start_byte,
-                    end_byte,
-                    start_point: Point { row: start_row, column: start_col },
-                    end_point: Point { row: end_row, column: end_col },
+                    start_byte: range.start,
+                    end_byte: range.end,
+                    start_point: rope_byte_to_point(rope, range.start),
+                    end_point: rope_byte_to_point(rope, range.end),
                 }
             }).collect();
 
-            // Parse the injection
+            // Parse the injection using zero-copy Rope callback
             let mut inj_parser = Parser::new();
             if inj_parser.set_language(&injection_config.language).is_err() {
                 continue;
@@ -553,13 +584,12 @@ impl SyntaxState {
                 continue;
             }
 
-            let inj_tree = match inj_parser.parse(source, None) {
+            let inj_tree = match parse_rope(&mut inj_parser, rope, None) {
                 Some(t) => t,
                 None => continue,
             };
 
-            // Run highlight captures on the injection tree
-            let inj_spans = run_highlight_captures(injection_config, inj_tree.root_node(), source);
+            let inj_spans = run_highlight_captures(injection_config, inj_tree.root_node(), rope);
             spans.extend(inj_spans);
         }
     }
@@ -573,12 +603,12 @@ impl SyntaxState {
         }
     }
 
-    /// Run highlight and store the result in the cache.
-    pub fn highlight_and_cache(&self, source: &[u8], version: usize) {
-        let spans = self.highlight(source);
+    /// Run highlight on a Rope and store the result in the cache.
+    pub fn highlight_and_cache(&self, rope: &Rope, end_byte: usize, version: usize) {
+        let spans = self.highlight_rope(rope);
         *self.cache.borrow_mut() = Some(HighlightCache {
             version,
-            cached_end_byte: source.len(),
+            cached_end_byte: end_byte,
             spans,
         });
     }
@@ -589,19 +619,18 @@ impl SyntaxState {
     }
 }
 
-/// Run highlight captures on a tree node and return styled spans.
+/// Run highlight captures on a tree node using a Rope for text access.
 fn run_highlight_captures(
     config: &HighlightConfig,
     root_node: Node,
-    source: &[u8],
+    rope: &Rope,
 ) -> Vec<StyledSpan> {
     let mut spans = Vec::new();
     let mut cursor = QueryCursor::new();
-    cursor.set_byte_range(0..source.len());
+    cursor.set_byte_range(0..rope.len_bytes());
 
-    let mut captures = cursor.captures(&config.query, root_node, source);
+    let mut captures = cursor.captures(&config.query, root_node, RopeProvider(rope));
     while let Some((m, capture_index)) = captures.next() {
-        // Only process highlight patterns
         if m.pattern_index < config.highlights_pattern_index {
             continue;
         }
@@ -623,27 +652,16 @@ fn run_highlight_captures(
     spans
 }
 
-/// Convert a byte offset in source to (row, column).
-fn byte_to_point(source: &[u8], byte_offset: usize) -> (usize, usize) {
-    let mut row = 0;
-    let mut last_newline = 0; // byte position after last newline (or 0 for first line)
-    for (i, &b) in source.iter().enumerate() {
-        if i >= byte_offset {
-            break;
-        }
-        if b == b'\n' {
-            row += 1;
-            last_newline = i + 1;
-        }
-    }
-    (row, byte_offset - last_newline)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use ratatui::style::Modifier;
     use std::path::Path;
+
+    /// Helper to create a Rope from a byte string.
+    fn rope(s: &str) -> Rope {
+        Rope::from_str(s)
+    }
 
     #[test]
     fn detect_rust() {
@@ -735,11 +753,9 @@ mod tests {
     #[test]
     fn highlight_rust_code() {
         let state = SyntaxState::new(Language::Rust).unwrap();
-        let source = b"fn main() { let x = 42; }";
-        let spans = state.highlight(source);
-        // Should produce some spans
+        let r = rope("fn main() { let x = 42; }");
+        let spans = state.highlight_rope(&r);
         assert!(!spans.is_empty());
-        // The spans should cover "fn" and "42" at minimum
         let has_keyword = spans.iter().any(|s| s.start == 0 && s.end == 2);
         assert!(has_keyword, "Should have a span for 'fn', got: {:?}", spans);
     }
@@ -747,8 +763,8 @@ mod tests {
     #[test]
     fn highlight_json() {
         let state = SyntaxState::new(Language::Json).unwrap();
-        let source = br#"{"key": "value", "num": 123}"#;
-        let spans = state.highlight(source);
+        let r = rope(r#"{"key": "value", "num": 123}"#);
+        let spans = state.highlight_rope(&r);
         assert!(!spans.is_empty());
     }
 
@@ -849,7 +865,6 @@ mod tests {
 
     #[test]
     fn highlight_all_languages_load() {
-        // Verify that all language configs can be created
         let languages = [
             Language::Rust,
             Language::JavaScript,
@@ -889,33 +904,33 @@ mod tests {
     #[test]
     fn cache_hit_same_version_and_range() {
         let state = SyntaxState::new(Language::Rust).unwrap();
-        let source = b"fn main() { let x = 42; }";
-        assert!(!state.cache_is_valid(0, source.len()));
+        let r = rope("fn main() { let x = 42; }");
+        let len = r.len_bytes();
+        assert!(!state.cache_is_valid(0, len));
 
-        state.highlight_and_cache(source, 0);
-        assert!(state.cache_is_valid(0, source.len()));
-        // Smaller range is still covered
+        state.highlight_and_cache(&r, len, 0);
+        assert!(state.cache_is_valid(0, len));
         assert!(state.cache_is_valid(0, 10));
     }
 
     #[test]
     fn cache_miss_on_version_change() {
         let state = SyntaxState::new(Language::Rust).unwrap();
-        let source = b"fn main() { let x = 42; }";
-        state.highlight_and_cache(source, 0);
-        assert!(state.cache_is_valid(0, source.len()));
-        // Different version invalidates
-        assert!(!state.cache_is_valid(1, source.len()));
+        let r = rope("fn main() { let x = 42; }");
+        let len = r.len_bytes();
+        state.highlight_and_cache(&r, len, 0);
+        assert!(state.cache_is_valid(0, len));
+        assert!(!state.cache_is_valid(1, len));
     }
 
     #[test]
     fn cache_miss_on_range_growth() {
         let state = SyntaxState::new(Language::Rust).unwrap();
-        let source = b"fn main() {}";
-        state.highlight_and_cache(source, 0);
-        assert!(state.cache_is_valid(0, source.len()));
-        // Larger range invalidates
-        assert!(!state.cache_is_valid(0, source.len() + 100));
+        let r = rope("fn main() {}");
+        let len = r.len_bytes();
+        state.highlight_and_cache(&r, len, 0);
+        assert!(state.cache_is_valid(0, len));
+        assert!(!state.cache_is_valid(0, len + 100));
     }
 
     #[test]
@@ -928,11 +943,9 @@ mod tests {
     #[test]
     fn highlight_markdown_heading() {
         let state = SyntaxState::new(Language::Markdown).unwrap();
-        let source = b"# Hello World\n\nSome text.\n";
-        let spans = state.highlight(source);
-        // Should produce some spans
+        let r = rope("# Hello World\n\nSome text.\n");
+        let spans = state.highlight_rope(&r);
         assert!(!spans.is_empty());
-        // At least one span should have a non-default style (the heading)
         assert!(
             spans.iter().any(|s| s.style != Style::default()),
             "Markdown heading should produce styled spans, got: {:?}",
@@ -943,10 +956,9 @@ mod tests {
     #[test]
     fn highlight_markdown_inline_emphasis() {
         let state = SyntaxState::new(Language::Markdown).unwrap();
-        let source = b"This is *emphasis* and **strong**.\n";
-        let spans = state.highlight(source);
+        let r = rope("This is *emphasis* and **strong**.\n");
+        let spans = state.highlight_rope(&r);
         assert!(!spans.is_empty(), "Should produce spans, got: {:?}", spans);
-        // Should have italic for emphasis and bold for strong
         let has_italic = spans
             .iter()
             .any(|s| s.style.add_modifier.contains(Modifier::ITALIC));
@@ -964,14 +976,13 @@ mod tests {
     #[test]
     fn highlight_markdown_code_span() {
         let state = SyntaxState::new(Language::Markdown).unwrap();
-        let source = b"Use `code` here.\n";
-        let spans = state.highlight(source);
+        let r = rope("Use `code` here.\n");
+        let spans = state.highlight_rope(&r);
         assert!(
             !spans.is_empty(),
             "Should produce spans, got: {:?}",
             spans,
         );
-        // At least one span should have a non-default style (the code span)
         assert!(
             spans.iter().any(|s| s.style != Style::default()),
             "Markdown code span should be styled, got: {:?}",
@@ -986,13 +997,11 @@ mod tests {
 
     #[test]
     fn best_highlight_match_prefix() {
-        // A capture name like "keyword.return" should match "keyword"
         assert_eq!(best_highlight_match("keyword.return"), Some(highlight_index("keyword")));
     }
 
     #[test]
     fn best_highlight_match_specific() {
-        // "function.builtin" should match "function.builtin" (not just "function")
         assert_eq!(best_highlight_match("function.builtin"), Some(highlight_index("function.builtin")));
     }
 
