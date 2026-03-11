@@ -109,7 +109,8 @@ pub fn render(frame: &mut Frame, editor: &Editor) {
             let (cursor_line, cursor_col) = buf.char_to_line_col(pane.point);
             let text_width = text_area.width as usize;
 
-            // Compute visual row from scroll_top, accounting for wrapping
+            // Compute visual row from scroll_top, accounting for wrapping.
+            // Only place cursor if it's within the visible viewport.
             let mut visual_row: usize = 0;
             for lidx in pane.scroll_top..cursor_line {
                 let line_len = buf.line_len_chars(lidx);
@@ -129,7 +130,10 @@ pub fn render(frame: &mut Frame, editor: &Editor) {
             let screen_line = visual_row as u16;
             let screen_col = col_in_segment as u16;
 
-            if screen_col < text_area.x + text_area.width && screen_line < text_area.height {
+            if cursor_line >= pane.scroll_top
+                && screen_col < text_area.x + text_area.width
+                && screen_line < text_area.height
+            {
                 frame.set_cursor_position((text_area.x + screen_col, text_area.y + screen_line));
             }
         }

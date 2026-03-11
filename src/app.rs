@@ -1740,6 +1740,41 @@ mod tests {
     }
 
     #[test]
+    fn mouse_scroll_down_hides_cursor_when_point_above_viewport() {
+        // Move cursor to line 5 first (C-n * 5), then scroll down past it.
+        // With the bug, the cursor snaps to row 0; with the fix, it stays
+        // at the last-set position (row 5 from the previous render frame).
+        let text = (0..30).map(|i| format!("line {}", i)).collect::<Vec<_>>().join("\n");
+        let mut events: Vec<Event> = vec![];
+        // Move cursor down 5 lines
+        for _ in 0..5 {
+            events.push(ctrl('n'));
+        }
+        // Scroll down past line 5 (3 scroll events * 3 lines = scroll_top 9)
+        events.push(mouse_scroll_down(5, 3));
+        events.push(mouse_scroll_down(5, 3));
+        events.push(mouse_scroll_down(5, 3));
+
+        let (mut app, mut events) = test_app_with_text(40, 10, &text, events);
+        app.run_until_idle(&mut events).unwrap();
+
+        // scroll_top=9, point is at line 5 — cursor is above the viewport
+        assert_eq!(app.editor.pane_tree.focused_pane().scroll_top, 9);
+        let (cursor_line, _) = app.editor.current_buffer().char_to_line_col(app.editor.point());
+        assert_eq!(cursor_line, 5);
+
+        // With the fix, the cursor is hidden (not set during draw), so
+        // get_cursor_position returns the position from the last frame where
+        // the cursor WAS visible (row 5). With the bug, it would be row 0.
+        let pos = app.terminal.get_cursor_position().unwrap();
+        assert_ne!(
+            pos.y, 0,
+            "cursor should not appear at row 0 when point is scrolled above the viewport, got {:?}",
+            pos
+        );
+    }
+
+    #[test]
     fn mouse_scroll_does_not_change_focus() {
         let text = (0..30).map(|i| format!("line {}", i)).collect::<Vec<_>>().join("\n");
         let mut events = vec![
