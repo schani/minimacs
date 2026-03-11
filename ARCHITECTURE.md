@@ -111,6 +111,8 @@ struct Buffer {
     line_ending: LineEnding,
     history: History,
     syntax: Option<SyntaxState>,
+    edit_generation: usize,             // incremented on each insert/remove
+    pending_ts_edits: Vec<InputEdit>,   // tree-sitter edits for incremental parsing
 }
 ```
 
@@ -233,35 +235,74 @@ cursor by 3 lines without changing which pane is focused.
 Language is detected from file extension or filename at load time (e.g. `.env`
 files are matched by filename). Each `Language` variant has a `name()` method
 returning a human-readable string displayed in the mode line. Each buffer with a
-recognized language gets a `SyntaxState` containing a tree-sitter
-`HighlightConfiguration`.
+recognized language gets a `SyntaxState` containing a `HighlightConfig` (compiled
+tree-sitter `Query` with capture-to-style mapping), a persistent `Parser`, and a
+cached `Tree`.
 
-Highlighting happens at render time. The renderer always passes bytes from the
-start of the buffer through the end of the visible region to tree-sitter, so
-that context-dependent constructs (like fenced code blocks in Markdown) are
-parsed correctly regardless of scroll position. Only styles for visible lines
-are extracted. The `highlight()` method takes a byte slice, runs
-tree-sitter-highlight, and returns a list of `StyledSpan { start, end, style }`
-(byte ranges). The renderer converts these to per-character `Style` entries in a
-`HashMap<(line, col), Style>` that it consults when building `Span`s.
+### Direct Tree-Sitter API
+
+Syntax highlighting uses the tree-sitter `Parser`, `Query`, and `QueryCursor`
+APIs directly instead of the `tree-sitter-highlight` crate. This enables
+incremental parsing and zero-copy Rope access. The query is built by
+concatenating injection + locals + highlight query strings; a
+`highlights_pattern_index` tracks where highlight patterns begin. Capture names
+are mapped to `HIGHLIGHT_NAMES` using dot-prefix matching (e.g. capture
+`keyword.return` matches highlight name `keyword`).
+
+### Zero-Copy Rope Parsing
+
+Parsing uses `parser.parse_with_options()` with a callback that reads directly
+from Rope chunks via `rope.chunk_at_byte()`, eliminating the need to copy the
+buffer text into a contiguous `Vec<u8>`. Query predicate evaluation (`#match?`,
+`#eq?`) uses a `RopeProvider` that implements `TextProvider` by reading Rope
+byte slices.
+
+### Incremental Parsing
+
+`Buffer::insert()` and `Buffer::remove()` record `tree_sitter::InputEdit`
+values in `pending_ts_edits` **before** mutating the Rope. Following Helix's
+approach, all `Point` fields in `InputEdit` are set to zero — tree-sitter
+recomputes them from byte offsets during parsing. At render time, pending edits
+are drained and applied to the old `Tree` via `tree.edit()`, then
+`parse_with_options()` is called with the edited tree so tree-sitter reuses
+unchanged subtrees. The new tree is stored for the next incremental parse.
+
+If more than 1000 edits accumulate (unlikely), the old tree is discarded and a
+full reparse is performed. `reset_tree()` drops the cached tree for full buffer
+replacements (file load, revert).
+
+### Highlighting Pipeline
+
+Highlighting happens at render time. The pipeline:
+
+1. Check cache (`edit_generation` + byte range). On hit, skip parsing entirely.
+2. Drain `pending_ts_edits` from the buffer.
+3. Apply edits to the old tree, parse with `parse_with_options()`.
+4. Run `QueryCursor::captures()` on the tree, filtering to highlight patterns.
+5. Process injections via `QueryCursor::matches()` for injection patterns.
+6. Return `Vec<StyledSpan>` with byte offsets; cache the result.
+
+The renderer converts spans to per-character `Style` entries in a
+`HashMap<(line, col), Style>` for the visible lines only.
 
 **Caching**: `SyntaxState` caches the most recent highlight result in a
 `RefCell<Option<HighlightCache>>`. The cache stores the `edit_generation`
 (incremented on every `Buffer::insert()` / `remove()`), the highlighted byte
-range, and the resulting spans. On each render frame,
-`compute_syntax_char_styles()` checks the cache before extracting bytes from the
-Rope. On cache hits (the common case for scrolling, cursor movement, and idle
-frames), both the byte copy and the tree-sitter re-parse are skipped entirely.
-The cache is invalidated when the buffer's `edit_generation` changes or when the
-visible region extends beyond the previously highlighted range.
+range, and the resulting spans. On cache hits (the common case for scrolling,
+cursor movement, and idle frames), the re-parse is skipped entirely. The cache
+is invalidated when the buffer's `edit_generation` changes or when the visible
+region extends beyond the previously highlighted range.
 
 **Language injections**: `SyntaxState` supports tree-sitter language injections
-via `injection_configs`, a list of `(name, HighlightConfiguration)` pairs.
-During highlighting, the injection callback resolves language names to these
-configs. Markdown uses this to inject the `markdown_inline` parser for inline
-content (emphasis, strong, code spans, links). A custom injection query with
-`injection.include-children` is used instead of the upstream default, which
-omits it and causes empty injection ranges.
+via `injection_configs`, a list of `(name, HighlightConfig)` pairs. During
+highlighting, injection matches are grouped by language name, and each group is
+parsed with `set_included_ranges()`. Injection range points are computed from the
+Rope (not from node positions, which may be incorrect due to zero-valued
+InputEdit points). Markdown uses this to inject the `markdown_inline` parser for
+inline content (emphasis, strong, code spans, links). A custom injection query
+with `injection.include-children` is used instead of the upstream default, which
+omits it and causes empty injection ranges. Injection trees are not cached
+incrementally (they operate on small ranges).
 
 The color theme is a built-in light palette matching VSCode's Light+ theme,
 using true color (RGB) values. Markdown-specific highlight names (`text.title`,
