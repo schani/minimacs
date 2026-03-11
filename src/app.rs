@@ -14,6 +14,7 @@ pub struct App<B: Backend> {
     pub editor: Editor,
     pub terminal: Terminal<B>,
     keymap_state: KeymapState,
+    esc_pending: bool,
 }
 
 impl<B: Backend> App<B>
@@ -25,6 +26,7 @@ where
             editor,
             terminal,
             keymap_state: KeymapState::new(default_keymap()),
+            esc_pending: false,
         }
     }
 
@@ -94,11 +96,31 @@ where
     fn handle_key(&mut self, key: KeyEvent) {
         // C-g always cancels
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('g') {
+            self.esc_pending = false;
             self.keymap_state.clear();
             self.editor.pending_keys.clear();
             self.editor.execute(Command::Cancel);
             return;
         }
+
+        // Handle Esc-as-Meta prefix: bare Esc sets a flag so the next key gets ALT
+        if key.code == KeyCode::Esc
+            && !key.modifiers.contains(KeyModifiers::CONTROL)
+            && !key.modifiers.contains(KeyModifiers::ALT)
+        {
+            self.esc_pending = true;
+            self.editor.pending_keys =
+                format!("{}ESC ", self.keymap_state.pending_display());
+            return;
+        }
+
+        // If Esc was pending, add ALT modifier to this key
+        let key = if self.esc_pending {
+            self.esc_pending = false;
+            KeyEvent::new(key.code, key.modifiers | KeyModifiers::ALT)
+        } else {
+            key
+        };
 
         // If isearch is active, route keys to isearch handler
         if self.editor.isearch.is_some() {
@@ -1772,6 +1794,53 @@ mod tests {
             "cursor should not appear at row 0 when point is scrolled above the viewport, got {:?}",
             pos
         );
+    }
+
+    // === Esc-as-Meta prefix tests ===
+
+    #[test]
+    fn esc_less_than_moves_to_buffer_beginning() {
+        let text = "hello\nworld\nfoo";
+        let events = vec![
+            ctrl('e'),           // go to end of first line
+            key(KeyCode::Esc),   // Esc prefix
+            char_key('<'),       // < — should become M-<
+        ];
+        let (mut app, mut events) = test_app_with_text(40, 10, text, events);
+        app.run_until_idle(&mut events).unwrap();
+        assert_eq!(app.editor.point(), 0);
+    }
+
+    #[test]
+    fn esc_greater_than_moves_to_buffer_end() {
+        let text = "hello\nworld\nfoo";
+        let events = vec![
+            key(KeyCode::Esc),   // Esc prefix
+            char_key('>'),       // > — should become M->
+        ];
+        let (mut app, mut events) = test_app_with_text(40, 10, text, events);
+        app.run_until_idle(&mut events).unwrap();
+        assert_eq!(app.editor.point(), 15); // "hello\nworld\nfoo" = 15 chars
+    }
+
+    #[test]
+    fn esc_f_moves_forward_word() {
+        let text = "hello world";
+        let events = vec![
+            key(KeyCode::Esc),   // Esc prefix
+            char_key('f'),       // f — should become M-f
+        ];
+        let (mut app, mut events) = test_app_with_text(40, 10, text, events);
+        app.run_until_idle(&mut events).unwrap();
+        assert_eq!(app.editor.point(), 5); // end of "hello"
+    }
+
+    #[test]
+    fn esc_shows_pending_indicator() {
+        let events = vec![key(KeyCode::Esc)];
+        let (mut app, mut events) = test_app(40, 10, events);
+        app.run_until_idle(&mut events).unwrap();
+        assert!(app.editor.pending_keys.contains("ESC"));
     }
 
     #[test]
