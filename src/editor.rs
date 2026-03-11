@@ -1316,7 +1316,7 @@ impl Editor {
     }
 
     fn set_os_clipboard(&self, _text: &str) {
-        #[cfg(feature = "clipboard")]
+        #[cfg(all(feature = "clipboard", not(test)))]
         {
             if let Ok(mut clip) = arboard::Clipboard::new() {
                 let _ = clip.set_text(_text.to_string());
@@ -1325,7 +1325,7 @@ impl Editor {
     }
 
     fn get_os_clipboard(&self) -> Option<String> {
-        #[cfg(feature = "clipboard")]
+        #[cfg(all(feature = "clipboard", not(test)))]
         {
             if let Ok(mut clip) = arboard::Clipboard::new() {
                 return clip.get_text().ok();

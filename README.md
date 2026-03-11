@@ -5,6 +5,8 @@ A terminal text editor with emacs keybindings, written in Rust.
 minimacs aims to be a fast, lightweight editor that feels familiar to emacs
 users. It is not extensible -- it ships one good editor, not a platform.
 
+![screenshot](screenshot.png)
+
 ## Features
 
 - **Emacs keybindings** -- standard movement, editing, and chord sequences
@@ -157,4 +159,4 @@ output.
 
 ## License
 
-TBD
+MIT License. See [LICENSE](LICENSE) for details.
