@@ -270,9 +270,13 @@ where
     }
 
     fn handle_mouse(&mut self, mouse: MouseEvent) {
-        // Only handle left-button down clicks
-        if !matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
-            return;
+        match mouse.kind {
+            MouseEventKind::Down(MouseButton::Left) => {}
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                self.handle_mouse_scroll(mouse);
+                return;
+            }
+            _ => return,
         }
 
         // Ignore clicks when the minibuffer is active
@@ -367,6 +371,49 @@ where
                 }
 
                 self.editor.pane_tree.focused_pane_mut().preferred_column = None;
+                return;
+            }
+        }
+    }
+
+    fn handle_mouse_scroll(&mut self, mouse: MouseEvent) {
+        let scroll_x = mouse.column;
+        let scroll_y = mouse.row;
+
+        let size = self.terminal.size().unwrap_or_default();
+        let comp_height = render::completions_height(&self.editor, size.height, size.width);
+        let pane_area = ratatui::layout::Rect {
+            x: 0,
+            y: 0,
+            width: size.width,
+            height: size.height.saturating_sub(1 + comp_height),
+        };
+
+        let (pane_rects, _separators) = self.editor.pane_tree.calculate_rects(pane_area);
+        let scroll_lines: usize = 3;
+
+        for (path, rect) in &pane_rects {
+            if scroll_x >= rect.x
+                && scroll_x < rect.x + rect.width
+                && scroll_y >= rect.y
+                && scroll_y < rect.y + rect.height
+            {
+                let buffer_id = self.editor.pane_tree.pane_at_focus_path(path).buffer_id;
+                let total_lines = self.editor.buffer_by_id(buffer_id).line_count();
+                let pane = self.editor.pane_tree.pane_at_path_pub_mut(path);
+
+                match mouse.kind {
+                    MouseEventKind::ScrollDown => {
+                        pane.scroll_top = pane
+                            .scroll_top
+                            .saturating_add(scroll_lines)
+                            .min(total_lines.saturating_sub(1));
+                    }
+                    MouseEventKind::ScrollUp => {
+                        pane.scroll_top = pane.scroll_top.saturating_sub(scroll_lines);
+                    }
+                    _ => {}
+                }
                 return;
             }
         }
@@ -1549,6 +1596,24 @@ mod tests {
         })
     }
 
+    fn mouse_scroll_down(x: u16, y: u16) -> Event {
+        Event::Mouse(MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: x,
+            row: y,
+            modifiers: KeyModifiers::NONE,
+        })
+    }
+
+    fn mouse_scroll_up(x: u16, y: u16) -> Event {
+        Event::Mouse(MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            column: x,
+            row: y,
+            modifiers: KeyModifiers::NONE,
+        })
+    }
+
     #[test]
     fn mouse_click_places_cursor() {
         // 3-line text. Click on line 2, column 2.
@@ -1639,5 +1704,60 @@ mod tests {
         // Should have switched focus to the second pane
         let focus = app.editor.pane_tree.focus_path();
         assert_eq!(focus, &[1], "should focus the second pane, got {:?}", focus);
+    }
+
+    #[test]
+    fn mouse_scroll_down_scrolls_pane() {
+        // Create a buffer with enough lines to scroll
+        let text = (0..30).map(|i| format!("line {}", i)).collect::<Vec<_>>().join("\n");
+        // Scroll down 3 times over the pane
+        let events = vec![
+            mouse_scroll_down(5, 3),
+            mouse_scroll_down(5, 3),
+            mouse_scroll_down(5, 3),
+        ];
+        let (mut app, mut events) = test_app_with_text(40, 10, &text, events);
+        app.run_until_idle(&mut events).unwrap();
+
+        // scroll_top should have advanced (3 scroll events * 3 lines each = 9)
+        assert_eq!(app.editor.pane_tree.focused_pane().scroll_top, 9);
+    }
+
+    #[test]
+    fn mouse_scroll_up_scrolls_pane() {
+        let text = (0..30).map(|i| format!("line {}", i)).collect::<Vec<_>>().join("\n");
+        // First scroll down, then scroll back up
+        let events = vec![
+            mouse_scroll_down(5, 3),
+            mouse_scroll_down(5, 3),
+            mouse_scroll_up(5, 3),
+        ];
+        let (mut app, mut events) = test_app_with_text(40, 10, &text, events);
+        app.run_until_idle(&mut events).unwrap();
+
+        // 2 down (6 lines) - 1 up (3 lines) = 3
+        assert_eq!(app.editor.pane_tree.focused_pane().scroll_top, 3);
+    }
+
+    #[test]
+    fn mouse_scroll_does_not_change_focus() {
+        let text = (0..30).map(|i| format!("line {}", i)).collect::<Vec<_>>().join("\n");
+        let mut events = vec![
+            ctrl('x'), key(KeyCode::Char('2')), // split vertically (top/bottom)
+        ];
+        // Focus is on top pane [0]. Scroll on the bottom pane area.
+        // In 10-row terminal: pane area = 9 rows, each pane ~4-5 rows.
+        // Bottom pane starts around row 5.
+        events.push(mouse_scroll_down(5, 6));
+        let (mut app, mut events) = test_app_with_text(40, 10, &text, events);
+        app.run_until_idle(&mut events).unwrap();
+
+        // Focus should still be on the first pane
+        let focus = app.editor.pane_tree.focus_path();
+        assert_eq!(focus, &[0], "focus should not change on scroll, got {:?}", focus);
+
+        // But the second pane should have scrolled
+        let second_pane = app.editor.pane_tree.pane_at_focus_path(&[1]);
+        assert!(second_pane.scroll_top > 0, "second pane should have scrolled");
     }
 }

@@ -199,6 +199,8 @@ a click determines which pane was clicked (using `calculate_rects()`), focuses
 that pane, and places the cursor at the clicked position. The position
 calculation accounts for line wrapping and scroll position.
 Clicks below all content place the cursor at the end of the buffer.
+Mouse scroll events (`ScrollUp`/`ScrollDown`) scroll the pane under the mouse
+cursor by 3 lines without changing which pane is focused.
 `Event::Resize` is handled implicitly by the viewport update.
 
 ## Rendering

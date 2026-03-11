@@ -1,5 +1,5 @@
 - [x] Horizontal splits should be separated by a bar
-- [ ] Support mouse scrolling - the pane that the mouse is over should scroll, but the focused pane shouldn't change
+- [x] Support mouse scrolling - the pane that the mouse is over should scroll, but the focused pane shouldn't change
 - [x] Remove the line number gutter
 - [x] Implement: C-l (recenter-top-bottom): This command clears the screen and redisplays the current line at the top, center, or bottom of the window. It also serves to generally refresh the display in the process. Repeating C-l cycles the current line's position.
 - [x] Make the color pallette equivalent to "VSCode Light+". We only need to support "light" terminals right now.

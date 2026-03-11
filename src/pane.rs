@@ -87,6 +87,11 @@ impl PaneTree {
         self.pane_at_path(path)
     }
 
+    /// Get a mutable pane at a specific path (for scrolling, etc.).
+    pub fn pane_at_path_pub_mut(&mut self, path: &[usize]) -> &mut Pane {
+        self.pane_at_path_mut(path)
+    }
+
     fn pane_at_path(&self, path: &[usize]) -> &Pane {
         let mut node = &self.root;
         for &idx in path {
