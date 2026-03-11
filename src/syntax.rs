@@ -1,3 +1,5 @@
+use std::cell::RefCell;
+
 use ratatui::style::{Color, Modifier, Style};
 use tree_sitter_highlight::{HighlightConfiguration, HighlightEvent, Highlighter};
 use tree_sitter_language::LanguageFn;
@@ -255,6 +257,12 @@ fn language_config(lang: Language) -> (LanguageFn, String, String, String) {
     }
 }
 
+struct HighlightCache {
+    version: usize,
+    cached_end_byte: usize,
+    spans: Vec<StyledSpan>,
+}
+
 /// Holds a parsed tree and highlight config for a buffer.
 #[allow(dead_code)]
 pub struct SyntaxState {
@@ -262,6 +270,7 @@ pub struct SyntaxState {
     config: HighlightConfiguration,
     /// Additional language configs for injection (e.g. markdown inline).
     injection_configs: Vec<(String, HighlightConfiguration)>,
+    cache: RefCell<Option<HighlightCache>>,
 }
 
 impl SyntaxState {
@@ -297,6 +306,7 @@ impl SyntaxState {
             language: lang,
             config,
             injection_configs,
+            cache: RefCell::new(None),
         })
     }
 
@@ -336,6 +346,30 @@ impl SyntaxState {
         }
 
         spans
+    }
+
+    /// Check if the cached highlight result covers the needed range at the right version.
+    pub fn cache_is_valid(&self, version: usize, end_byte: usize) -> bool {
+        let cache = self.cache.borrow();
+        match cache.as_ref() {
+            Some(c) => c.version == version && c.cached_end_byte >= end_byte,
+            None => false,
+        }
+    }
+
+    /// Run highlight and store the result in the cache.
+    pub fn highlight_and_cache(&self, source: &[u8], version: usize) {
+        let spans = self.highlight(source);
+        *self.cache.borrow_mut() = Some(HighlightCache {
+            version,
+            cached_end_byte: source.len(),
+            spans,
+        });
+    }
+
+    /// Borrow the cached spans. Panics if cache is empty.
+    pub fn cached_spans(&self) -> std::cell::Ref<'_, Vec<StyledSpan>> {
+        std::cell::Ref::map(self.cache.borrow(), |c| &c.as_ref().unwrap().spans)
     }
 }
 
@@ -586,6 +620,38 @@ mod tests {
             detect_language(Path::new("foo.env")),
             Some(Language::Env)
         );
+    }
+
+    #[test]
+    fn cache_hit_same_version_and_range() {
+        let state = SyntaxState::new(Language::Rust).unwrap();
+        let source = b"fn main() { let x = 42; }";
+        assert!(!state.cache_is_valid(0, source.len()));
+
+        state.highlight_and_cache(source, 0);
+        assert!(state.cache_is_valid(0, source.len()));
+        // Smaller range is still covered
+        assert!(state.cache_is_valid(0, 10));
+    }
+
+    #[test]
+    fn cache_miss_on_version_change() {
+        let state = SyntaxState::new(Language::Rust).unwrap();
+        let source = b"fn main() { let x = 42; }";
+        state.highlight_and_cache(source, 0);
+        assert!(state.cache_is_valid(0, source.len()));
+        // Different version invalidates
+        assert!(!state.cache_is_valid(1, source.len()));
+    }
+
+    #[test]
+    fn cache_miss_on_range_growth() {
+        let state = SyntaxState::new(Language::Rust).unwrap();
+        let source = b"fn main() {}";
+        state.highlight_and_cache(source, 0);
+        assert!(state.cache_is_valid(0, source.len()));
+        // Larger range invalidates
+        assert!(!state.cache_is_valid(0, source.len() + 100));
     }
 
     #[test]

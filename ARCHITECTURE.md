@@ -245,6 +245,16 @@ tree-sitter-highlight, and returns a list of `StyledSpan { start, end, style }`
 (byte ranges). The renderer converts these to per-character `Style` entries in a
 `HashMap<(line, col), Style>` that it consults when building `Span`s.
 
+**Caching**: `SyntaxState` caches the most recent highlight result in a
+`RefCell<Option<HighlightCache>>`. The cache stores the `edit_generation`
+(incremented on every `Buffer::insert()` / `remove()`), the highlighted byte
+range, and the resulting spans. On each render frame,
+`compute_syntax_char_styles()` checks the cache before extracting bytes from the
+Rope. On cache hits (the common case for scrolling, cursor movement, and idle
+frames), both the byte copy and the tree-sitter re-parse are skipped entirely.
+The cache is invalidated when the buffer's `edit_generation` changes or when the
+visible region extends beyond the previously highlighted range.
+
 **Language injections**: `SyntaxState` supports tree-sitter language injections
 via `injection_configs`, a list of `(name, HighlightConfiguration)` pairs.
 During highlighting, the injection callback resolves language names to these

@@ -369,17 +369,23 @@ fn compute_syntax_char_styles(
         buf.text.len_bytes()
     };
 
-    let mut highlight_bytes = Vec::with_capacity(last_byte);
-    for chunk in buf.text.byte_slice(0..last_byte).chunks() {
-        highlight_bytes.extend_from_slice(chunk.as_bytes());
+    // Check cache before extracting bytes — cache hits skip both the byte
+    // copy and the re-parse (the common case on non-edit frames).
+    if !syntax.cache_is_valid(buf.edit_generation, last_byte) {
+        let mut highlight_bytes = Vec::with_capacity(last_byte);
+        for chunk in buf.text.byte_slice(0..last_byte).chunks() {
+            highlight_bytes.extend_from_slice(chunk.as_bytes());
+        }
+        syntax.highlight_and_cache(&highlight_bytes, buf.edit_generation);
     }
 
-    let styled_spans = syntax.highlight(&highlight_bytes);
+    // Borrow cached spans and build the HashMap for visible lines.
+    let cached_spans = syntax.cached_spans();
 
     // Build a byte-to-style lookup only for the visible portion
     let visible_len = last_byte - first_visible_byte;
     let mut byte_styles = vec![Style::default(); visible_len];
-    for ss in &styled_spans {
+    for ss in cached_spans.iter() {
         // Clip span to the visible byte range
         let span_start = ss.start.max(first_visible_byte);
         let span_end = ss.end.min(last_byte);
@@ -394,6 +400,9 @@ fn compute_syntax_char_styles(
             *item = ss.style;
         }
     }
+
+    // Drop the Ref before building the result
+    drop(cached_spans);
 
     // Map each visible line's chars to styles
     let mut result = std::collections::HashMap::new();
