@@ -34,6 +34,7 @@ pub struct Buffer {
     pub line_ending: LineEnding,
     pub history: History,
     pub syntax: Option<SyntaxState>,
+    pub edit_generation: usize,
 }
 
 #[allow(dead_code)]
@@ -49,6 +50,7 @@ impl Buffer {
             line_ending: LineEnding::Lf,
             history: History::new(),
             syntax: None,
+            edit_generation: 0,
         }
     }
 
@@ -69,6 +71,7 @@ impl Buffer {
             line_ending: LineEnding::Lf,
             history: History::new(),
             syntax: syntax_state,
+            edit_generation: 0,
         }
     }
 
@@ -83,6 +86,7 @@ impl Buffer {
             line_ending: LineEnding::Lf,
             history: History::new(),
             syntax: None,
+            edit_generation: 0,
         }
     }
 
@@ -126,6 +130,7 @@ impl Buffer {
             line_ending,
             history: History::new(),
             syntax: syntax_state,
+            edit_generation: 0,
         })
     }
 
@@ -191,6 +196,7 @@ impl Buffer {
     pub fn insert(&mut self, char_idx: usize, text: &str) {
         self.text.insert(char_idx, text);
         self.modified = true;
+        self.edit_generation += 1;
     }
 
     /// Remove chars in range [start..end).
@@ -198,6 +204,7 @@ impl Buffer {
         if start < end {
             self.text.remove(start..end);
             self.modified = true;
+            self.edit_generation += 1;
         }
     }
 
@@ -267,6 +274,25 @@ mod tests {
 
         buf.remove(5, 11);
         assert_eq!(buf.text.to_string(), "hello");
+    }
+
+    #[test]
+    fn edit_generation_increments_on_insert_and_remove() {
+        let mut buf = Buffer::from_str(0, "test", "hello");
+        assert_eq!(buf.edit_generation, 0);
+
+        buf.insert(5, " world");
+        assert_eq!(buf.edit_generation, 1);
+
+        buf.insert(11, "!");
+        assert_eq!(buf.edit_generation, 2);
+
+        buf.remove(11, 12);
+        assert_eq!(buf.edit_generation, 3);
+
+        // No-op remove (start == end) should NOT increment
+        buf.remove(5, 5);
+        assert_eq!(buf.edit_generation, 3);
     }
 
     #[test]
