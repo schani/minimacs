@@ -236,11 +236,14 @@ returning a human-readable string displayed in the mode line. Each buffer with a
 recognized language gets a `SyntaxState` containing a tree-sitter
 `HighlightConfiguration`.
 
-Highlighting happens at render time on visible lines only. The `highlight()`
-method takes a byte slice, runs tree-sitter-highlight, and returns a list of
-`StyledSpan { start, end, style }` (byte ranges). The renderer converts these
-to per-character `Style` entries in a `HashMap<(line, col), Style>` that it
-consults when building `Span`s.
+Highlighting happens at render time. The renderer always passes bytes from the
+start of the buffer through the end of the visible region to tree-sitter, so
+that context-dependent constructs (like fenced code blocks in Markdown) are
+parsed correctly regardless of scroll position. Only styles for visible lines
+are extracted. The `highlight()` method takes a byte slice, runs
+tree-sitter-highlight, and returns a list of `StyledSpan { start, end, style }`
+(byte ranges). The renderer converts these to per-character `Style` entries in a
+`HashMap<(line, col), Style>` that it consults when building `Span`s.
 
 **Language injections**: `SyntaxState` supports tree-sitter language injections
 via `injection_configs`, a list of `(name, HighlightConfiguration)` pairs.

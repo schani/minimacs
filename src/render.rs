@@ -343,6 +343,10 @@ fn build_styled_spans(
 
 /// Compute per-character syntax styles for visible lines.
 /// Returns a map from (line_idx, col) -> Style, or None if no syntax.
+///
+/// Always highlights from the start of the buffer so that tree-sitter has full
+/// context (e.g., knowing whether we're inside a fenced code block). Only
+/// styles for the visible lines are returned.
 fn compute_syntax_char_styles(
     buf: &Buffer,
     scroll_top: usize,
@@ -350,34 +354,42 @@ fn compute_syntax_char_styles(
 ) -> Option<std::collections::HashMap<(usize, usize), Style>> {
     let syntax = buf.syntax.as_ref()?;
     let total_lines = buf.line_count();
-    let first_line = scroll_top;
-    let last_line = (scroll_top + visible_lines).min(total_lines);
-    if first_line >= last_line {
+    let first_visible = scroll_top;
+    let last_visible = (scroll_top + visible_lines).min(total_lines);
+    if first_visible >= last_visible {
         return None;
     }
 
-    // Collect visible text as bytes
-    let first_byte = buf.text.line_to_byte(first_line);
-    let last_byte = if last_line < total_lines {
-        buf.text.line_to_byte(last_line)
+    // Highlight from byte 0 through the end of visible lines so tree-sitter
+    // has full context for constructs like fenced code blocks.
+    let first_visible_byte = buf.text.line_to_byte(first_visible);
+    let last_byte = if last_visible < total_lines {
+        buf.text.line_to_byte(last_visible)
     } else {
         buf.text.len_bytes()
     };
 
-    let mut visible_bytes = Vec::with_capacity(last_byte - first_byte);
-    for chunk in buf.text.byte_slice(first_byte..last_byte).chunks() {
-        visible_bytes.extend_from_slice(chunk.as_bytes());
+    let mut highlight_bytes = Vec::with_capacity(last_byte);
+    for chunk in buf.text.byte_slice(0..last_byte).chunks() {
+        highlight_bytes.extend_from_slice(chunk.as_bytes());
     }
 
-    let styled_spans = syntax.highlight(&visible_bytes);
+    let styled_spans = syntax.highlight(&highlight_bytes);
 
-    // Build a byte-to-style lookup, then map to (line, col) via char positions
-    let mut byte_styles = vec![Style::default(); visible_bytes.len()];
+    // Build a byte-to-style lookup only for the visible portion
+    let visible_len = last_byte - first_visible_byte;
+    let mut byte_styles = vec![Style::default(); visible_len];
     for ss in &styled_spans {
+        // Clip span to the visible byte range
+        let span_start = ss.start.max(first_visible_byte);
+        let span_end = ss.end.min(last_byte);
+        if span_start >= span_end {
+            continue;
+        }
         for item in byte_styles
             .iter_mut()
-            .take(ss.end.min(visible_bytes.len()))
-            .skip(ss.start)
+            .take(span_end - first_visible_byte)
+            .skip(span_start - first_visible_byte)
         {
             *item = ss.style;
         }
@@ -386,8 +398,8 @@ fn compute_syntax_char_styles(
     // Map each visible line's chars to styles
     let mut result = std::collections::HashMap::new();
 
-    for line_idx in first_line..last_line {
-        let line_byte_start = buf.text.line_to_byte(line_idx) - first_byte;
+    for line_idx in first_visible..last_visible {
+        let line_byte_start = buf.text.line_to_byte(line_idx) - first_visible_byte;
         let line_text: String = buf.text.line(line_idx).chars().collect();
         let line_text = line_text.trim_end_matches('\n').trim_end_matches('\r');
 
@@ -693,6 +705,79 @@ mod tests {
         editor.minibuffer.completions = Some(vec!["a".into(), "b".into()]);
         // height=4, max_rows = (4-2)/3 = 0 -> max(1) = 1
         assert_eq!(completions_height(&editor, 4, 80), 1);
+    }
+
+    /// Regression test: when the viewport starts inside a fenced code block,
+    /// syntax highlighting should still be correct. Lines after the closing ```
+    /// should be highlighted as normal markdown (e.g., headings should be bold+blue),
+    /// not as code.
+    #[test]
+    fn markdown_highlight_consistent_when_scrolled_into_code_block() {
+        use crate::syntax::{Language, SyntaxState};
+        use ratatui::style::Modifier;
+
+        // Build a markdown document with a code block in the middle.
+        // Lines 0-3: normal markdown
+        // Lines 4-8: fenced code block (``` ... ```)
+        // Lines 9-11: normal markdown including a heading
+        let markdown = "\
+# Title\n\
+\n\
+Some text\n\
+\n\
+```\n\
+fn main() {\n\
+    let x = 42;\n\
+}\n\
+```\n\
+\n\
+# After Code Block\n\
+\n\
+Some *emphasis* here.\n";
+
+        let mut buf = Buffer::from_str(0, "test.md", markdown);
+        buf.syntax = SyntaxState::new(Language::Markdown);
+
+        // Case 1: scroll_top=0, see everything — get styles for the heading on line 10
+        let styles_full = compute_syntax_char_styles(&buf, 0, 20);
+
+        // Case 2: scroll_top=6, viewport starts inside the code block
+        let styles_scrolled = compute_syntax_char_styles(&buf, 6, 20);
+
+        // Line 10 is "# After Code Block" — the '#' and heading text should have
+        // the heading style (bold + blue) regardless of scroll position.
+        let heading_line = 10;
+
+        // With full context (scroll_top=0), the heading should be styled
+        let full_styles = styles_full.expect("should have syntax styles with full context");
+        let has_heading_style_full = full_styles
+            .iter()
+            .any(|((line, _col), style)| {
+                *line == heading_line
+                    && style.add_modifier.contains(Modifier::BOLD)
+            });
+        assert!(
+            has_heading_style_full,
+            "Heading on line {} should be bold when fully visible. Styles: {:?}",
+            heading_line,
+            full_styles.iter().filter(|((l, _), _)| *l == heading_line).collect::<Vec<_>>()
+        );
+
+        // With scrolled context (scroll_top=6, inside code block), the heading
+        // should STILL be styled the same way.
+        let scrolled_styles = styles_scrolled.expect("should have syntax styles when scrolled");
+        let has_heading_style_scrolled = scrolled_styles
+            .iter()
+            .any(|((line, _col), style)| {
+                *line == heading_line
+                    && style.add_modifier.contains(Modifier::BOLD)
+            });
+        assert!(
+            has_heading_style_scrolled,
+            "Heading on line {} should be bold even when viewport starts inside code block. Styles: {:?}",
+            heading_line,
+            scrolled_styles.iter().filter(|((l, _), _)| *l == heading_line).collect::<Vec<_>>()
+        );
     }
 
     #[test]
