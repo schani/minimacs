@@ -1,4 +1,4 @@
-use ratatui::style::{Color, Style};
+use ratatui::style::{Color, Modifier, Style};
 use tree_sitter_highlight::{HighlightConfiguration, HighlightEvent, Highlighter};
 use tree_sitter_language::LanguageFn;
 
@@ -26,6 +26,12 @@ const HIGHLIGHT_NAMES: &[&str] = &[
     "string",
     "string.special",
     "tag",
+    "text.emphasis",
+    "text.literal",
+    "text.reference",
+    "text.strong",
+    "text.title",
+    "text.uri",
     "type",
     "type.builtin",
     "variable",
@@ -62,11 +68,38 @@ pub(crate) fn style_for_highlight(idx: usize) -> Style {
         "escape" => Style::default().fg(Color::Rgb(238, 0, 0)),           // #EE0000
         "tag" => Style::default().fg(Color::Rgb(128, 0, 0)),              // #800000
         "property" => Style::default().fg(Color::Rgb(0, 16, 128)),        // #001080
+        "text.title" => Style::default()
+            .fg(Color::Rgb(0, 0, 255))
+            .add_modifier(Modifier::BOLD),
+        "text.emphasis" => Style::default().add_modifier(Modifier::ITALIC),
+        "text.strong" => Style::default().add_modifier(Modifier::BOLD),
+        "text.literal" => Style::default().fg(Color::Rgb(163, 21, 21)),          // #A31515
+        "text.uri" => Style::default()
+            .fg(Color::Rgb(0, 112, 193))
+            .add_modifier(Modifier::UNDERLINED),
+        "text.reference" => Style::default().fg(Color::Rgb(0, 112, 193)),        // #0070C1
         "operator" | "label" | "punctuation" | "punctuation.bracket"
         | "punctuation.delimiter" | "punctuation.special" => Style::default(),
         _ => Style::default(),
     }
 }
+
+/// Custom markdown block injection query. The upstream tree-sitter-md query omits
+/// `injection.include-children` on the inline injection, which causes the inline
+/// parser to receive empty ranges. We add it here so inline highlighting works.
+const MARKDOWN_INJECTION_QUERY: &str = r#"
+(fenced_code_block
+  (info_string
+    (language) @injection.language)
+  (code_fence_content) @injection.content)
+
+((html_block) @injection.content
+  (#set! injection.language "html"))
+
+((inline) @injection.content
+  (#set! injection.language "markdown_inline")
+  (#set! injection.include-children))
+"#;
 
 /// Supported languages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -189,7 +222,10 @@ fn language_config(lang: Language) -> (LanguageFn, String, String, String) {
         Language::Markdown => (
             tree_sitter_md::LANGUAGE,
             tree_sitter_md::HIGHLIGHT_QUERY_BLOCK.to_string(),
-            tree_sitter_md::INJECTION_QUERY_BLOCK.to_string(),
+            // Custom injection query: the upstream query omits injection.include-children
+            // on the inline injection, which causes the inline parser to receive empty ranges
+            // (the block parser's (inline) node has internal children that get excluded).
+            MARKDOWN_INJECTION_QUERY.to_string(),
             String::new(),
         ),
         Language::Go => (
@@ -224,6 +260,8 @@ fn language_config(lang: Language) -> (LanguageFn, String, String, String) {
 pub struct SyntaxState {
     pub language: Language,
     config: HighlightConfiguration,
+    /// Additional language configs for injection (e.g. markdown inline).
+    injection_configs: Vec<(String, HighlightConfiguration)>,
 }
 
 impl SyntaxState {
@@ -240,9 +278,25 @@ impl SyntaxState {
             }
         };
         config.configure(HIGHLIGHT_NAMES);
+
+        let mut injection_configs = Vec::new();
+        if lang == Language::Markdown {
+            if let Ok(mut inline_config) = HighlightConfiguration::new(
+                tree_sitter_md::INLINE_LANGUAGE.into(),
+                "source",
+                tree_sitter_md::HIGHLIGHT_QUERY_INLINE,
+                tree_sitter_md::INJECTION_QUERY_INLINE,
+                "",
+            ) {
+                inline_config.configure(HIGHLIGHT_NAMES);
+                injection_configs.push(("markdown_inline".to_string(), inline_config));
+            }
+        }
+
         Some(SyntaxState {
             language: lang,
             config,
+            injection_configs,
         })
     }
 
@@ -250,7 +304,12 @@ impl SyntaxState {
     /// The spans have byte offsets relative to the input `source`.
     pub fn highlight(&self, source: &[u8]) -> Vec<StyledSpan> {
         let mut highlighter = Highlighter::new();
-        let events = match highlighter.highlight(&self.config, source, None, |_| None) {
+        let events = match highlighter.highlight(&self.config, source, None, |lang_name| {
+            self.injection_configs
+                .iter()
+                .find(|(name, _)| name == lang_name)
+                .map(|(_, config)| config)
+        }) {
             Ok(events) => events,
             Err(_) => return Vec::new(),
         };
@@ -283,6 +342,7 @@ impl SyntaxState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ratatui::style::Modifier;
     use std::path::Path;
 
     #[test]
@@ -533,5 +593,59 @@ mod tests {
         assert_eq!(Language::Rust.name(), "Rust");
         assert_eq!(Language::Env.name(), "Env");
         assert_eq!(Language::Json.name(), "JSON");
+    }
+
+    #[test]
+    fn highlight_markdown_heading() {
+        let state = SyntaxState::new(Language::Markdown).unwrap();
+        let source = b"# Hello World\n\nSome text.\n";
+        let spans = state.highlight(source);
+        // Should produce some spans
+        assert!(!spans.is_empty());
+        // At least one span should have a non-default style (the heading)
+        assert!(
+            spans.iter().any(|s| s.style != Style::default()),
+            "Markdown heading should produce styled spans, got: {:?}",
+            spans,
+        );
+    }
+
+    #[test]
+    fn highlight_markdown_inline_emphasis() {
+        let state = SyntaxState::new(Language::Markdown).unwrap();
+        let source = b"This is *emphasis* and **strong**.\n";
+        let spans = state.highlight(source);
+        assert!(!spans.is_empty(), "Should produce spans, got: {:?}", spans);
+        // Should have italic for emphasis and bold for strong
+        let has_italic = spans
+            .iter()
+            .any(|s| s.style.add_modifier.contains(Modifier::ITALIC));
+        let has_bold = spans
+            .iter()
+            .any(|s| s.style.add_modifier.contains(Modifier::BOLD));
+        assert!(
+            has_italic,
+            "Markdown emphasis should produce italic spans, got: {:?}",
+            spans,
+        );
+        assert!(has_bold, "Markdown strong emphasis should produce bold spans");
+    }
+
+    #[test]
+    fn highlight_markdown_code_span() {
+        let state = SyntaxState::new(Language::Markdown).unwrap();
+        let source = b"Use `code` here.\n";
+        let spans = state.highlight(source);
+        assert!(
+            !spans.is_empty(),
+            "Should produce spans, got: {:?}",
+            spans,
+        );
+        // At least one span should have a non-default style (the code span)
+        assert!(
+            spans.iter().any(|s| s.style != Style::default()),
+            "Markdown code span should be styled, got: {:?}",
+            spans,
+        );
     }
 }

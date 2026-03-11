@@ -238,7 +238,18 @@ method takes a byte slice, runs tree-sitter-highlight, and returns a list of
 to per-character `Style` entries in a `HashMap<(line, col), Style>` that it
 consults when building `Span`s.
 
-The color theme is a built-in light palette matching VSCode's Light+ theme, using true color (RGB) values.
+**Language injections**: `SyntaxState` supports tree-sitter language injections
+via `injection_configs`, a list of `(name, HighlightConfiguration)` pairs.
+During highlighting, the injection callback resolves language names to these
+configs. Markdown uses this to inject the `markdown_inline` parser for inline
+content (emphasis, strong, code spans, links). A custom injection query with
+`injection.include-children` is used instead of the upstream default, which
+omits it and causes empty injection ranges.
+
+The color theme is a built-in light palette matching VSCode's Light+ theme,
+using true color (RGB) values. Markdown-specific highlight names (`text.title`,
+`text.emphasis`, `text.strong`, `text.literal`, `text.uri`, `text.reference`)
+are mapped to appropriate styles (bold, italic, underline, colors).
 
 ## Minibuffer
 
