@@ -643,17 +643,18 @@ impl SyntaxState {
 
     /// Run highlight on a Rope and store the result in the cache.
     /// Drains pending_edits for incremental tree reuse.
+    /// Since `highlight_rope` always parses the full rope, we cache
+    /// with `rope.len_bytes()` so the cache remains valid on scroll.
     pub fn highlight_and_cache(
         &self,
         rope: &Rope,
-        end_byte: usize,
         version: usize,
         pending_edits: Vec<tree_sitter::InputEdit>,
     ) {
         let spans = self.highlight_rope(rope, &pending_edits);
         *self.cache.borrow_mut() = Some(HighlightCache {
             version,
-            cached_end_byte: end_byte,
+            cached_end_byte: rope.len_bytes(),
             spans,
         });
     }
@@ -953,7 +954,7 @@ mod tests {
         let len = r.len_bytes();
         assert!(!state.cache_is_valid(0, len));
 
-        state.highlight_and_cache(&r, len, 0, vec![]);
+        state.highlight_and_cache(&r, 0, vec![]);
         assert!(state.cache_is_valid(0, len));
         assert!(state.cache_is_valid(0, 10));
     }
@@ -963,9 +964,30 @@ mod tests {
         let state = SyntaxState::new(Language::Rust).unwrap();
         let r = rope("fn main() { let x = 42; }");
         let len = r.len_bytes();
-        state.highlight_and_cache(&r, len, 0, vec![]);
+        state.highlight_and_cache(&r, 0, vec![]);
         assert!(state.cache_is_valid(0, len));
         assert!(!state.cache_is_valid(1, len));
+    }
+
+    #[test]
+    fn cache_survives_scroll() {
+        // highlight_rope() always parses the full file, so the cache should
+        // remain valid when the visible region grows (e.g. scrolling down).
+        let state = SyntaxState::new(Language::Rust).unwrap();
+        let code = "fn a() {}\nfn b() {}\nfn c() {}\nfn d() {}\n";
+        let r = rope(code);
+
+        // Cache with visible end at line 2
+        let line2_byte = r.line_to_byte(2);
+        state.highlight_and_cache(&r, 0, vec![]);
+        assert!(state.cache_is_valid(0, line2_byte));
+
+        // Scrolling to show all lines should still be valid
+        let full_len = r.len_bytes();
+        assert!(
+            state.cache_is_valid(0, full_len),
+            "Cache should survive scroll since full file was parsed"
+        );
     }
 
     #[test]
@@ -973,7 +995,7 @@ mod tests {
         let state = SyntaxState::new(Language::Rust).unwrap();
         let r = rope("fn main() {}");
         let len = r.len_bytes();
-        state.highlight_and_cache(&r, len, 0, vec![]);
+        state.highlight_and_cache(&r, 0, vec![]);
         assert!(state.cache_is_valid(0, len));
         assert!(!state.cache_is_valid(0, len + 100));
     }

@@ -377,7 +377,7 @@ fn compute_syntax_char_styles(
     // (the common case on non-edit frames).
     if !syntax.cache_is_valid(buf.edit_generation, last_byte) {
         let pending_edits = buf.take_pending_edits();
-        syntax.highlight_and_cache(&buf.text, last_byte, buf.edit_generation, pending_edits);
+        syntax.highlight_and_cache(&buf.text, buf.edit_generation, pending_edits);
     }
 
     // Borrow cached spans and build the HashMap for visible lines.
