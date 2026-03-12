@@ -1136,6 +1136,7 @@ impl Editor {
             }
         }
         self.active_buffer_mut().history.commit();
+        self.set_os_clipboard(&self.clipboard.clone());
         self.active_pane_mut().preferred_column = None;
     }
 
