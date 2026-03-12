@@ -9,6 +9,33 @@ use tree_sitter::{InputEdit, Point};
 use crate::history::History;
 use crate::syntax::{self, SyntaxState};
 
+/// Convert a byte offset in a Rope to a tree-sitter Point (row, column in bytes).
+fn byte_to_point(rope: &Rope, byte_offset: usize) -> Point {
+    let byte_offset = byte_offset.min(rope.len_bytes());
+    let row = rope.byte_to_line(byte_offset);
+    let line_start = rope.line_to_byte(row);
+    Point {
+        row,
+        column: byte_offset - line_start,
+    }
+}
+
+/// Compute the Point after inserting `text` at `start`.
+/// Column values are byte offsets within the line (as tree-sitter expects).
+fn point_after_insert(start: Point, text: &str) -> Point {
+    let mut row = start.row;
+    let mut col = start.column;
+    for byte in text.bytes() {
+        if byte == b'\n' {
+            row += 1;
+            col = 0;
+        } else {
+            col += 1;
+        }
+    }
+    Point { row, column: col }
+}
+
 pub type BufferId = usize;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -206,13 +233,15 @@ impl Buffer {
     pub fn insert(&mut self, char_idx: usize, text: &str) {
         // Record InputEdit BEFORE mutating the Rope (byte offsets are against current state).
         let start_byte = self.text.char_to_byte(char_idx);
+        let start_position = byte_to_point(&self.text, start_byte);
+        let new_end_position = point_after_insert(start_position, text);
         self.pending_ts_edits.borrow_mut().push(InputEdit {
             start_byte,
             old_end_byte: start_byte,
             new_end_byte: start_byte + text.len(),
-            start_position: Point { row: 0, column: 0 },
-            old_end_position: Point { row: 0, column: 0 },
-            new_end_position: Point { row: 0, column: 0 },
+            start_position,
+            old_end_position: start_position,
+            new_end_position,
         });
         self.text.insert(char_idx, text);
         self.modified = true;
@@ -225,13 +254,15 @@ impl Buffer {
             // Record InputEdit BEFORE mutating the Rope.
             let start_byte = self.text.char_to_byte(start);
             let old_end_byte = self.text.char_to_byte(end);
+            let start_position = byte_to_point(&self.text, start_byte);
+            let old_end_position = byte_to_point(&self.text, old_end_byte);
             self.pending_ts_edits.borrow_mut().push(InputEdit {
                 start_byte,
                 old_end_byte,
                 new_end_byte: start_byte,
-                start_position: Point { row: 0, column: 0 },
-                old_end_position: Point { row: 0, column: 0 },
-                new_end_position: Point { row: 0, column: 0 },
+                start_position,
+                old_end_position,
+                new_end_position: start_position,
             });
             self.text.remove(start..end);
             self.modified = true;
@@ -436,6 +467,60 @@ mod tests {
         // Second take should be empty
         let edits2 = buf.take_pending_edits();
         assert!(edits2.is_empty());
+    }
+
+    #[test]
+    fn pending_edits_insert_singleline_points() {
+        let mut buf = Buffer::from_str(0, "test", "hello\nworld");
+        // Insert "XY" at char 3 (byte 3, position row=0, col=3)
+        buf.insert(3, "XY");
+        let edits = buf.take_pending_edits();
+        let edit = &edits[0];
+        assert_eq!(edit.start_position, Point { row: 0, column: 3 });
+        assert_eq!(edit.old_end_position, Point { row: 0, column: 3 });
+        // "XY" is 2 bytes, so new_end is (0, 5)
+        assert_eq!(edit.new_end_position, Point { row: 0, column: 5 });
+    }
+
+    #[test]
+    fn pending_edits_insert_multiline_points() {
+        let mut buf = Buffer::from_str(0, "test", "hello\nworld");
+        // Insert "\nfoo" at char 5 (byte 5, position row=0, col=5)
+        // After: "hello\nfoo\nworld"
+        buf.insert(5, "\nfoo");
+        let edits = buf.take_pending_edits();
+        let edit = &edits[0];
+        assert_eq!(edit.start_position, Point { row: 0, column: 5 });
+        assert_eq!(edit.old_end_position, Point { row: 0, column: 5 });
+        // "\nfoo" has 1 newline then 3 bytes => (0+1, 3)
+        assert_eq!(edit.new_end_position, Point { row: 1, column: 3 });
+    }
+
+    #[test]
+    fn pending_edits_delete_multiline_points() {
+        let mut buf = Buffer::from_str(0, "test", "hello\nworld\nfoo");
+        // Delete chars 3..8: removes "lo\nwo" (bytes 3..8)
+        buf.remove(3, 8);
+        let edits = buf.take_pending_edits();
+        let edit = &edits[0];
+        // start at byte 3: row 0, col 3
+        assert_eq!(edit.start_position, Point { row: 0, column: 3 });
+        // old_end at byte 8: "hello\nwo" => row 1, col 2
+        assert_eq!(edit.old_end_position, Point { row: 1, column: 2 });
+        // new_end same as start for delete
+        assert_eq!(edit.new_end_position, Point { row: 0, column: 3 });
+    }
+
+    #[test]
+    fn pending_edits_delete_singleline_points() {
+        let mut buf = Buffer::from_str(0, "test", "hello world");
+        // Delete chars 5..11: " world" (bytes 5..11)
+        buf.remove(5, 11);
+        let edits = buf.take_pending_edits();
+        let edit = &edits[0];
+        assert_eq!(edit.start_position, Point { row: 0, column: 5 });
+        assert_eq!(edit.old_end_position, Point { row: 0, column: 11 });
+        assert_eq!(edit.new_end_position, Point { row: 0, column: 5 });
     }
 
     #[test]

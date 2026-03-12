@@ -1054,9 +1054,9 @@ mod tests {
             start_byte: 12,
             old_end_byte: 12,
             new_end_byte: 17,
-            start_position: Point { row: 0, column: 0 },
-            old_end_position: Point { row: 0, column: 0 },
-            new_end_position: Point { row: 0, column: 0 },
+            start_position: Point { row: 0, column: 12 },
+            old_end_position: Point { row: 0, column: 12 },
+            new_end_position: Point { row: 0, column: 17 },
         };
         let r2 = rope("fn main() { hellolet x = 42; }");
         let spans_incremental = state.highlight_rope(&r2, &[edit]);
@@ -1089,9 +1089,9 @@ mod tests {
             start_byte: 12,
             old_end_byte: 16,
             new_end_byte: 12,
-            start_position: Point { row: 0, column: 0 },
-            old_end_position: Point { row: 0, column: 0 },
-            new_end_position: Point { row: 0, column: 0 },
+            start_position: Point { row: 0, column: 12 },
+            old_end_position: Point { row: 0, column: 16 },
+            new_end_position: Point { row: 0, column: 12 },
         };
         let r2 = rope("fn main() { x = 42; }");
         let spans_incremental = state.highlight_rope(&r2, &[edit]);
@@ -1109,6 +1109,40 @@ mod tests {
     }
 
     #[test]
+    fn incremental_parse_multiline_edit() {
+        let state = SyntaxState::new(Language::Rust).unwrap();
+
+        // Initial: single line
+        let r1 = rope("fn main() {}");
+        let _spans1 = state.highlight_rope(&r1, &[]);
+
+        // Insert newline + new function
+        // "fn main() {}" -> "fn main() {}\nfn foo() {}"
+        let edit = tree_sitter::InputEdit {
+            start_byte: 12,
+            old_end_byte: 12,
+            new_end_byte: 25,
+            start_position: Point { row: 0, column: 12 },
+            old_end_position: Point { row: 0, column: 12 },
+            new_end_position: Point { row: 1, column: 12 },
+        };
+        let r2 = rope("fn main() {}\nfn foo() {}");
+        let spans_inc = state.highlight_rope(&r2, &[edit]);
+
+        // Fresh parse
+        let state2 = SyntaxState::new(Language::Rust).unwrap();
+        let spans_fresh = state2.highlight_rope(&r2, &[]);
+
+        assert_eq!(spans_inc.len(), spans_fresh.len(),
+            "Incremental and fresh parse should produce same spans");
+        for (i, (inc, fresh)) in spans_inc.iter().zip(spans_fresh.iter()).enumerate() {
+            assert_eq!(inc.start, fresh.start, "Span {} start mismatch", i);
+            assert_eq!(inc.end, fresh.end, "Span {} end mismatch", i);
+            assert_eq!(inc.style, fresh.style, "Span {} style mismatch", i);
+        }
+    }
+
+    #[test]
     fn incremental_parse_multi_edit() {
         let state = SyntaxState::new(Language::Rust).unwrap();
 
@@ -1121,18 +1155,18 @@ mod tests {
             start_byte: 11,
             old_end_byte: 11,
             new_end_byte: 12,
-            start_position: Point { row: 0, column: 0 },
-            old_end_position: Point { row: 0, column: 0 },
-            new_end_position: Point { row: 0, column: 0 },
+            start_position: Point { row: 0, column: 11 },
+            old_end_position: Point { row: 0, column: 11 },
+            new_end_position: Point { row: 0, column: 12 },
         };
         // Edit 2: insert "42" at byte 12 -> "fn main() { 42}"
         let edit2 = tree_sitter::InputEdit {
             start_byte: 12,
             old_end_byte: 12,
             new_end_byte: 14,
-            start_position: Point { row: 0, column: 0 },
-            old_end_position: Point { row: 0, column: 0 },
-            new_end_position: Point { row: 0, column: 0 },
+            start_position: Point { row: 0, column: 12 },
+            old_end_position: Point { row: 0, column: 12 },
+            new_end_position: Point { row: 0, column: 14 },
         };
 
         let r2 = rope("fn main() { 42}");
