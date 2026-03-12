@@ -371,6 +371,17 @@ struct HighlightCache {
     spans: Vec<StyledSpan>,
 }
 
+/// Normalize an injection language name: trim whitespace, take the first word
+/// (splitting on comma/space), and lowercase. This handles info strings like
+/// "rust,ignore" or "Rust no_run" in markdown fenced code blocks.
+fn normalize_injection_language(name: &str) -> String {
+    name.trim()
+        .split(&[',', ' ', '\t'][..])
+        .next()
+        .unwrap_or("")
+        .to_lowercase()
+}
+
 /// Holds a parsed tree and highlight config for a buffer.
 #[allow(dead_code)]
 pub struct SyntaxState {
@@ -570,18 +581,21 @@ impl SyntaxState {
         }
         drop(matches);
 
-        // Group injections by language name
+        // Group injections by normalized language name, keeping all ranges
         let mut grouped: std::collections::HashMap<String, Vec<std::ops::Range<usize>>> =
             std::collections::HashMap::new();
         for (name, ranges, _include_children) in injections {
+            let normalized = normalize_injection_language(&name);
             grouped
-                .entry(name)
+                .entry(normalized)
                 .or_default()
-                .push(ranges.into_iter().next().unwrap());
+                .extend(ranges);
         }
 
         // Process each injection language
-        for (lang_name, ranges) in &grouped {
+        for (lang_name, ranges) in &mut grouped {
+            // Sort ranges by start byte (required by set_included_ranges)
+            ranges.sort_by_key(|r| r.start);
             let injection_config = match self.injection_configs.iter()
                 .find(|(name, _)| name == lang_name)
             {
@@ -1039,6 +1053,59 @@ mod tests {
     #[test]
     fn best_highlight_match_none() {
         assert_eq!(best_highlight_match("nonexistent"), None);
+    }
+
+    #[test]
+    fn rust_escape_in_string_has_escape_style() {
+        let state = SyntaxState::new(Language::Rust).unwrap();
+        // The string contains an escape sequence \n
+        let code = r#"let s = "hello\nworld";"#;
+        let r = rope(code);
+        let spans = state.highlight_rope(&r, &[]);
+
+        let escape_style = style_for_highlight(highlight_index("escape"));
+        // Find the byte position of the backslash in \n
+        let escape_pos = code.find("\\n").unwrap();
+        let has_escape = spans.iter().any(|s| {
+            s.start <= escape_pos && s.end > escape_pos && s.style == escape_style
+        });
+        assert!(
+            has_escape,
+            "Escape sequence \\n should have escape style at byte {}, spans: {:?}",
+            escape_pos, spans
+        );
+    }
+
+    #[test]
+    fn injection_language_name_normalized() {
+        // Test that the normalize function handles whitespace and extras
+        assert_eq!(normalize_injection_language("rust"), "rust");
+        assert_eq!(normalize_injection_language("  rust  "), "rust");
+        assert_eq!(normalize_injection_language("rust,ignore"), "rust");
+        assert_eq!(normalize_injection_language("rust no_run"), "rust");
+        assert_eq!(normalize_injection_language("Rust"), "rust");
+    }
+
+    #[test]
+    fn injection_ranges_all_preserved() {
+        // Verify that multiple markdown code blocks of the same injection
+        // language all get their ranges passed through (not just the first).
+        let state = SyntaxState::new(Language::Markdown).unwrap();
+        // Two inline injection ranges — the markdown block parser injects
+        // markdown_inline for each (inline) node.
+        let md = "Hello *world*\n\nGoodbye *moon*\n";
+        let r = rope(md);
+        let spans = state.highlight_rope(&r, &[]);
+
+        // Both *world* and *moon* should produce italic spans
+        let italic_spans: Vec<_> = spans.iter()
+            .filter(|s| s.style.add_modifier.contains(Modifier::ITALIC))
+            .collect();
+        assert!(
+            italic_spans.len() >= 2,
+            "Both emphasis spans should be highlighted, got {} italic spans: {:?}",
+            italic_spans.len(), italic_spans
+        );
     }
 
     #[test]
