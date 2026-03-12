@@ -250,6 +250,9 @@ pub fn default_keymap() -> KeymapNode {
     root.bind(&[ctrl('_')], Command::Undo);
     // Many terminals send C-/ as Ctrl-7 (byte 0x1F, shared key on US keyboards)
     root.bind(&[ctrl('7')], Command::Undo);
+    // Kitty keyboard protocol sends C-_ as base key '-' with Ctrl+Shift;
+    // Key::from_event strips Shift, so we need ctrl('-')
+    root.bind(&[ctrl('-')], Command::Undo);
 
     // Mark/Region
     root.bind(&[ctrl(' ')], Command::SetMark);
@@ -430,6 +433,37 @@ mod tests {
         match state.process_key(event) {
             KeymapResult::Matched(cmd) => assert_eq!(cmd, Command::ForwardWord),
             other => panic!("Expected Matched(ForwardWord), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn ctrl_underscore_undo_all_variants() {
+        // Ctrl-_ should be Undo regardless of how the terminal reports it.
+        // Legacy terminals: ctrl('_') or ctrl('7')
+        // Kitty keyboard protocol: Ctrl+Shift+- reports as ctrl('-') with SHIFT stripped
+        let keymap = default_keymap();
+
+        let mut state = KeymapState::new(keymap.clone());
+        let event = KeyEvent::new(KeyCode::Char('_'), KeyModifiers::CONTROL);
+        match state.process_key(event) {
+            KeymapResult::Matched(cmd) => assert_eq!(cmd, Command::Undo),
+            other => panic!("Expected Matched(Undo) for ctrl('_'), got {:?}", other),
+        }
+
+        let mut state = KeymapState::new(keymap.clone());
+        let event = KeyEvent::new(KeyCode::Char('7'), KeyModifiers::CONTROL);
+        match state.process_key(event) {
+            KeymapResult::Matched(cmd) => assert_eq!(cmd, Command::Undo),
+            other => panic!("Expected Matched(Undo) for ctrl('7'), got {:?}", other),
+        }
+
+        // Kitty protocol: terminal sends base key '-' with Ctrl+Shift,
+        // Key::from_event strips Shift, leaving ctrl('-')
+        let mut state = KeymapState::new(keymap.clone());
+        let event = KeyEvent::new(KeyCode::Char('-'), KeyModifiers::CONTROL | KeyModifiers::SHIFT);
+        match state.process_key(event) {
+            KeymapResult::Matched(cmd) => assert_eq!(cmd, Command::Undo),
+            other => panic!("Expected Matched(Undo) for ctrl('-') (Kitty protocol), got {:?}", other),
         }
     }
 

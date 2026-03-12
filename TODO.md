@@ -1,3 +1,5 @@
+- [x] Ctrl-_ does not undo in some terminals
+- [ ] Killing with Ctrl-k and then yanking with Ctrl-y doesn't yank the killed text, but the OS's clipboard. Either the killing should kill "into" the OS clipboard, or yanking should ignore the OS clipboard if there's stuff in the kill ring. Let's discuss. Also: How does Emacs do this?
 - [x] Horizontal splits should be separated by a bar
 - [x] Support mouse scrolling - the pane that the mouse is over should scroll, but the focused pane shouldn't change
 - [x] Remove the line number gutter
