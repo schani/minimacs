@@ -67,7 +67,7 @@ pub struct Buffer {
     pub edit_generation: usize,
     /// Pending tree-sitter InputEdits accumulated since last highlight.
     /// The render path drains these via `take_pending_edits()`.
-    pub pending_ts_edits: RefCell<Vec<InputEdit>>,
+    pending_ts_edits: RefCell<Vec<InputEdit>>,
 }
 
 #[allow(dead_code)]

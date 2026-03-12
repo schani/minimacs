@@ -1136,7 +1136,7 @@ mod tests {
 
         // Initial parse
         let r1 = rope("fn main() { let x = 42; }");
-        let spans1 = state.highlight_rope(&r1, &[]);
+        let _spans1 = state.highlight_rope(&r1, &[]);
 
         // Simulate editing: insert "hello" at byte 12 ("let" -> "hellolet")
         let edit = tree_sitter::InputEdit {
