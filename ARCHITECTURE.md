@@ -260,9 +260,12 @@ byte slices.
 ### Incremental Parsing
 
 `Buffer::insert()` and `Buffer::remove()` record `tree_sitter::InputEdit`
-values in `pending_ts_edits` **before** mutating the Rope. Following Helix's
-approach, all `Point` fields in `InputEdit` are set to zero — tree-sitter
-recomputes them from byte offsets during parsing. At render time, pending edits
+values in `pending_ts_edits` **before** mutating the Rope. Point fields are
+computed accurately: `start_position` and `old_end_position` use
+`byte_to_point()` on the pre-mutation Rope; `new_end_position` uses
+`point_after_insert()` which walks the inserted text counting newlines and byte
+columns. For deletions, `new_end_position` equals `start_position`.
+At render time, pending edits
 are drained and applied to the old `Tree` via `tree.edit()`, then
 `parse_with_options()` is called with the edited tree so tree-sitter reuses
 unchanged subtrees. The new tree is stored for the next incremental parse.
@@ -287,18 +290,20 @@ The renderer converts spans to per-character `Style` entries in a
 
 **Caching**: `SyntaxState` caches the most recent highlight result in a
 `RefCell<Option<HighlightCache>>`. The cache stores the `edit_generation`
-(incremented on every `Buffer::insert()` / `remove()`), the highlighted byte
-range, and the resulting spans. On cache hits (the common case for scrolling,
-cursor movement, and idle frames), the re-parse is skipped entirely. The cache
-is invalidated when the buffer's `edit_generation` changes or when the visible
-region extends beyond the previously highlighted range.
+(incremented on every `Buffer::insert()` / `remove()`), the full rope byte
+length, and the resulting spans. Since `highlight_rope()` always parses the full
+file, the cache stores `rope.len_bytes()` so it remains valid across scroll
+positions. On cache hits (the common case for scrolling, cursor movement, and
+idle frames), the re-parse is skipped entirely. The cache is invalidated when the
+buffer's `edit_generation` changes.
 
 **Language injections**: `SyntaxState` supports tree-sitter language injections
 via `injection_configs`, a list of `(name, HighlightConfig)` pairs. During
-highlighting, injection matches are grouped by language name, and each group is
-parsed with `set_included_ranges()`. Injection range points are computed from the
-Rope (not from node positions, which may be incorrect due to zero-valued
-InputEdit points). Markdown uses this to inject the `markdown_inline` parser for
+highlighting, injection matches are grouped by normalized language name (trimmed,
+first word, lowercased — handles info strings like `rust,ignore`), all content
+ranges per match are preserved, and ranges are sorted by start byte before
+calling `set_included_ranges()`. Injection range points are computed from the
+Rope directly. Markdown uses this to inject the `markdown_inline` parser for
 inline content (emphasis, strong, code spans, links). A custom injection query
 with `injection.include-children` is used instead of the upstream default, which
 omits it and causes empty injection ranges. Injection trees are not cached
