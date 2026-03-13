@@ -3143,4 +3143,185 @@ mod tests {
         editor.execute(Command::Paste);
         assert_eq!(editor.buffer_text(), "aaa\nbbb\nccc");
     }
+
+    // === Vim-specific command tests ===
+
+    #[test]
+    fn open_line_below_basic() {
+        let mut editor = Editor::new_with_text("hello\nworld");
+        editor.pane_tree.focused_pane_mut().point = 2; // mid "hello"
+        editor.execute(Command::OpenLineBelow);
+        assert_eq!(editor.buffer_text(), "hello\n\nworld");
+        assert_eq!(editor.point(), 6); // on empty new line
+    }
+
+    #[test]
+    fn open_line_below_preserves_indent() {
+        let mut editor = Editor::new_with_text("    hello\nworld");
+        editor.pane_tree.focused_pane_mut().point = 6; // mid "hello"
+        editor.execute(Command::OpenLineBelow);
+        assert_eq!(editor.buffer_text(), "    hello\n    \nworld");
+        assert_eq!(editor.point(), 14); // after indent on new line
+    }
+
+    #[test]
+    fn open_line_above_basic() {
+        let mut editor = Editor::new_with_text("hello\nworld");
+        editor.pane_tree.focused_pane_mut().point = 8; // mid "world"
+        editor.execute(Command::OpenLineAbove);
+        assert_eq!(editor.buffer_text(), "hello\n\nworld");
+        assert_eq!(editor.point(), 6); // on the new line
+    }
+
+    #[test]
+    fn open_line_above_preserves_indent() {
+        let mut editor = Editor::new_with_text("    hello");
+        editor.pane_tree.focused_pane_mut().point = 6;
+        editor.execute(Command::OpenLineAbove);
+        assert_eq!(editor.buffer_text(), "    \n    hello");
+        assert_eq!(editor.point(), 4); // after indent on new line
+    }
+
+    #[test]
+    fn open_line_above_first_line() {
+        let mut editor = Editor::new_with_text("hello");
+        editor.pane_tree.focused_pane_mut().point = 2;
+        editor.execute(Command::OpenLineAbove);
+        assert_eq!(editor.buffer_text(), "\nhello");
+        assert_eq!(editor.point(), 0);
+    }
+
+    #[test]
+    fn delete_line_basic() {
+        let mut editor = Editor::new_with_text("aaa\nbbb\nccc");
+        editor.pane_tree.focused_pane_mut().point = 5; // mid "bbb"
+        editor.execute(Command::DeleteLine);
+        assert_eq!(editor.buffer_text(), "aaa\nccc");
+        assert_eq!(editor.clipboard, "bbb\n");
+        assert_eq!(editor.point(), 4); // start of "ccc"
+    }
+
+    #[test]
+    fn delete_line_last_line() {
+        let mut editor = Editor::new_with_text("aaa\nbbb");
+        editor.pane_tree.focused_pane_mut().point = 5; // mid "bbb"
+        editor.execute(Command::DeleteLine);
+        assert_eq!(editor.buffer_text(), "aaa\n");
+        assert_eq!(editor.clipboard, "bbb");
+    }
+
+    #[test]
+    fn delete_line_only_line() {
+        let mut editor = Editor::new_with_text("hello");
+        editor.execute(Command::DeleteLine);
+        assert_eq!(editor.buffer_text(), "");
+        assert_eq!(editor.clipboard, "hello");
+        assert_eq!(editor.point(), 0);
+    }
+
+    #[test]
+    fn yank_line_copies_without_modifying() {
+        let mut editor = Editor::new_with_text("aaa\nbbb\nccc");
+        editor.pane_tree.focused_pane_mut().point = 5; // mid "bbb"
+        editor.execute(Command::YankLine);
+        assert_eq!(editor.buffer_text(), "aaa\nbbb\nccc"); // unchanged
+        assert_eq!(editor.clipboard, "bbb\n");
+        assert_eq!(editor.point(), 5); // unchanged
+    }
+
+    #[test]
+    fn yank_line_last_line_no_newline() {
+        let mut editor = Editor::new_with_text("aaa\nbbb");
+        editor.pane_tree.focused_pane_mut().point = 5;
+        editor.execute(Command::YankLine);
+        assert_eq!(editor.clipboard, "bbb");
+    }
+
+    #[test]
+    fn join_lines_basic() {
+        let mut editor = Editor::new_with_text("hello\nworld");
+        editor.pane_tree.focused_pane_mut().point = 2;
+        editor.execute(Command::JoinLines);
+        assert_eq!(editor.buffer_text(), "hello world");
+        assert_eq!(editor.point(), 5); // at the join point
+    }
+
+    #[test]
+    fn join_lines_strips_indent() {
+        let mut editor = Editor::new_with_text("hello\n    world");
+        editor.pane_tree.focused_pane_mut().point = 0;
+        editor.execute(Command::JoinLines);
+        assert_eq!(editor.buffer_text(), "hello world");
+    }
+
+    #[test]
+    fn join_lines_last_line_noop() {
+        let mut editor = Editor::new_with_text("hello");
+        editor.pane_tree.focused_pane_mut().point = 2;
+        editor.execute(Command::JoinLines);
+        assert_eq!(editor.buffer_text(), "hello"); // unchanged
+    }
+
+    #[test]
+    fn vim_command_w_saves() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.txt");
+        std::fs::write(&file, "original").unwrap();
+
+        let mut editor = Editor::new();
+        editor.open_file(&file).unwrap();
+        editor.execute(Command::InsertChar('X'));
+        editor.execute(Command::VimCommandPrompt);
+        assert!(editor.minibuffer.is_active());
+        editor.set_minibuffer_text("w");
+        editor.submit_prompt();
+        let content = std::fs::read_to_string(&file).unwrap();
+        assert_eq!(content, "Xoriginal");
+    }
+
+    #[test]
+    fn vim_command_q_quits() {
+        let mut editor = Editor::new();
+        editor.execute(Command::VimCommandPrompt);
+        editor.set_minibuffer_text("q");
+        editor.submit_prompt();
+        assert!(editor.should_quit);
+    }
+
+    #[test]
+    fn vim_command_wq_saves_and_quits() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.txt");
+        std::fs::write(&file, "original").unwrap();
+
+        let mut editor = Editor::new();
+        editor.open_file(&file).unwrap();
+        editor.execute(Command::InsertChar('X'));
+        editor.execute(Command::VimCommandPrompt);
+        editor.set_minibuffer_text("wq");
+        editor.submit_prompt();
+        assert!(editor.should_quit);
+        let content = std::fs::read_to_string(&file).unwrap();
+        assert_eq!(content, "Xoriginal");
+    }
+
+    #[test]
+    fn vim_command_q_bang_force_quits() {
+        let mut editor = Editor::new_with_text("unsaved");
+        editor.execute(Command::InsertChar('X'));
+        editor.execute(Command::VimCommandPrompt);
+        editor.set_minibuffer_text("q!");
+        editor.submit_prompt();
+        assert!(editor.should_quit); // quits even with modified buffer
+    }
+
+    #[test]
+    fn vim_command_unknown_shows_message() {
+        let mut editor = Editor::new();
+        editor.execute(Command::VimCommandPrompt);
+        editor.set_minibuffer_text("foobar");
+        editor.submit_prompt();
+        assert!(!editor.should_quit);
+        assert!(editor.minibuffer.message.as_deref().unwrap().contains("Unknown command"));
+    }
 }

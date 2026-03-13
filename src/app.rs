@@ -213,8 +213,23 @@ where
                 _ => {
                     self.editor.minibuffer.completions = None;
                     self.editor.minibuffer.completion_page = 0;
-                    // Route through keymap for editing, self-insert for chars
-                    self.vim_process_key_with_self_insert(key);
+                    // Use insert-mode processing for minibuffer input,
+                    // regardless of the current vim mode.
+                    let mut insert_state = KeymapState::new(vim_insert_keymap());
+                    match insert_state.process_key(key) {
+                        KeymapResult::Matched(cmd) => {
+                            self.editor.execute(cmd);
+                        }
+                        _ => {
+                            if let KeyCode::Char(c) = key.code {
+                                if !key.modifiers.contains(KeyModifiers::CONTROL)
+                                    && !key.modifiers.contains(KeyModifiers::ALT)
+                                {
+                                    self.editor.execute(Command::InsertChar(c));
+                                }
+                            }
+                        }
+                    }
                     return;
                 }
             }
@@ -2119,5 +2134,301 @@ mod tests {
 
         let expected = format!("{}/", app.editor.cwd.display());
         assert_eq!(app.editor.minibuffer_text(), expected);
+    }
+
+    // === Vim mode tests ===
+
+    fn vim_app_with_text(
+        width: u16,
+        height: u16,
+        text: &str,
+        events: Vec<Event>,
+    ) -> (App<TestBackend>, TestEventSource) {
+        let backend = TestBackend::new(width, height);
+        let terminal = Terminal::new(backend).unwrap();
+        let mut editor = Editor::new_with_text(text);
+        editor.vim_mode = Some(crate::editor::VimMode::Normal);
+        let app = App::new(terminal, editor);
+        let event_source = TestEventSource::new(events);
+        (app, event_source)
+    }
+
+    #[test]
+    fn vim_starts_in_normal_mode() {
+        let (app, _) = vim_app_with_text(40, 10, "hello", vec![]);
+        assert_eq!(app.editor.vim_mode, Some(crate::editor::VimMode::Normal));
+    }
+
+    #[test]
+    fn vim_i_enters_insert_mode() {
+        let events = vec![char_key('i')];
+        let (mut app, mut events) = vim_app_with_text(40, 10, "hello", events);
+        app.run_until_idle(&mut events).unwrap();
+        assert_eq!(app.editor.vim_mode, Some(crate::editor::VimMode::Insert));
+    }
+
+    #[test]
+    fn vim_esc_returns_to_normal() {
+        let events = vec![char_key('i'), key(KeyCode::Esc)];
+        let (mut app, mut events) = vim_app_with_text(40, 10, "hello", events);
+        app.run_until_idle(&mut events).unwrap();
+        assert_eq!(app.editor.vim_mode, Some(crate::editor::VimMode::Normal));
+    }
+
+    #[test]
+    fn vim_normal_mode_no_self_insert() {
+        // In normal mode, pressing 'x' should delete, not insert 'x'
+        let events = vec![char_key('l'), char_key('l')]; // just movement
+        let (mut app, mut events) = vim_app_with_text(40, 10, "hello", events);
+        app.run_until_idle(&mut events).unwrap();
+        assert_eq!(app.editor.buffer_text(), "hello"); // unchanged
+        assert_eq!(app.editor.point(), 2); // moved right twice
+    }
+
+    #[test]
+    fn vim_insert_mode_types_text() {
+        let mut events = vec![char_key('i')]; // enter insert
+        events.extend(key_events("world"));
+        let (mut app, mut events) = vim_app_with_text(40, 10, "", events);
+        app.run_until_idle(&mut events).unwrap();
+        assert_eq!(app.editor.buffer_text(), "world");
+    }
+
+    #[test]
+    fn vim_hjkl_movement() {
+        // Start at 0,0 on a multi-line buffer
+        let events = vec![
+            char_key('j'), // down to line 2
+            char_key('l'), // right
+            char_key('l'), // right
+            char_key('k'), // back up
+        ];
+        let (mut app, mut events) = vim_app_with_text(40, 10, "hello\nworld", events);
+        app.run_until_idle(&mut events).unwrap();
+        // j→(1,0), l→(1,1), l→(1,2), k→(0,2)
+        assert_eq!(app.editor.point(), 2);
+    }
+
+    #[test]
+    fn vim_dd_deletes_line() {
+        let events = vec![char_key('d'), char_key('d')];
+        let (mut app, mut events) = vim_app_with_text(40, 10, "aaa\nbbb\nccc", events);
+        app.run_until_idle(&mut events).unwrap();
+        assert_eq!(app.editor.buffer_text(), "bbb\nccc");
+    }
+
+    #[test]
+    fn vim_yy_yanks_line() {
+        let events = vec![char_key('y'), char_key('y')];
+        let (mut app, mut events) = vim_app_with_text(40, 10, "aaa\nbbb", events);
+        app.run_until_idle(&mut events).unwrap();
+        assert_eq!(app.editor.buffer_text(), "aaa\nbbb"); // unchanged
+        assert_eq!(app.editor.clipboard, "aaa\n");
+    }
+
+    #[test]
+    fn vim_x_deletes_char() {
+        let events = vec![char_key('x')];
+        let (mut app, mut events) = vim_app_with_text(40, 10, "hello", events);
+        app.run_until_idle(&mut events).unwrap();
+        assert_eq!(app.editor.buffer_text(), "ello");
+    }
+
+    #[test]
+    fn vim_a_inserts_after_cursor() {
+        let mut events = vec![char_key('a')];
+        events.extend(key_events("X"));
+        let (mut app, mut events) = vim_app_with_text(40, 10, "hello", events);
+        app.run_until_idle(&mut events).unwrap();
+        assert_eq!(app.editor.buffer_text(), "hXello");
+    }
+
+    #[test]
+    fn vim_shift_a_inserts_at_end_of_line() {
+        let mut events = vec![
+            Event::Key(KeyEvent::new(KeyCode::Char('A'), KeyModifiers::SHIFT)),
+        ];
+        events.extend(key_events("!"));
+        let (mut app, mut events) = vim_app_with_text(40, 10, "hello", events);
+        app.run_until_idle(&mut events).unwrap();
+        assert_eq!(app.editor.buffer_text(), "hello!");
+    }
+
+    #[test]
+    fn vim_o_opens_line_below() {
+        let mut events = vec![char_key('o')];
+        events.extend(key_events("new"));
+        let (mut app, mut events) = vim_app_with_text(40, 10, "hello\nworld", events);
+        app.run_until_idle(&mut events).unwrap();
+        assert_eq!(app.editor.buffer_text(), "hello\nnew\nworld");
+        assert_eq!(app.editor.vim_mode, Some(crate::editor::VimMode::Insert));
+    }
+
+    #[test]
+    fn vim_shift_o_opens_line_above() {
+        let mut events = vec![
+            Event::Key(KeyEvent::new(KeyCode::Char('O'), KeyModifiers::SHIFT)),
+        ];
+        events.extend(key_events("new"));
+        let (mut app, mut events) = vim_app_with_text(40, 10, "hello", events);
+        app.run_until_idle(&mut events).unwrap();
+        assert_eq!(app.editor.buffer_text(), "new\nhello");
+        assert_eq!(app.editor.vim_mode, Some(crate::editor::VimMode::Insert));
+    }
+
+    #[test]
+    fn vim_colon_w_saves() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.txt");
+        std::fs::write(&file, "original").unwrap();
+
+        let mut editor = Editor::new();
+        editor.vim_mode = Some(crate::editor::VimMode::Normal);
+        editor.open_file(&file).unwrap();
+
+        let backend = TestBackend::new(40, 10);
+        let terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new(terminal, editor);
+
+        // Insert 'X' then save with :w
+        let events = vec![
+            char_key('i'),
+            Event::Key(KeyEvent::new(KeyCode::Char('X'), KeyModifiers::NONE)),
+            key(KeyCode::Esc),
+            char_key(':'),
+            char_key('w'),
+            key(KeyCode::Enter),
+        ];
+        let mut event_source = TestEventSource::new(events);
+        app.run_until_idle(&mut event_source).unwrap();
+
+        let content = std::fs::read_to_string(&file).unwrap();
+        assert_eq!(content, "Xoriginal");
+    }
+
+    #[test]
+    fn vim_colon_q_quits() {
+        let events = vec![
+            char_key(':'),
+            char_key('q'),
+            key(KeyCode::Enter),
+        ];
+        let (mut app, mut events) = vim_app_with_text(40, 10, "", events);
+        app.run_until_idle(&mut events).unwrap();
+        assert!(app.editor.should_quit);
+    }
+
+    #[test]
+    fn vim_visual_select_and_yank() {
+        let events = vec![
+            char_key('v'),          // set mark at 0
+            char_key('l'),          // move to 1
+            char_key('l'),          // move to 2
+            char_key('l'),          // move to 3
+            char_key('y'),          // copy region 0..3
+        ];
+        let (mut app, mut events) = vim_app_with_text(40, 10, "hello", events);
+        app.run_until_idle(&mut events).unwrap();
+        assert_eq!(app.editor.clipboard, "hel");
+    }
+
+    #[test]
+    fn vim_visual_select_and_delete() {
+        let events = vec![
+            char_key('v'),          // set mark at 0
+            char_key('l'),          // move to 1
+            char_key('l'),          // move to 2
+            char_key('d'),          // cut region 0..2
+        ];
+        let (mut app, mut events) = vim_app_with_text(40, 10, "hello", events);
+        app.run_until_idle(&mut events).unwrap();
+        assert_eq!(app.editor.buffer_text(), "llo");
+        assert_eq!(app.editor.clipboard, "he");
+    }
+
+    #[test]
+    fn vim_gg_goes_to_beginning() {
+        let events = vec![
+            Event::Key(KeyEvent::new(KeyCode::Char('G'), KeyModifiers::SHIFT)), // go to end
+            char_key('g'),
+            char_key('g'), // go to beginning
+        ];
+        let (mut app, mut events) = vim_app_with_text(40, 10, "hello\nworld\nfoo", events);
+        app.run_until_idle(&mut events).unwrap();
+        assert_eq!(app.editor.point(), 0);
+    }
+
+    #[test]
+    fn vim_mode_indicator_in_mode_line() {
+        let (mut app, mut events) = vim_app_with_text(40, 10, "hello", vec![]);
+        app.run_until_idle(&mut events).unwrap();
+        let screen = capture_screen(&app.terminal);
+        assert!(screen.contains("[N]"), "should show [N] in normal mode");
+
+        // Switch to insert and re-render
+        let mut events = TestEventSource::new(vec![char_key('i')]);
+        app.run_until_idle(&mut events).unwrap();
+        let screen = capture_screen(&app.terminal);
+        assert!(screen.contains("[I]"), "should show [I] in insert mode");
+    }
+
+    #[test]
+    fn vim_search_forward() {
+        let events = vec![
+            char_key('/'),          // start search
+            char_key('w'),
+            char_key('o'),
+            key(KeyCode::Enter),    // accept
+        ];
+        let (mut app, mut events) = vim_app_with_text(40, 10, "hello world", events);
+        app.run_until_idle(&mut events).unwrap();
+        assert_eq!(app.editor.point(), 6); // at "world"
+    }
+
+    #[test]
+    fn vim_shift_j_joins_lines() {
+        let events = vec![
+            Event::Key(KeyEvent::new(KeyCode::Char('J'), KeyModifiers::SHIFT)),
+        ];
+        let (mut app, mut events) = vim_app_with_text(40, 10, "hello\nworld", events);
+        app.run_until_idle(&mut events).unwrap();
+        assert_eq!(app.editor.buffer_text(), "hello world");
+    }
+
+    #[test]
+    fn vim_u_undoes() {
+        let events = vec![
+            char_key('x'),  // delete 'h'
+            char_key('u'),  // undo
+        ];
+        let (mut app, mut events) = vim_app_with_text(40, 10, "hello", events);
+        app.run_until_idle(&mut events).unwrap();
+        assert_eq!(app.editor.buffer_text(), "hello");
+    }
+
+    #[test]
+    fn vim_p_pastes() {
+        let events = vec![
+            char_key('d'), char_key('d'),  // delete line (yanks to clipboard)
+            char_key('p'),                  // paste
+        ];
+        let (mut app, mut events) = vim_app_with_text(40, 10, "aaa\nbbb", events);
+        app.run_until_idle(&mut events).unwrap();
+        // Deleted "aaa\n", pasted it back
+        assert!(app.editor.buffer_text().contains("aaa"));
+    }
+
+    #[test]
+    fn vim_ctrl_g_cancels() {
+        // Start a dd sequence, then C-g should cancel it
+        let events = vec![
+            char_key('d'),  // pending
+            ctrl('g'),      // cancel
+            char_key('l'),  // should work as normal movement
+        ];
+        let (mut app, mut events) = vim_app_with_text(40, 10, "hello", events);
+        app.run_until_idle(&mut events).unwrap();
+        assert_eq!(app.editor.buffer_text(), "hello"); // dd was cancelled
+        assert_eq!(app.editor.point(), 1); // l moved right
     }
 }

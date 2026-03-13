@@ -385,7 +385,8 @@ pub fn vim_normal_keymap() -> KeymapNode {
     // Clipboard
     root.bind(&[plain(KeyCode::Char('p'))], Command::Paste);
     root.bind(&[plain(KeyCode::Char('v'))], Command::SetMark);
-    root.bind(&[plain(KeyCode::Char('y'))], Command::Copy);
+    // Note: standalone 'y' (copy visual selection) is handled in app.rs
+    // before keymap lookup, so only 'yy' is bound here.
     root.bind(
         &[plain(KeyCode::Char('y')), plain(KeyCode::Char('y'))],
         Command::YankLine,
@@ -616,5 +617,178 @@ mod tests {
             KeymapResult::Matched(cmd) => assert_eq!(cmd, Command::GotoLine),
             other => panic!("Expected Matched(GotoLine), got {:?}", other),
         }
+    }
+
+    // === Vim keymap tests ===
+
+    #[test]
+    fn vim_normal_hjkl() {
+        let keymap = vim_normal_keymap();
+        let cases = vec![
+            ('h', Command::BackwardChar),
+            ('j', Command::NextLine),
+            ('k', Command::PreviousLine),
+            ('l', Command::ForwardChar),
+        ];
+        for (c, expected) in cases {
+            let mut state = KeymapState::new(keymap.clone());
+            let event = KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
+            match state.process_key(event) {
+                KeymapResult::Matched(cmd) => assert_eq!(cmd, expected, "key '{}'", c),
+                other => panic!("Expected Matched for '{}', got {:?}", c, other),
+            }
+        }
+    }
+
+    #[test]
+    fn vim_normal_word_motion() {
+        let keymap = vim_normal_keymap();
+
+        let mut state = KeymapState::new(keymap.clone());
+        let event = KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE);
+        match state.process_key(event) {
+            KeymapResult::Matched(cmd) => assert_eq!(cmd, Command::ForwardWord),
+            other => panic!("Expected ForwardWord, got {:?}", other),
+        }
+
+        let mut state = KeymapState::new(keymap.clone());
+        let event = KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE);
+        match state.process_key(event) {
+            KeymapResult::Matched(cmd) => assert_eq!(cmd, Command::BackwardWord),
+            other => panic!("Expected BackwardWord, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn vim_normal_dd_delete_line() {
+        let keymap = vim_normal_keymap();
+        let mut state = KeymapState::new(keymap);
+
+        let d1 = KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE);
+        match state.process_key(d1) {
+            KeymapResult::Pending => {}
+            other => panic!("Expected Pending for first 'd', got {:?}", other),
+        }
+
+        let d2 = KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE);
+        match state.process_key(d2) {
+            KeymapResult::Matched(cmd) => assert_eq!(cmd, Command::DeleteLine),
+            other => panic!("Expected Matched(DeleteLine), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn vim_normal_gg_buffer_beginning() {
+        let keymap = vim_normal_keymap();
+        let mut state = KeymapState::new(keymap);
+
+        let g1 = KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE);
+        match state.process_key(g1) {
+            KeymapResult::Pending => {}
+            other => panic!("Expected Pending for first 'g', got {:?}", other),
+        }
+
+        let g2 = KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE);
+        match state.process_key(g2) {
+            KeymapResult::Matched(cmd) => assert_eq!(cmd, Command::BufferBeginning),
+            other => panic!("Expected Matched(BufferBeginning), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn vim_normal_yy_yank_line() {
+        let keymap = vim_normal_keymap();
+        let mut state = KeymapState::new(keymap);
+
+        // 'y' alone is not bound (visual copy handled in app.rs), so first 'y' is Pending
+        let y1 = KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE);
+        match state.process_key(y1) {
+            KeymapResult::Pending => {}
+            other => panic!("Expected Pending for first 'y', got {:?}", other),
+        }
+
+        let y2 = KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE);
+        match state.process_key(y2) {
+            KeymapResult::Matched(cmd) => assert_eq!(cmd, Command::YankLine),
+            other => panic!("Expected Matched(YankLine), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn vim_normal_colon_command() {
+        let keymap = vim_normal_keymap();
+        let mut state = KeymapState::new(keymap);
+        let event = KeyEvent::new(KeyCode::Char(':'), KeyModifiers::NONE);
+        match state.process_key(event) {
+            KeymapResult::Matched(cmd) => assert_eq!(cmd, Command::VimCommandPrompt),
+            other => panic!("Expected Matched(VimCommandPrompt), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn vim_normal_pane_split() {
+        let keymap = vim_normal_keymap();
+        let mut state = KeymapState::new(keymap);
+
+        let cw = KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL);
+        match state.process_key(cw) {
+            KeymapResult::Pending => {}
+            other => panic!("Expected Pending for Ctrl-w, got {:?}", other),
+        }
+
+        let s = KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE);
+        match state.process_key(s) {
+            KeymapResult::Matched(cmd) => assert_eq!(cmd, Command::SplitVertical),
+            other => panic!("Expected Matched(SplitVertical), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn vim_insert_self_insert_fallthrough() {
+        let keymap = vim_insert_keymap();
+        let mut state = KeymapState::new(keymap);
+        // Printable chars should NOT be in the keymap (handled as self-insert fallback)
+        let event = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE);
+        match state.process_key(event) {
+            KeymapResult::NotFound => {}
+            other => panic!("Expected NotFound for 'a' in insert mode, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn vim_insert_enter() {
+        let keymap = vim_insert_keymap();
+        let mut state = KeymapState::new(keymap);
+        let event = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        match state.process_key(event) {
+            KeymapResult::Matched(cmd) => assert_eq!(cmd, Command::InsertNewline),
+            other => panic!("Expected Matched(InsertNewline), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn vim_insert_backspace() {
+        let keymap = vim_insert_keymap();
+        let mut state = KeymapState::new(keymap);
+        let event = KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE);
+        match state.process_key(event) {
+            KeymapResult::Matched(cmd) => assert_eq!(cmd, Command::DeleteBackward),
+            other => panic!("Expected Matched(DeleteBackward), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn set_keymap_clears_pending() {
+        let keymap = vim_normal_keymap();
+        let mut state = KeymapState::new(keymap);
+
+        // Start a dd chord
+        let d = KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE);
+        state.process_key(d);
+        assert!(state.has_pending());
+
+        // Switching keymap clears pending
+        state.set_keymap(vim_insert_keymap());
+        assert!(!state.has_pending());
     }
 }
