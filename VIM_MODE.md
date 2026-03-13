@@ -1,11 +1,13 @@
 # Vim Mode
 
-minimacs supports an optional vim-style modal editing mode. Launch with the
-`--vim` flag:
+minimacs supports an optional vim-style modal editing mode. Launch it with
+`minivim`:
 
 ```sh
-minimacs --vim myfile.txt
+minivim myfile.txt
 ```
+
+(You can also pass `--vim` to `minimacs` for the same effect.)
 
 The mode line shows `[N]` (Normal) or `[I]` (Insert) to indicate the current
 mode.

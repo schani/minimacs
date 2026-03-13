@@ -50,7 +50,7 @@ Requires Rust 1.70+ and a C compiler (for tree-sitter grammars).
 cargo build --release
 ```
 
-The binary is at `target/release/minimacs`.
+The binaries are at `target/release/minimacs` and `target/release/minivim`.
 
 To build without OS clipboard support (removes the `arboard` dependency):
 
@@ -149,11 +149,13 @@ cancels and restores the original position.
 
 ## Vim Mode
 
-minimacs also supports vim-style modal editing. Launch with `--vim`:
+minimacs also supports vim-style modal editing via the `minivim` binary:
 
 ```sh
-minimacs --vim myfile.txt
+minivim myfile.txt
 ```
+
+(You can also pass `--vim` to `minimacs` for the same effect.)
 
 This gives you Normal/Insert modes with standard vim bindings (`h/j/k/l`, `dd`,
 `yy`, `i/a/o`, `:w`, `:q`, etc.). See [VIM_MODE.md](VIM_MODE.md) for the full

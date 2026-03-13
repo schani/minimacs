@@ -59,6 +59,12 @@ pub struct KeymapNode {
     pub command: Option<Command>,
 }
 
+impl Default for KeymapNode {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl KeymapNode {
     pub fn new() -> Self {
         Self {
@@ -73,7 +79,7 @@ impl KeymapNode {
             self.command = Some(command);
             return;
         }
-        let child = self.children.entry(keys[0].clone()).or_insert_with(KeymapNode::new);
+        let child = self.children.entry(keys[0].clone()).or_default();
         child.bind(&keys[1..], command);
     }
 

@@ -64,6 +64,12 @@ pub struct Editor {
     pub vim_mode: Option<VimMode>,
 }
 
+impl Default for Editor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[allow(dead_code)]
 impl Editor {
     pub fn new() -> Self {
