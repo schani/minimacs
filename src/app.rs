@@ -1864,4 +1864,36 @@ mod tests {
         let second_pane = app.editor.pane_tree.pane_at_focus_path(&[1]);
         assert!(second_pane.scroll_top > 0, "second pane should have scrolled");
     }
+
+    #[test]
+    fn find_file_starts_at_current_buffer_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("subdir");
+        std::fs::create_dir(&sub).unwrap();
+        let file = sub.join("hello.txt");
+        std::fs::write(&file, "hello").unwrap();
+
+        // Open the file, then trigger C-x C-f
+        let events = vec![ctrl('x'), ctrl('f')];
+        let (mut app, mut events) = test_app(60, 10, events);
+        app.editor.open_file(&file).unwrap();
+        app.run_until_idle(&mut events).unwrap();
+
+        // The minibuffer should start with the file's parent directory
+        // (open_file canonicalizes the path, so we must canonicalize too)
+        let canonical_sub = std::fs::canonicalize(&sub).unwrap();
+        let expected = format!("{}/", canonical_sub.display());
+        assert_eq!(app.editor.minibuffer_text(), expected);
+    }
+
+    #[test]
+    fn find_file_falls_back_to_cwd_for_scratch_buffer() {
+        // Scratch buffer has no path, so find-file should use cwd
+        let events = vec![ctrl('x'), ctrl('f')];
+        let (mut app, mut events) = test_app(60, 10, events);
+        app.run_until_idle(&mut events).unwrap();
+
+        let expected = format!("{}/", app.editor.cwd.display());
+        assert_eq!(app.editor.minibuffer_text(), expected);
+    }
 }

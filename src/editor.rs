@@ -385,7 +385,13 @@ impl Editor {
     }
 
     fn find_file_prompt(&mut self) {
-        let initial = format!("{}/", self.cwd.display());
+        let dir = self
+            .current_buffer()
+            .path
+            .as_ref()
+            .and_then(|p| p.parent())
+            .unwrap_or(&self.cwd);
+        let initial = format!("{}/", dir.display());
         self.start_minibuffer_prompt_with_input(PromptKind::FindFile, "Find file: ", &initial);
     }
 
@@ -394,7 +400,13 @@ impl Editor {
     }
 
     fn write_file_prompt(&mut self) {
-        let initial = format!("{}/", self.cwd.display());
+        let dir = self
+            .current_buffer()
+            .path
+            .as_ref()
+            .and_then(|p| p.parent())
+            .unwrap_or(&self.cwd);
+        let initial = format!("{}/", dir.display());
         self.start_minibuffer_prompt_with_input(PromptKind::WriteFile, "Write file: ", &initial);
     }
 

@@ -1,3 +1,5 @@
+- [x] Find-file should start at the directory of the current buffer, not from where minimacs was started.
+- [ ] It's possible to move the cursor beyond the last line on the screen without it scrolling. I belive that happens when some lines on the screen overflow.
 - [x] Ctrl-_ does not undo in some terminals
 - [x] Killing with Ctrl-k and then yanking with Ctrl-y doesn't yank the killed text, but the OS's clipboard. Either the killing should kill "into" the OS clipboard, or yanking should ignore the OS clipboard if there's stuff in the kill ring. Let's discuss. Also: How does Emacs do this?
 - [x] Horizontal splits should be separated by a bar
