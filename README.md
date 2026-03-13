@@ -147,6 +147,18 @@ cancels and restores the original position.
 | `C-g` | Cancel (clears pending keys, deactivates mark, cancels prompts) |
 | `C-x C-c` | Quit (prompts to save modified buffers) |
 
+## Vim Mode
+
+minimacs also supports vim-style modal editing. Launch with `--vim`:
+
+```sh
+minimacs --vim myfile.txt
+```
+
+This gives you Normal/Insert modes with standard vim bindings (`h/j/k/l`, `dd`,
+`yy`, `i/a/o`, `:w`, `:q`, etc.). See [VIM_MODE.md](VIM_MODE.md) for the full
+keybinding reference.
+
 ## Testing
 
 ```sh

@@ -5,7 +5,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
 use crate::buffer::Buffer;
-use crate::editor::Editor;
+use crate::editor::{Editor, VimMode};
 use crate::pane::{visual_lines_for_length, Pane};
 
 /// Compute the multi-column layout for completions.
@@ -456,9 +456,16 @@ fn render_pane_mode_line(
         String::new()
     };
 
+    let vim_indicator = match editor.vim_mode {
+        Some(VimMode::Normal) => " [N]",
+        Some(VimMode::Insert) => " [I]",
+        None => "",
+    };
+
     let left = format!(
-        " {} {} ({},{})  {}{}",
+        " {}{} {} ({},{})  {}{}",
         modified_indicator,
+        vim_indicator,
         name,
         line + 1,
         col,

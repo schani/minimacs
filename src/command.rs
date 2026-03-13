@@ -62,4 +62,12 @@ pub enum Command {
     Cancel,
     Quit,
     GotoLine,
+
+    // Vim-specific
+    OpenLineBelow,
+    OpenLineAbove,
+    DeleteLine,
+    YankLine,
+    JoinLines,
+    VimCommandPrompt,
 }

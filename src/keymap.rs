@@ -166,6 +166,12 @@ impl KeymapState {
     pub fn has_pending(&self) -> bool {
         !self.pending_keys.is_empty()
     }
+
+    /// Replace the keymap (used for vim mode switching).
+    pub fn set_keymap(&mut self, keymap: KeymapNode) {
+        self.keymap = keymap;
+        self.pending_keys.clear();
+    }
 }
 
 // Helper constructors for keys
@@ -310,6 +316,133 @@ pub fn default_keymap() -> KeymapNode {
         &[alt('g'), plain(KeyCode::Char('g'))],
         Command::GotoLine,
     );
+
+    root
+}
+
+/// Build the vim normal mode keymap.
+///
+/// In normal mode, bare keys are commands (no self-insert).
+/// Mode-switching keys (i, a, o, etc.) are NOT in this keymap;
+/// they are handled directly in app.rs so it can switch the mode.
+pub fn vim_normal_keymap() -> KeymapNode {
+    let mut root = KeymapNode::new();
+
+    // Movement
+    root.bind(&[plain(KeyCode::Char('h'))], Command::BackwardChar);
+    root.bind(&[plain(KeyCode::Char('l'))], Command::ForwardChar);
+    root.bind(&[plain(KeyCode::Char('j'))], Command::NextLine);
+    root.bind(&[plain(KeyCode::Char('k'))], Command::PreviousLine);
+    root.bind(&[plain(KeyCode::Char('w'))], Command::ForwardWord);
+    root.bind(&[plain(KeyCode::Char('b'))], Command::BackwardWord);
+    root.bind(&[plain(KeyCode::Char('0'))], Command::BeginningOfLine);
+    root.bind(
+        &[plain(KeyCode::Char('$'))],
+        Command::EndOfLine,
+    );
+    root.bind(
+        &[plain(KeyCode::Char('G'))],
+        Command::BufferEnd,
+    );
+    root.bind(
+        &[plain(KeyCode::Char('g')), plain(KeyCode::Char('g'))],
+        Command::BufferBeginning,
+    );
+
+    // Arrow keys
+    root.bind(&[plain(KeyCode::Right)], Command::ForwardChar);
+    root.bind(&[plain(KeyCode::Left)], Command::BackwardChar);
+    root.bind(&[plain(KeyCode::Down)], Command::NextLine);
+    root.bind(&[plain(KeyCode::Up)], Command::PreviousLine);
+    root.bind(&[plain(KeyCode::Home)], Command::BeginningOfLine);
+    root.bind(&[plain(KeyCode::End)], Command::EndOfLine);
+    root.bind(&[plain(KeyCode::PageDown)], Command::PageDown);
+    root.bind(&[plain(KeyCode::PageUp)], Command::PageUp);
+
+    // Scroll (Ctrl-d / Ctrl-u)
+    root.bind(&[ctrl('d')], Command::PageDown);
+    root.bind(&[ctrl('u')], Command::PageUp);
+
+    // Editing (stay in normal mode)
+    root.bind(&[plain(KeyCode::Char('x'))], Command::DeleteForward);
+    root.bind(
+        &[plain(KeyCode::Char('d')), plain(KeyCode::Char('d'))],
+        Command::DeleteLine,
+    );
+    root.bind(
+        &[plain(KeyCode::Char('D'))],
+        Command::KillLine,
+    );
+    root.bind(
+        &[plain(KeyCode::Char('J'))],
+        Command::JoinLines,
+    );
+
+    // Undo/Redo
+    root.bind(&[plain(KeyCode::Char('u'))], Command::Undo);
+    root.bind(&[ctrl('r')], Command::Redo);
+
+    // Clipboard
+    root.bind(&[plain(KeyCode::Char('p'))], Command::Paste);
+    root.bind(&[plain(KeyCode::Char('v'))], Command::SetMark);
+    root.bind(&[plain(KeyCode::Char('y'))], Command::Copy);
+    root.bind(
+        &[plain(KeyCode::Char('y')), plain(KeyCode::Char('y'))],
+        Command::YankLine,
+    );
+
+    // Search
+    root.bind(
+        &[plain(KeyCode::Char('/'))],
+        Command::ISearchForward,
+    );
+    root.bind(
+        &[plain(KeyCode::Char('?'))],
+        Command::ISearchBackward,
+    );
+
+    // Vim command line
+    root.bind(
+        &[plain(KeyCode::Char(':'))],
+        Command::VimCommandPrompt,
+    );
+
+    // Display
+    root.bind(&[ctrl('l')], Command::RecenterTopBottom);
+
+    // Pane management (Ctrl-w prefix, like vim)
+    root.bind(&[ctrl('w'), plain(KeyCode::Char('s'))], Command::SplitVertical);
+    root.bind(&[ctrl('w'), plain(KeyCode::Char('v'))], Command::SplitHorizontal);
+    root.bind(&[ctrl('w'), plain(KeyCode::Char('w'))], Command::CycleFocus);
+    root.bind(&[ctrl('w'), plain(KeyCode::Char('q'))], Command::DeletePane);
+    root.bind(&[ctrl('w'), plain(KeyCode::Char('o'))], Command::DeleteOtherPanes);
+
+    root
+}
+
+/// Build the vim insert mode keymap.
+///
+/// In insert mode, most keys self-insert. This keymap only binds
+/// editing helpers; Esc (to exit insert) is handled in app.rs.
+pub fn vim_insert_keymap() -> KeymapNode {
+    let mut root = KeymapNode::new();
+
+    // Basic editing
+    root.bind(&[plain(KeyCode::Enter)], Command::InsertNewline);
+    root.bind(&[plain(KeyCode::Backspace)], Command::DeleteBackward);
+    root.bind(&[plain(KeyCode::Delete)], Command::DeleteForward);
+    root.bind(&[plain(KeyCode::Tab)], Command::IndentLine);
+    root.bind(&[plain(KeyCode::BackTab)], Command::DedentLine);
+    root.bind(&[ctrl('w')], Command::DeleteWordBackward);
+    root.bind(&[ctrl('u')], Command::KillLine);
+
+    // Arrow-key movement
+    root.bind(&[plain(KeyCode::Right)], Command::ForwardChar);
+    root.bind(&[plain(KeyCode::Left)], Command::BackwardChar);
+    root.bind(&[plain(KeyCode::Down)], Command::NextLine);
+    root.bind(&[plain(KeyCode::Up)], Command::PreviousLine);
+    root.bind(&[plain(KeyCode::Home)], Command::BeginningOfLine);
+    root.bind(&[plain(KeyCode::End)], Command::EndOfLine);
 
     root
 }

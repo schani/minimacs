@@ -6,7 +6,8 @@ use ratatui::Terminal;
 use crate::command::Command;
 use crate::editor::Editor;
 use crate::event::EventSource;
-use crate::keymap::{KeymapResult, KeymapState, default_keymap};
+use crate::editor::VimMode;
+use crate::keymap::{KeymapResult, KeymapState, default_keymap, vim_normal_keymap, vim_insert_keymap};
 use crate::minibuffer::PromptKind;
 use crate::render;
 
@@ -22,10 +23,15 @@ where
     B::Error: Send + Sync + 'static,
 {
     pub fn new(terminal: Terminal<B>, editor: Editor) -> Self {
+        let keymap = if editor.vim_mode.is_some() {
+            vim_normal_keymap()
+        } else {
+            default_keymap()
+        };
         Self {
             editor,
             terminal,
-            keymap_state: KeymapState::new(default_keymap()),
+            keymap_state: KeymapState::new(keymap),
             esc_pending: false,
         }
     }
@@ -94,7 +100,7 @@ where
     }
 
     fn handle_key(&mut self, key: KeyEvent) {
-        // C-g always cancels
+        // C-g always cancels (both emacs and vim)
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('g') {
             self.esc_pending = false;
             self.keymap_state.clear();
@@ -103,6 +109,15 @@ where
             return;
         }
 
+        // Dispatch to vim or emacs handling
+        if self.editor.vim_mode.is_some() {
+            self.handle_vim_key(key);
+        } else {
+            self.handle_emacs_key(key);
+        }
+    }
+
+    fn handle_emacs_key(&mut self, key: KeyEvent) {
         // Handle Esc-as-Meta prefix: bare Esc sets a flag so the next key gets ALT
         if key.code == KeyCode::Esc
             && !key.modifiers.contains(KeyModifiers::CONTROL)
@@ -167,6 +182,193 @@ where
                 }
             }
         }
+    }
+
+    // === Vim key handling ===
+
+    fn handle_vim_key(&mut self, key: KeyEvent) {
+        let vim_mode = self.editor.vim_mode.unwrap();
+
+        // If isearch is active, route through isearch handler regardless of mode
+        if self.editor.isearch.is_some() {
+            self.handle_isearch_key(key);
+            return;
+        }
+
+        // If minibuffer is active, handle as insert-like typing
+        if self.editor.minibuffer.is_active() {
+            match (key.modifiers, key.code) {
+                (KeyModifiers::NONE, KeyCode::Enter) => {
+                    self.editor.submit_prompt();
+                    return;
+                }
+                (KeyModifiers::NONE, KeyCode::Tab) => {
+                    self.handle_minibuffer_tab();
+                    return;
+                }
+                (KeyModifiers::NONE, KeyCode::Esc) => {
+                    self.editor.execute(Command::Cancel);
+                    return;
+                }
+                _ => {
+                    self.editor.minibuffer.completions = None;
+                    self.editor.minibuffer.completion_page = 0;
+                    // Route through keymap for editing, self-insert for chars
+                    self.vim_process_key_with_self_insert(key);
+                    return;
+                }
+            }
+        }
+
+        match vim_mode {
+            VimMode::Normal => self.handle_vim_normal_key(key),
+            VimMode::Insert => self.handle_vim_insert_key(key),
+        }
+    }
+
+    fn handle_vim_normal_key(&mut self, key: KeyEvent) {
+        // Esc in normal mode: cancel pending keymap chord or clear selection
+        if key.code == KeyCode::Esc {
+            if self.keymap_state.has_pending() {
+                self.keymap_state.clear();
+                self.editor.pending_keys.clear();
+            } else {
+                self.editor.pane_tree.focused_pane_mut().mark = None;
+            }
+            return;
+        }
+
+        // Mode-switching keys handled before keymap (not in keymap trie)
+        if (key.modifiers == KeyModifiers::NONE || key.modifiers == KeyModifiers::SHIFT)
+            && !self.keymap_state.has_pending()
+        {
+            match key.code {
+                // i - insert before cursor
+                KeyCode::Char('i') => {
+                    self.vim_switch_to_insert();
+                    return;
+                }
+                // a - insert after cursor
+                KeyCode::Char('a') => {
+                    self.editor.execute(Command::ForwardChar);
+                    self.vim_switch_to_insert();
+                    return;
+                }
+                // A - insert at end of line
+                KeyCode::Char('A') => {
+                    self.editor.execute(Command::EndOfLine);
+                    self.vim_switch_to_insert();
+                    return;
+                }
+                // I - insert at beginning of line (first non-whitespace)
+                KeyCode::Char('I') => {
+                    self.editor.execute(Command::BeginningOfLine);
+                    self.vim_switch_to_insert();
+                    return;
+                }
+                // o - open line below
+                KeyCode::Char('o') => {
+                    self.editor.execute(Command::OpenLineBelow);
+                    self.vim_switch_to_insert();
+                    return;
+                }
+                // O - open line above
+                KeyCode::Char('O') => {
+                    self.editor.execute(Command::OpenLineAbove);
+                    self.vim_switch_to_insert();
+                    return;
+                }
+                // C - change to end of line (kill + insert)
+                KeyCode::Char('C') => {
+                    self.editor.execute(Command::KillLine);
+                    self.vim_switch_to_insert();
+                    return;
+                }
+                // s - substitute char (delete char + insert)
+                KeyCode::Char('s') => {
+                    self.editor.execute(Command::DeleteForward);
+                    self.vim_switch_to_insert();
+                    return;
+                }
+                _ => {}
+            }
+
+            // Visual mode overrides: d cuts, y copies when mark is set
+            if self.editor.region().is_some() {
+                match key.code {
+                    KeyCode::Char('d') => {
+                        self.editor.execute(Command::Cut);
+                        return;
+                    }
+                    KeyCode::Char('y') => {
+                        self.editor.execute(Command::Copy);
+                        return;
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // Route through vim normal keymap
+        match self.keymap_state.process_key(key) {
+            KeymapResult::Matched(cmd) => {
+                self.editor.pending_keys.clear();
+                self.editor.execute(cmd);
+            }
+            KeymapResult::Pending => {
+                self.editor.pending_keys = self.keymap_state.pending_display();
+            }
+            KeymapResult::NotFound => {
+                self.editor.pending_keys.clear();
+                // No self-insert in normal mode
+            }
+        }
+    }
+
+    fn handle_vim_insert_key(&mut self, key: KeyEvent) {
+        // Esc exits insert mode
+        if key.code == KeyCode::Esc {
+            self.vim_switch_to_normal();
+            return;
+        }
+
+        self.vim_process_key_with_self_insert(key);
+    }
+
+    /// Process a key through the current keymap with self-insert fallback.
+    /// Used for vim insert mode and minibuffer input.
+    fn vim_process_key_with_self_insert(&mut self, key: KeyEvent) {
+        match self.keymap_state.process_key(key) {
+            KeymapResult::Matched(cmd) => {
+                self.editor.pending_keys.clear();
+                self.editor.execute(cmd);
+            }
+            KeymapResult::Pending => {
+                self.editor.pending_keys = self.keymap_state.pending_display();
+            }
+            KeymapResult::NotFound => {
+                self.editor.pending_keys.clear();
+                if let KeyCode::Char(c) = key.code {
+                    if !key.modifiers.contains(KeyModifiers::CONTROL)
+                        && !key.modifiers.contains(KeyModifiers::ALT)
+                    {
+                        self.editor.execute(Command::InsertChar(c));
+                    }
+                }
+            }
+        }
+    }
+
+    fn vim_switch_to_insert(&mut self) {
+        self.editor.vim_mode = Some(VimMode::Insert);
+        self.keymap_state.set_keymap(vim_insert_keymap());
+    }
+
+    fn vim_switch_to_normal(&mut self) {
+        self.editor.vim_mode = Some(VimMode::Normal);
+        self.keymap_state.set_keymap(vim_normal_keymap());
+        // Clear mark (like exiting visual mode)
+        self.editor.pane_tree.focused_pane_mut().mark = None;
     }
 
     fn handle_isearch_key(&mut self, key: KeyEvent) {

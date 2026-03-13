@@ -9,6 +9,13 @@ use crate::pane::{Pane, PaneTree};
 
 const INDENT_WIDTH: usize = 4;
 
+/// Vim editing mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VimMode {
+    Normal,
+    Insert,
+}
+
 /// Position for recenter-top-bottom cycling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RecenterPosition {
@@ -53,6 +60,8 @@ pub struct Editor {
     last_command: Option<Command>,
     /// Tracks last recenter position for C-l cycling.
     last_recenter_position: Option<RecenterPosition>,
+    /// Vim mode: None means emacs keybindings, Some means vim modal editing.
+    pub vim_mode: Option<VimMode>,
 }
 
 #[allow(dead_code)]
@@ -75,6 +84,7 @@ impl Editor {
             isearch: None,
             last_command: None,
             last_recenter_position: None,
+            vim_mode: None,
         }
     }
 
@@ -96,6 +106,7 @@ impl Editor {
             isearch: None,
             last_command: None,
             last_recenter_position: None,
+            vim_mode: None,
         }
     }
 
@@ -254,7 +265,7 @@ impl Editor {
             Command::InsertChar(_) | Command::InsertNewline | Command::InsertTab => {}
             Command::IndentLine | Command::DedentLine => {}
             Command::DeleteBackward | Command::DeleteForward | Command::DeleteWordBackward
-            | Command::KillLine => {}
+            | Command::KillLine | Command::DeleteLine | Command::JoinLines => {}
             Command::Undo | Command::Redo => {}
             _ => {
                 self.active_buffer_mut().history.mark_action();
@@ -308,6 +319,12 @@ impl Editor {
             Command::ISearchBackward => self.isearch_start(SearchDirection::Backward),
             Command::Cancel => self.cancel(),
             Command::Quit => self.quit(),
+            Command::OpenLineBelow => self.open_line_below(),
+            Command::OpenLineAbove => self.open_line_above(),
+            Command::DeleteLine => self.delete_line(),
+            Command::YankLine => self.yank_line(),
+            Command::JoinLines => self.join_lines(),
+            Command::VimCommandPrompt => self.vim_command_prompt(),
         }
 
         self.last_command = Some(cmd_clone);
@@ -467,6 +484,30 @@ impl Editor {
             PromptKind::ISearch => {
                 // Enter during isearch accepts the position
                 self.isearch_accept();
+            }
+            PromptKind::VimCommand => {
+                self.minibuffer.finish();
+                let cmd = input.trim();
+                match cmd {
+                    "w" => self.save(),
+                    "q" => self.quit(),
+                    "wq" | "x" => {
+                        self.save();
+                        self.should_quit = true;
+                    }
+                    "q!" => {
+                        self.should_quit = true;
+                    }
+                    _ if cmd.starts_with("e ") => {
+                        let path = PathBuf::from(cmd[2..].trim());
+                        if let Err(e) = self.open_file(&path) {
+                            self.minibuffer.show_message(format!("{}", e));
+                        }
+                    }
+                    _ => {
+                        self.minibuffer.show_message(format!("Unknown command: {}", cmd));
+                    }
+                }
             }
             PromptKind::SaveConfirm { buffer_name } => {
                 self.minibuffer.finish();
@@ -1539,6 +1580,162 @@ impl Editor {
         }
 
         matches
+    }
+
+    // === Vim-specific commands ===
+
+    fn open_line_below(&mut self) {
+        let buf = self.active_buffer();
+        let pos = self.active_pane().point;
+        let (line, _) = buf.char_to_line_col(pos);
+        let line_len = buf.line_len_chars(line);
+        let line_start = buf.line_col_to_char(line, 0);
+        let le = buf.line_ending.as_str().to_string();
+
+        // Get current line's leading whitespace
+        let mut indent = String::new();
+        for i in 0..line_len {
+            let ch = buf.text.char(line_start + i);
+            if ch == ' ' {
+                indent.push(' ');
+            } else if ch == '\t' {
+                let spaces = INDENT_WIDTH - (indent.len() % INDENT_WIDTH);
+                for _ in 0..spaces {
+                    indent.push(' ');
+                }
+            } else {
+                break;
+            }
+        }
+
+        // Insert at end of current line
+        let eol = buf.line_col_to_char(line, line_len);
+        let insert_str = format!("{}{}", le, indent);
+        let indent_len = indent.chars().count();
+        self.active_buffer_mut().history.record_insert(eol, &insert_str);
+        self.active_buffer_mut().insert(eol, &insert_str);
+        self.active_pane_mut().point = eol + le.chars().count() + indent_len;
+        self.active_pane_mut().preferred_column = None;
+    }
+
+    fn open_line_above(&mut self) {
+        let buf = self.active_buffer();
+        let pos = self.active_pane().point;
+        let (line, _) = buf.char_to_line_col(pos);
+        let line_start = buf.line_col_to_char(line, 0);
+        let line_len = buf.line_len_chars(line);
+        let le = buf.line_ending.as_str().to_string();
+
+        // Get current line's leading whitespace
+        let mut indent = String::new();
+        for i in 0..line_len {
+            let ch = buf.text.char(line_start + i);
+            if ch == ' ' {
+                indent.push(' ');
+            } else if ch == '\t' {
+                let spaces = INDENT_WIDTH - (indent.len() % INDENT_WIDTH);
+                for _ in 0..spaces {
+                    indent.push(' ');
+                }
+            } else {
+                break;
+            }
+        }
+
+        // Insert a new line above: insert indent + newline before the current line start
+        let insert_str = format!("{}{}", indent, le);
+        let indent_len = indent.chars().count();
+        self.active_buffer_mut().history.record_insert(line_start, &insert_str);
+        self.active_buffer_mut().insert(line_start, &insert_str);
+        self.active_pane_mut().point = line_start + indent_len;
+        self.active_pane_mut().preferred_column = None;
+    }
+
+    fn delete_line(&mut self) {
+        let buf = self.active_buffer();
+        let pos = self.active_pane().point;
+        let (line, _) = buf.char_to_line_col(pos);
+        let line_start = buf.text.line_to_char(line);
+        let total_lines = buf.line_count();
+
+        // Include the newline at the end (if not last line)
+        let line_end = if line + 1 < total_lines {
+            buf.text.line_to_char(line + 1)
+        } else {
+            buf.char_count()
+        };
+
+        if line_start == line_end {
+            return;
+        }
+
+        let deleted: String = buf.text.slice(line_start..line_end).chars().collect();
+        self.clipboard = deleted.clone();
+        self.active_buffer_mut().history.record_delete(line_start, &deleted);
+        self.active_buffer_mut().remove(line_start, line_end);
+        // Clamp point to buffer length
+        let len = self.active_buffer().char_count();
+        let new_point = line_start.min(len);
+        self.active_pane_mut().point = new_point;
+        self.active_pane_mut().preferred_column = None;
+    }
+
+    fn yank_line(&mut self) {
+        let buf = self.active_buffer();
+        let pos = self.active_pane().point;
+        let (line, _) = buf.char_to_line_col(pos);
+        let line_start = buf.text.line_to_char(line);
+        let total_lines = buf.line_count();
+        let line_end = if line + 1 < total_lines {
+            buf.text.line_to_char(line + 1)
+        } else {
+            buf.char_count()
+        };
+        let text: String = buf.text.slice(line_start..line_end).chars().collect();
+        self.clipboard = text.clone();
+        self.set_os_clipboard(&text);
+        self.minibuffer.show_message("Line yanked".to_string());
+    }
+
+    fn join_lines(&mut self) {
+        let buf = self.active_buffer();
+        let pos = self.active_pane().point;
+        let (line, _) = buf.char_to_line_col(pos);
+        let total_lines = buf.line_count();
+
+        if line + 1 >= total_lines {
+            return;
+        }
+
+        // Find end of current line (before newline)
+        let line_len = buf.line_len_chars(line);
+        let eol = buf.line_col_to_char(line, line_len);
+        // Find start of next line's content (skip leading whitespace)
+        let next_line_start = buf.text.line_to_char(line + 1);
+        let next_line_len = buf.line_len_chars(line + 1);
+        let mut content_start = 0;
+        for i in 0..next_line_len {
+            let ch = buf.text.char(next_line_start + i);
+            if ch != ' ' && ch != '\t' {
+                break;
+            }
+            content_start = i + 1;
+        }
+
+        // Delete from eol through leading whitespace of next line, replace with a space
+        let delete_end = next_line_start + content_start;
+        let deleted: String = buf.text.slice(eol..delete_end).chars().collect();
+        self.active_buffer_mut().history.record_delete(eol, &deleted);
+        self.active_buffer_mut().remove(eol, delete_end);
+        let space = " ";
+        self.active_buffer_mut().history.record_insert(eol, space);
+        self.active_buffer_mut().insert(eol, space);
+        self.active_pane_mut().point = eol;
+        self.active_pane_mut().preferred_column = None;
+    }
+
+    fn vim_command_prompt(&mut self) {
+        self.start_minibuffer_prompt(PromptKind::VimCommand, ":");
     }
 
     fn quit(&mut self) {

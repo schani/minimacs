@@ -18,6 +18,8 @@ pub enum PromptKind {
     ISearch,
     /// "Save buffer X? (y/n/q)"
     SaveConfirm { buffer_name: String },
+    /// Vim `:` command line
+    VimCommand,
 }
 
 #[derive(Debug)]

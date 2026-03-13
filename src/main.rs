@@ -25,16 +25,20 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 
 use app::App;
-use editor::Editor;
+use editor::{Editor, VimMode};
 use event::TerminalEventSource;
 
 fn main() -> Result<()> {
-    // Parse CLI args: optional file path
+    // Parse CLI args: optional --vim flag and file path
     let args: Vec<String> = std::env::args().collect();
-    let file_path = args.get(1);
+    let vim_mode = args.iter().any(|a| a == "--vim");
+    let file_path = args.iter().skip(1).find(|a| !a.starts_with('-'));
 
     // Set up editor
     let mut editor = Editor::new();
+    if vim_mode {
+        editor.vim_mode = Some(VimMode::Normal);
+    }
     if let Some(path) = file_path {
         let path = std::path::Path::new(path);
         if let Err(e) = editor.open_file(path) {
