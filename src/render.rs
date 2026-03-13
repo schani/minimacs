@@ -6,7 +6,7 @@ use ratatui::Frame;
 
 use crate::buffer::Buffer;
 use crate::editor::Editor;
-use crate::pane::Pane;
+use crate::pane::{visual_lines_for_length, Pane};
 
 /// Compute the multi-column layout for completions.
 ///
@@ -160,17 +160,6 @@ pub fn render(frame: &mut Frame, editor: &Editor) {
     render_minibuffer(frame, editor, minibuffer_area);
 }
 
-/// Compute how many visual rows a buffer line occupies with wrapping.
-pub fn visual_lines_for_length(line_char_len: usize, text_width: usize) -> usize {
-    if text_width <= 1 || line_char_len <= text_width {
-        return 1;
-    }
-    let chars_per_segment = text_width - 1; // one column reserved for '\'
-    // First N-1 segments hold chars_per_segment chars each; last segment holds up to text_width.
-    // N = 1 + ceil((line_char_len - text_width) / chars_per_segment)
-    let excess = line_char_len - text_width;
-    1 + excess.div_ceil(chars_per_segment)
-}
 
 fn render_pane_text(
     frame: &mut Frame,

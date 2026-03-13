@@ -2,6 +2,52 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 
 use crate::buffer::BufferId;
 
+/// Compute how many visual rows a buffer line occupies with wrapping.
+pub fn visual_lines_for_length(line_char_len: usize, text_width: usize) -> usize {
+    if text_width <= 1 || line_char_len <= text_width {
+        return 1;
+    }
+    let chars_per_segment = text_width - 1; // one column reserved for '\'
+    // First N-1 segments hold chars_per_segment chars each; last segment holds up to text_width.
+    // N = 1 + ceil((line_char_len - text_width) / chars_per_segment)
+    let excess = line_char_len - text_width;
+    1 + excess.div_ceil(chars_per_segment)
+}
+
+/// Compute the `scroll_top` needed so that `cursor_line` is visible within a
+/// viewport of `viewport_height` visual rows and `viewport_width` columns,
+/// accounting for line wrapping.
+pub fn compute_scroll_top(
+    scroll_top: usize,
+    cursor_line: usize,
+    viewport_height: usize,
+    viewport_width: usize,
+    line_len: impl Fn(usize) -> usize,
+) -> usize {
+    if cursor_line < scroll_top {
+        return cursor_line;
+    }
+
+    // Count visual rows from scroll_top through cursor_line (inclusive).
+    let mut visual_rows: usize = 0;
+    for line in scroll_top..=cursor_line {
+        visual_rows += visual_lines_for_length(line_len(line), viewport_width);
+    }
+
+    // If the cursor line fits in the viewport, nothing to do.
+    if visual_rows <= viewport_height {
+        return scroll_top;
+    }
+
+    // Advance scroll_top until the cursor line fits.
+    let mut new_top = scroll_top;
+    while visual_rows > viewport_height && new_top < cursor_line {
+        visual_rows -= visual_lines_for_length(line_len(new_top), viewport_width);
+        new_top += 1;
+    }
+    new_top
+}
+
 /// A single pane (window) viewing a buffer.
 #[allow(dead_code)]
 pub struct Pane {
@@ -27,12 +73,18 @@ impl Pane {
         }
     }
 
-    pub fn ensure_visible(&mut self, cursor_line: usize) {
-        if cursor_line < self.scroll_top {
-            self.scroll_top = cursor_line;
-        } else if cursor_line >= self.scroll_top + self.viewport_height {
-            self.scroll_top = cursor_line - self.viewport_height + 1;
-        }
+    /// Adjust `scroll_top` so that `cursor_line` is visible within the viewport,
+    /// accounting for line wrapping. `line_len` returns the character count for
+    /// a given buffer line index.
+    #[cfg(test)]
+    pub fn ensure_visible(&mut self, cursor_line: usize, line_len: impl Fn(usize) -> usize) {
+        self.scroll_top = compute_scroll_top(
+            self.scroll_top,
+            cursor_line,
+            self.viewport_height,
+            self.viewport_width,
+            line_len,
+        );
     }
 }
 
@@ -517,12 +569,17 @@ mod tests {
         }
     }
 
+    // All lines are short (no wrapping) unless stated otherwise.
+    fn short_line(_line: usize) -> usize {
+        5
+    }
+
     #[test]
     fn ensure_visible_scrolls_down() {
         let mut pane = Pane::new(0);
         pane.viewport_height = 10;
         pane.scroll_top = 0;
-        pane.ensure_visible(15);
+        pane.ensure_visible(15, short_line);
         assert_eq!(pane.scroll_top, 6);
     }
 
@@ -531,7 +588,7 @@ mod tests {
         let mut pane = Pane::new(0);
         pane.viewport_height = 10;
         pane.scroll_top = 10;
-        pane.ensure_visible(5);
+        pane.ensure_visible(5, short_line);
         assert_eq!(pane.scroll_top, 5);
     }
 
@@ -540,8 +597,40 @@ mod tests {
         let mut pane = Pane::new(0);
         pane.viewport_height = 10;
         pane.scroll_top = 5;
-        pane.ensure_visible(7);
+        pane.ensure_visible(7, short_line);
         assert_eq!(pane.scroll_top, 5);
+    }
+
+    #[test]
+    fn ensure_visible_scrolls_down_with_wrapped_lines() {
+        let mut pane = Pane::new(0);
+        pane.viewport_height = 4;
+        pane.viewport_width = 20;
+        pane.scroll_top = 0;
+        // Line 0 is long (26 chars, wraps to 2 visual rows at width 20).
+        // Lines 1-4 are short (5 chars, 1 visual row each).
+        // Visual rows: line0=2, line1=1, line2=1 = 4 rows fills viewport.
+        // Moving to line 3 should scroll.
+        let line_len = |l: usize| if l == 0 { 26 } else { 5 };
+        pane.ensure_visible(3, line_len);
+        assert!(
+            pane.scroll_top > 0,
+            "should have scrolled, scroll_top={}",
+            pane.scroll_top
+        );
+    }
+
+    #[test]
+    fn ensure_visible_no_scroll_when_wrapped_line_still_fits() {
+        let mut pane = Pane::new(0);
+        pane.viewport_height = 4;
+        pane.viewport_width = 20;
+        pane.scroll_top = 0;
+        // Line 0 wraps to 2 visual rows, line 1 takes 1 row = 3 rows total.
+        // viewport_height=4, so cursor on line 1 should NOT scroll.
+        let line_len = |l: usize| if l == 0 { 26 } else { 5 };
+        pane.ensure_visible(1, line_len);
+        assert_eq!(pane.scroll_top, 0);
     }
 
     #[test]

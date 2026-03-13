@@ -314,9 +314,17 @@ impl Editor {
 
         // After any command, ensure cursor is visible (skip for minibuffer)
         if !self.minibuffer.is_active() {
-            let point = self.pane_tree.focused_pane().point;
-            let (line, _) = self.current_buffer().char_to_line_col(point);
-            self.pane_tree.focused_pane_mut().ensure_visible(line);
+            let pane = self.pane_tree.focused_pane();
+            let point = pane.point;
+            let scroll_top = pane.scroll_top;
+            let vh = pane.viewport_height;
+            let vw = pane.viewport_width;
+            let buf = self.current_buffer();
+            let (line, _) = buf.char_to_line_col(point);
+            let new_top = crate::pane::compute_scroll_top(
+                scroll_top, line, vh, vw, |l| buf.line_len_chars(l),
+            );
+            self.pane_tree.focused_pane_mut().scroll_top = new_top;
         }
     }
 
@@ -1425,10 +1433,17 @@ impl Editor {
         };
 
         if let Some(char_pos) = found {
-            let pane = self.pane_tree.focused_pane_mut();
-            pane.point = char_pos;
-            let (line, _) = self.current_buffer().char_to_line_col(char_pos);
-            self.pane_tree.focused_pane_mut().ensure_visible(line);
+            self.pane_tree.focused_pane_mut().point = char_pos;
+            let pane = self.pane_tree.focused_pane();
+            let scroll_top = pane.scroll_top;
+            let vh = pane.viewport_height;
+            let vw = pane.viewport_width;
+            let buf = self.current_buffer();
+            let (line, _) = buf.char_to_line_col(char_pos);
+            let new_top = crate::pane::compute_scroll_top(
+                scroll_top, line, vh, vw, |l| buf.line_len_chars(l),
+            );
+            self.pane_tree.focused_pane_mut().scroll_top = new_top;
             if let Some(ref mut isearch) = self.isearch {
                 isearch.current_match = Some(char_pos);
             }
@@ -1472,10 +1487,17 @@ impl Editor {
         };
 
         if let Some(char_pos) = found {
-            let pane = self.pane_tree.focused_pane_mut();
-            pane.point = char_pos;
-            let (line, _) = self.current_buffer().char_to_line_col(char_pos);
-            self.pane_tree.focused_pane_mut().ensure_visible(line);
+            self.pane_tree.focused_pane_mut().point = char_pos;
+            let pane = self.pane_tree.focused_pane();
+            let scroll_top = pane.scroll_top;
+            let vh = pane.viewport_height;
+            let vw = pane.viewport_width;
+            let buf = self.current_buffer();
+            let (line, _) = buf.char_to_line_col(char_pos);
+            let new_top = crate::pane::compute_scroll_top(
+                scroll_top, line, vh, vw, |l| buf.line_len_chars(l),
+            );
+            self.pane_tree.focused_pane_mut().scroll_top = new_top;
             if let Some(ref mut isearch) = self.isearch {
                 isearch.current_match = Some(char_pos);
             }

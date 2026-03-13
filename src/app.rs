@@ -360,7 +360,7 @@ where
                 let mut line_idx = scroll_top;
                 while line_idx < total_lines {
                     let line_len = buf.line_len_chars(line_idx);
-                    let num_visual = render::visual_lines_for_length(line_len, text_width);
+                    let num_visual = crate::pane::visual_lines_for_length(line_len, text_width);
 
                     if visual_row + num_visual > rel_y {
                         // The click is within this line's visual rows
@@ -816,6 +816,28 @@ mod tests {
         assert!(
             !screen.contains("line4"),
             "line4 should NOT be visible (pushed out by wrapping): {}",
+            screen
+        );
+    }
+
+    #[test]
+    fn scroll_down_accounts_for_wrapped_lines() {
+        // Terminal: 20 wide, 6 tall (4 text rows + mode + minibuf)
+        // Line 0 wraps to 2 visual rows, so only 3 buffer lines fit on screen.
+        // Moving cursor to line 3 should trigger scroll.
+        let text = "abcdefghijklmnopqrstuvwxyz\nline2\nline3\nline4\nline5";
+        let events = vec![
+            ctrl('n'), // move to line 1
+            ctrl('n'), // move to line 2
+            ctrl('n'), // move to line 3 -- should scroll
+        ];
+        let (mut app, mut events) = test_app_with_text(20, 6, text, events);
+        app.run_until_idle(&mut events).unwrap();
+        let screen = capture_screen(&app.terminal);
+        // Cursor is on line 3 ("line4"), which must be visible
+        assert!(
+            screen.contains("line4"),
+            "line4 should be visible after scrolling down: {}",
             screen
         );
     }
