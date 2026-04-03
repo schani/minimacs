@@ -117,10 +117,23 @@ struct Buffer {
 ### PaneTree
 
 A recursive tree of splits and leaves. Each leaf is a `Pane` with its own
-cursor, mark, scroll position, and viewport dimensions. This matches emacs
-behavior where each window has independent state into a shared buffer.
+cursor, mark, scroll position, viewport dimensions, and remembered per-buffer
+view state. This matches emacs behavior where each window has independent state
+into a shared buffer.
 
 ```rust
+struct Pane {
+    buffer_id: BufferId,
+    point: usize,
+    mark: Option<usize>,
+    preferred_column: Option<usize>,
+    scroll_top: usize,
+    viewport_height: usize,
+    viewport_width: usize,
+    last_buffer_id: Option<BufferId>,
+    buffer_states: HashMap<BufferId, BufferViewState>,
+}
+
 enum PaneNode {
     Leaf(Pane),
     Split { direction: Direction, children: Vec<PaneNode> },
@@ -131,6 +144,12 @@ struct PaneTree {
     focus_path: Vec<usize>,  // indices from root to focused leaf
 }
 ```
+
+When a pane switches away from a buffer, it saves that buffer's point, mark,
+preferred column, and scroll position into `buffer_states`. Switching back to a
+buffer in the same pane restores that saved view state. `last_buffer_id` tracks
+the alternate buffer for that pane, so `C-x b RET` toggles to the most recently
+visited buffer in that window.
 
 The focus path is a sequence of child indices that navigate from the root to the
 currently focused pane. Operations like `focused_pane()` walk this path.

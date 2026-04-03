@@ -117,7 +117,7 @@ minimacs
 | `C-x C-f` | Find file (open) |
 | `C-x C-s` | Save |
 | `C-x C-w` | Write file (save as) |
-| `C-x b` | Switch buffer |
+| `C-x b` | Switch buffer (`RET` with empty input jumps to the last buffer in that pane) |
 | `C-x k` | Kill buffer |
 
 ### Panes

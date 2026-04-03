@@ -1,3 +1,5 @@
+- [x] When switching buffers with `C-x b`, when the user just presses enter without picking a buffer, switch to the buffer that was last visited in that window.
+- [x] When switching to a buffer, point needs to go to where it was the last time the buffer was visited in that window.
 - [x] Find-file should start at the directory of the current buffer, not from where minimacs was started.
 - [x] It's possible to move the cursor beyond the last line on the screen without it scrolling. I belive that happens when some lines on the screen overflow.
 - [x] Ctrl-_ does not undo in some terminals

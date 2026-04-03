@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 
 use crate::buffer::BufferId;
@@ -7,9 +9,11 @@ pub fn visual_lines_for_length(line_char_len: usize, text_width: usize) -> usize
     if text_width <= 1 || line_char_len <= text_width {
         return 1;
     }
-    let chars_per_segment = text_width - 1; // one column reserved for '\'
-    // First N-1 segments hold chars_per_segment chars each; last segment holds up to text_width.
+    // One column is reserved for '\\' on continued visual lines.
+    // First N-1 segments hold chars_per_segment chars each; the last segment
+    // holds up to text_width chars.
     // N = 1 + ceil((line_char_len - text_width) / chars_per_segment)
+    let chars_per_segment = text_width - 1;
     let excess = line_char_len - text_width;
     1 + excess.div_ceil(chars_per_segment)
 }
@@ -48,6 +52,14 @@ pub fn compute_scroll_top(
     new_top
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct BufferViewState {
+    point: usize,
+    mark: Option<usize>,
+    preferred_column: Option<usize>,
+    scroll_top: usize,
+}
+
 /// A single pane (window) viewing a buffer.
 #[allow(dead_code)]
 pub struct Pane {
@@ -58,6 +70,8 @@ pub struct Pane {
     pub scroll_top: usize,
     pub viewport_height: usize,
     pub viewport_width: usize,
+    pub last_buffer_id: Option<BufferId>,
+    buffer_states: HashMap<BufferId, BufferViewState>,
 }
 
 impl Pane {
@@ -70,6 +84,58 @@ impl Pane {
             scroll_top: 0,
             viewport_height: 24,
             viewport_width: 80,
+            last_buffer_id: None,
+            buffer_states: HashMap::new(),
+        }
+    }
+
+    fn current_buffer_state(&self) -> BufferViewState {
+        BufferViewState {
+            point: self.point,
+            mark: self.mark,
+            preferred_column: self.preferred_column,
+            scroll_top: self.scroll_top,
+        }
+    }
+
+    pub fn save_current_buffer_state(&mut self) {
+        self.buffer_states
+            .insert(self.buffer_id, self.current_buffer_state());
+    }
+
+    pub fn switch_buffer(&mut self, buffer_id: BufferId, buffer_len: usize) {
+        if buffer_id == self.buffer_id {
+            return;
+        }
+
+        let current_buffer_id = self.buffer_id;
+        self.save_current_buffer_state();
+        self.last_buffer_id = Some(current_buffer_id);
+        self.restore_buffer_state(buffer_id, buffer_len);
+    }
+
+    pub fn restore_buffer_state(&mut self, buffer_id: BufferId, buffer_len: usize) {
+        self.buffer_id = buffer_id;
+        let state = self
+            .buffer_states
+            .get(&buffer_id)
+            .copied()
+            .unwrap_or_default();
+        self.point = state.point.min(buffer_len);
+        self.mark = state.mark.map(|mark| mark.min(buffer_len));
+        self.preferred_column = state.preferred_column;
+        self.scroll_top = state.scroll_top;
+    }
+
+    pub fn alternate_buffer_id(&self) -> Option<BufferId> {
+        self.last_buffer_id
+            .filter(|buffer_id| *buffer_id != self.buffer_id)
+    }
+
+    pub fn forget_buffer(&mut self, buffer_id: BufferId) {
+        self.buffer_states.remove(&buffer_id);
+        if self.last_buffer_id == Some(buffer_id) {
+            self.last_buffer_id = None;
         }
     }
 
@@ -233,7 +299,15 @@ impl PaneTree {
     pub fn delete_others(&mut self) {
         let pane_data = {
             let pane = self.focused_pane();
-            (pane.buffer_id, pane.point, pane.mark, pane.scroll_top, pane.preferred_column)
+            (
+                pane.buffer_id,
+                pane.point,
+                pane.mark,
+                pane.scroll_top,
+                pane.preferred_column,
+                pane.last_buffer_id,
+                pane.buffer_states.clone(),
+            )
         };
 
         let mut new_pane = Pane::new(pane_data.0);
@@ -241,6 +315,8 @@ impl PaneTree {
         new_pane.mark = pane_data.2;
         new_pane.scroll_top = pane_data.3;
         new_pane.preferred_column = pane_data.4;
+        new_pane.last_buffer_id = pane_data.5;
+        new_pane.buffer_states = pane_data.6;
 
         self.root = PaneNode::Leaf(new_pane);
         self.focus_path = vec![];
@@ -336,8 +412,10 @@ impl PaneTree {
                         }
                     }
                 } else {
-                    let constraints: Vec<Constraint> =
-                        children.iter().map(|_| Constraint::Ratio(1, n.into())).collect();
+                    let constraints: Vec<Constraint> = children
+                        .iter()
+                        .map(|_| Constraint::Ratio(1, n.into()))
+                        .collect();
                     let chunks = Layout::default()
                         .direction(*direction)
                         .constraints(constraints)
@@ -361,9 +439,7 @@ impl PaneTree {
     fn count_leaves(node: &PaneNode) -> usize {
         match node {
             PaneNode::Leaf(_) => 1,
-            PaneNode::Split { children, .. } => {
-                children.iter().map(Self::count_leaves).sum()
-            }
+            PaneNode::Split { children, .. } => children.iter().map(Self::count_leaves).sum(),
         }
     }
 
@@ -666,9 +742,9 @@ mod tests {
         let mut tree = PaneTree::new(0);
         // Split twice to get 3 panes
         tree.split(Direction::Vertical, 1);
-        // Focus is on first child [0]
-        tree.cycle_focus(); // now on second child [1]
-        // Split the second child
+        // Focus is on first child [0], then move to second child [1].
+        tree.cycle_focus();
+        // Split the second child.
         tree.split(Direction::Vertical, 2);
         // Now we have a root split with 2 children:
         //   child 0: Leaf(0)

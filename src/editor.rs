@@ -4,7 +4,7 @@ use ratatui::layout::Direction;
 
 use crate::buffer::Buffer;
 use crate::command::Command;
-use crate::minibuffer::{Minibuffer, PromptKind, normalize_path_string};
+use crate::minibuffer::{normalize_path_string, Minibuffer, PromptKind};
 use crate::pane::{Pane, PaneTree};
 
 const INDENT_WIDTH: usize = 4;
@@ -103,19 +103,17 @@ impl Editor {
         let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
 
         // Check if file is already open
-        for buf in &self.buffers {
-            if let Some(ref bp) = buf.path {
-                let buf_canonical = std::fs::canonicalize(bp).unwrap_or_else(|_| bp.clone());
-                if buf_canonical == canonical {
-                    let pane = self.pane_tree.focused_pane_mut();
-                    pane.buffer_id = buf.id;
-                    pane.point = 0;
-                    pane.scroll_top = 0;
-                    self.minibuffer
-                        .show_message(format!("Switched to buffer {}", buf.name));
-                    return Ok(());
-                }
-            }
+        let existing_buffer_id = self.buffers.iter().find_map(|buf| {
+            let bp = buf.path.as_ref()?;
+            let buf_canonical = std::fs::canonicalize(bp).unwrap_or_else(|_| bp.clone());
+            (buf_canonical == canonical).then_some(buf.id)
+        });
+        if let Some(buffer_id) = existing_buffer_id {
+            let name = self.buffer_by_id(buffer_id).name.clone();
+            self.switch_focused_pane_to_buffer(buffer_id);
+            self.minibuffer
+                .show_message(format!("Switched to buffer {}", name));
+            return Ok(());
         }
 
         let id = self.next_buffer_id;
@@ -135,10 +133,7 @@ impl Editor {
             format!("(New file) {}", name)
         };
         self.buffers.push(buf);
-        let pane = self.pane_tree.focused_pane_mut();
-        pane.buffer_id = id;
-        pane.point = 0;
-        pane.scroll_top = 0;
+        self.switch_focused_pane_to_buffer(id);
         self.minibuffer.show_message(msg);
         Ok(())
     }
@@ -253,7 +248,9 @@ impl Editor {
         match &cmd {
             Command::InsertChar(_) | Command::InsertNewline | Command::InsertTab => {}
             Command::IndentLine | Command::DedentLine => {}
-            Command::DeleteBackward | Command::DeleteForward | Command::DeleteWordBackward
+            Command::DeleteBackward
+            | Command::DeleteForward
+            | Command::DeleteWordBackward
             | Command::KillLine => {}
             Command::Undo | Command::Redo => {}
             _ => {
@@ -321,9 +318,9 @@ impl Editor {
             let vw = pane.viewport_width;
             let buf = self.current_buffer();
             let (line, _) = buf.char_to_line_col(point);
-            let new_top = crate::pane::compute_scroll_top(
-                scroll_top, line, vh, vw, |l| buf.line_len_chars(l),
-            );
+            let new_top = crate::pane::compute_scroll_top(scroll_top, line, vh, vw, |l| {
+                buf.line_len_chars(l)
+            });
             self.pane_tree.focused_pane_mut().scroll_top = new_top;
         }
     }
@@ -472,9 +469,7 @@ impl Editor {
                 self.minibuffer.finish();
                 match input.as_str() {
                     "y" | "Y" => {
-                        if let Some(buf) =
-                            self.buffers.iter_mut().find(|b| b.name == buffer_name)
-                        {
+                        if let Some(buf) = self.buffers.iter_mut().find(|b| b.name == buffer_name) {
                             if buf.path.is_some() {
                                 let _ = buf.save();
                             }
@@ -496,14 +491,23 @@ impl Editor {
         }
     }
 
+    fn switch_focused_pane_to_buffer(&mut self, buffer_id: usize) {
+        let buffer_len = self.buffer_by_id(buffer_id).char_count();
+        self.pane_tree
+            .focused_pane_mut()
+            .switch_buffer(buffer_id, buffer_len);
+    }
+
     fn switch_to_buffer(&mut self, name: &str) {
-        if let Some(buf) = self.buffers.iter().find(|b| b.name == name) {
-            let id = buf.id;
-            let pane = self.pane_tree.focused_pane_mut();
-            pane.buffer_id = id;
-            pane.point = 0;
-            pane.scroll_top = 0;
+        let buffer_id = if name.is_empty() {
+            self.pane_tree.focused_pane().alternate_buffer_id()
         } else {
+            self.buffers.iter().find(|b| b.name == name).map(|b| b.id)
+        };
+
+        if let Some(buffer_id) = buffer_id {
+            self.switch_focused_pane_to_buffer(buffer_id);
+        } else if !name.is_empty() {
             self.minibuffer
                 .show_message(format!("No buffer named '{}'", name));
         }
@@ -542,13 +546,13 @@ impl Editor {
         } else {
             self.buffers[0].id
         };
+        let new_buffer_len = self.buffer_by_id(new_id).char_count();
 
         // Update all panes that referenced the killed buffer.
         self.pane_tree.for_each_pane_mut(&mut |pane| {
+            pane.forget_buffer(buffer_id);
             if pane.buffer_id == buffer_id {
-                pane.buffer_id = new_id;
-                pane.point = 0;
-                pane.scroll_top = 0;
+                pane.restore_buffer_state(new_id, new_buffer_len);
             }
         });
     }
@@ -757,7 +761,11 @@ impl Editor {
         let height = pane.viewport_height;
 
         let is_consecutive = self.last_command == Some(Command::RecenterTopBottom);
-        let position = match if is_consecutive { self.last_recenter_position } else { None } {
+        let position = match if is_consecutive {
+            self.last_recenter_position
+        } else {
+            None
+        } {
             None | Some(RecenterPosition::Bottom) => RecenterPosition::Center,
             Some(RecenterPosition::Center) => RecenterPosition::Top,
             Some(RecenterPosition::Top) => RecenterPosition::Bottom,
@@ -823,9 +831,7 @@ impl Editor {
     fn insert_tab(&mut self) {
         let pos = self.active_pane().point;
         let spaces = " ".repeat(INDENT_WIDTH);
-        self.active_buffer_mut()
-            .history
-            .record_insert(pos, &spaces);
+        self.active_buffer_mut().history.record_insert(pos, &spaces);
         self.active_buffer_mut().insert(pos, &spaces);
         let pane = self.active_pane_mut();
         pane.point = pos + INDENT_WIDTH;
@@ -857,7 +863,8 @@ impl Editor {
         self.active_buffer_mut()
             .history
             .record_replace(line_start, &old_ws, &new_ws);
-        self.active_buffer_mut().remove(line_start, line_start + ws_len);
+        self.active_buffer_mut()
+            .remove(line_start, line_start + ws_len);
         self.active_buffer_mut().insert(line_start, &new_ws);
         self.active_buffer_mut().history.commit();
         let pane = self.active_pane_mut();
@@ -905,9 +912,11 @@ impl Editor {
         };
         let new_ws: String = " ".repeat(remaining_ws_len - remove_count);
 
-        self.active_buffer_mut()
-            .history
-            .record_replace(line_start, &" ".repeat(remaining_ws_len), &new_ws);
+        self.active_buffer_mut().history.record_replace(
+            line_start,
+            &" ".repeat(remaining_ws_len),
+            &new_ws,
+        );
         self.active_buffer_mut()
             .remove(line_start, line_start + remaining_ws_len);
         self.active_buffer_mut().insert(line_start, &new_ws);
@@ -966,25 +975,26 @@ impl Editor {
             } else {
                 buf.char_count()
             };
-            let line_text: String = buf.text.slice(line_start..next_line_start).chars().collect();
+            let line_text: String = buf
+                .text
+                .slice(line_start..next_line_start)
+                .chars()
+                .collect();
 
             new_text.push_str(&indent_str);
             new_text.push_str(&line_text);
 
             // Adjust point and mark if they're on this line
             if point >= line_start
-                && (point < next_line_start
-                    || (line_idx == last_line && point == next_line_start))
+                && (point < next_line_start || (line_idx == last_line && point == next_line_start))
             {
                 new_point = point + INDENT_WIDTH * (line_idx - first_line + 1);
             }
             if mark >= line_start
-                && (mark < next_line_start
-                    || (line_idx == last_line && mark == next_line_start))
+                && (mark < next_line_start || (line_idx == last_line && mark == next_line_start))
             {
                 new_mark = mark + INDENT_WIDTH * (line_idx - first_line + 1);
             }
-
         }
 
         self.active_buffer_mut()
@@ -1039,16 +1049,26 @@ impl Editor {
             } else {
                 buf.char_count()
             };
-            let line_text: String = buf.text.slice(line_start..next_line_start).chars().collect();
+            let line_text: String = buf
+                .text
+                .slice(line_start..next_line_start)
+                .chars()
+                .collect();
 
             // Count leading spaces to remove (up to INDENT_WIDTH)
-            let remove_count = line_text.chars().take(INDENT_WIDTH).take_while(|&c| c == ' ').count();
+            let remove_count = line_text
+                .chars()
+                .take(INDENT_WIDTH)
+                .take_while(|&c| c == ' ')
+                .count();
 
             new_text.push_str(&line_text[remove_count..]);
             cumulative_delta += remove_count;
 
             // Adjust point
-            if point >= line_start && (point < next_line_start || (line_idx == last_line && point == next_line_start)) {
+            if point >= line_start
+                && (point < next_line_start || (line_idx == last_line && point == next_line_start))
+            {
                 let col = point - line_start;
                 if col <= remove_count {
                     new_point = line_start - (cumulative_delta - remove_count);
@@ -1057,7 +1077,9 @@ impl Editor {
                 }
             }
             // Adjust mark
-            if mark >= line_start && (mark < next_line_start || (line_idx == last_line && mark == next_line_start)) {
+            if mark >= line_start
+                && (mark < next_line_start || (line_idx == last_line && mark == next_line_start))
+            {
                 let col = mark - line_start;
                 if col <= remove_count {
                     new_mark = line_start - (cumulative_delta - remove_count);
@@ -1200,8 +1222,7 @@ impl Editor {
                 }
             }
             if let Some(last) = group.edits.last() {
-                self.active_pane_mut().point =
-                    last.position + last.inserted.len();
+                self.active_pane_mut().point = last.position + last.inserted.len();
             }
             self.active_buffer_mut().update_modified();
             if !self.minibuffer.is_active() {
@@ -1227,8 +1248,7 @@ impl Editor {
                 self.minibuffer.show_message(format!("Wrote {}", name));
             }
             Err(e) => {
-                self.minibuffer
-                    .show_message(format!("Error saving: {}", e));
+                self.minibuffer.show_message(format!("Error saving: {}", e));
             }
         }
     }
@@ -1280,9 +1300,7 @@ impl Editor {
                 .slice(start..end)
                 .chars()
                 .collect();
-            self.active_buffer_mut()
-                .history
-                .record_delete(start, &text);
+            self.active_buffer_mut().history.record_delete(start, &text);
             self.active_buffer_mut().remove(start, end);
             self.active_buffer_mut().history.commit();
             self.clipboard = text.clone();
@@ -1326,9 +1344,7 @@ impl Editor {
                 text
             };
             let pos = self.active_pane().point;
-            self.active_buffer_mut()
-                .history
-                .record_insert(pos, &text);
+            self.active_buffer_mut().history.record_insert(pos, &text);
             self.active_buffer_mut().insert(pos, &text);
             self.active_buffer_mut().history.commit();
             self.active_pane_mut().point = pos + text.len();
@@ -1420,16 +1436,12 @@ impl Editor {
         let search_from_byte: usize = text.chars().take(original_char).map(|c| c.len_utf8()).sum();
 
         let found = match direction {
-            SearchDirection::Forward => {
-                text[search_from_byte..].find(&query).map(|byte_i| {
-                    text[..search_from_byte + byte_i].chars().count()
-                })
-            }
-            SearchDirection::Backward => {
-                text[..search_from_byte].rfind(&query).map(|byte_i| {
-                    text[..byte_i].chars().count()
-                })
-            }
+            SearchDirection::Forward => text[search_from_byte..]
+                .find(&query)
+                .map(|byte_i| text[..search_from_byte + byte_i].chars().count()),
+            SearchDirection::Backward => text[..search_from_byte]
+                .rfind(&query)
+                .map(|byte_i| text[..byte_i].chars().count()),
         };
 
         if let Some(char_pos) = found {
@@ -1440,9 +1452,9 @@ impl Editor {
             let vw = pane.viewport_width;
             let buf = self.current_buffer();
             let (line, _) = buf.char_to_line_col(char_pos);
-            let new_top = crate::pane::compute_scroll_top(
-                scroll_top, line, vh, vw, |l| buf.line_len_chars(l),
-            );
+            let new_top = crate::pane::compute_scroll_top(scroll_top, line, vh, vw, |l| {
+                buf.line_len_chars(l)
+            });
             self.pane_tree.focused_pane_mut().scroll_top = new_top;
             if let Some(ref mut isearch) = self.isearch {
                 isearch.current_match = Some(char_pos);
@@ -1474,15 +1486,15 @@ impl Editor {
                 let start = (current_point + 1).min(text.chars().count());
                 // Convert char offset to byte offset for string search
                 let byte_start: usize = text.chars().take(start).map(|c| c.len_utf8()).sum();
-                text[byte_start..].find(&query).map(|byte_i| {
-                    start + text[byte_start..byte_start + byte_i].chars().count()
-                })
+                text[byte_start..]
+                    .find(&query)
+                    .map(|byte_i| start + text[byte_start..byte_start + byte_i].chars().count())
             }
             SearchDirection::Backward => {
                 let byte_end: usize = text.chars().take(current_point).map(|c| c.len_utf8()).sum();
-                text[..byte_end].rfind(&query).map(|byte_i| {
-                    text[..byte_i].chars().count()
-                })
+                text[..byte_end]
+                    .rfind(&query)
+                    .map(|byte_i| text[..byte_i].chars().count())
             }
         };
 
@@ -1494,15 +1506,16 @@ impl Editor {
             let vw = pane.viewport_width;
             let buf = self.current_buffer();
             let (line, _) = buf.char_to_line_col(char_pos);
-            let new_top = crate::pane::compute_scroll_top(
-                scroll_top, line, vh, vw, |l| buf.line_len_chars(l),
-            );
+            let new_top = crate::pane::compute_scroll_top(scroll_top, line, vh, vw, |l| {
+                buf.line_len_chars(l)
+            });
             self.pane_tree.focused_pane_mut().scroll_top = new_top;
             if let Some(ref mut isearch) = self.isearch {
                 isearch.current_match = Some(char_pos);
             }
         } else {
-            self.minibuffer.show_message(format!("Failing I-search: {}", query));
+            self.minibuffer
+                .show_message(format!("Failing I-search: {}", query));
         }
     }
 
@@ -1528,12 +1541,16 @@ impl Editor {
         let mut char_offset = 0usize;
 
         while let Some(byte_pos) = text[search_start..].find(query) {
-            let match_char = char_offset
-                + text[search_start..search_start + byte_pos].chars().count();
+            let match_char =
+                char_offset + text[search_start..search_start + byte_pos].chars().count();
             matches.push((match_char, query_char_len));
             // Advance past this match by one char
-            let next_byte = search_start + byte_pos
-                + text[search_start + byte_pos..].chars().next().map_or(1, |c| c.len_utf8());
+            let next_byte = search_start
+                + byte_pos
+                + text[search_start + byte_pos..]
+                    .chars()
+                    .next()
+                    .map_or(1, |c| c.len_utf8());
             char_offset = match_char + 1;
             search_start = next_byte;
         }
@@ -1713,9 +1730,7 @@ mod tests {
         for _ in 0..8 {
             editor.execute(Command::NextLine);
         }
-        let (line, _) = editor
-            .current_buffer()
-            .char_to_line_col(editor.point());
+        let (line, _) = editor.current_buffer().char_to_line_col(editor.point());
         assert_eq!(line, 8);
         let pane = editor.pane_tree.focused_pane();
         assert!(pane.scroll_top <= line);
@@ -1786,14 +1801,10 @@ mod tests {
         let mut editor = Editor::new_with_text("a\nb\nc\nd\ne\nf\ng\nh\ni\nj");
         editor.pane_tree.focused_pane_mut().viewport_height = 3;
         editor.execute(Command::PageDown);
-        let (line, _) = editor
-            .current_buffer()
-            .char_to_line_col(editor.point());
+        let (line, _) = editor.current_buffer().char_to_line_col(editor.point());
         assert_eq!(line, 3);
         editor.execute(Command::PageUp);
-        let (line, _) = editor
-            .current_buffer()
-            .char_to_line_col(editor.point());
+        let (line, _) = editor.current_buffer().char_to_line_col(editor.point());
         assert_eq!(line, 0);
     }
 
@@ -1962,9 +1973,7 @@ mod tests {
         editor.execute(Command::GotoLine);
         editor.set_minibuffer_text("3");
         editor.submit_prompt();
-        let (line, _) = editor
-            .current_buffer()
-            .char_to_line_col(editor.point());
+        let (line, _) = editor.current_buffer().char_to_line_col(editor.point());
         assert_eq!(line, 2);
     }
 
@@ -2030,6 +2039,92 @@ mod tests {
         editor.submit_prompt();
 
         assert_eq!(editor.current_buffer().name, "*scratch*");
+    }
+
+    #[test]
+    fn switch_buffer_empty_input_uses_last_buffer_in_window() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.txt");
+        std::fs::write(&file, "file content").unwrap();
+
+        let mut editor = Editor::new();
+        editor.open_file(&file).unwrap();
+        assert_eq!(editor.current_buffer().name, "test.txt");
+
+        editor.execute(Command::SwitchBuffer);
+        editor.set_minibuffer_text("");
+        editor.submit_prompt();
+        assert_eq!(editor.current_buffer().name, "*scratch*");
+
+        editor.execute(Command::SwitchBuffer);
+        editor.set_minibuffer_text("");
+        editor.submit_prompt();
+        assert_eq!(editor.current_buffer().name, "test.txt");
+    }
+
+    #[test]
+    fn switch_buffer_restores_point_in_window() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.txt");
+        std::fs::write(&file, "file buffer").unwrap();
+
+        let mut editor = Editor::new_with_text("scratch buffer");
+        editor.pane_tree.focused_pane_mut().point = 6;
+
+        editor.open_file(&file).unwrap();
+        editor.pane_tree.focused_pane_mut().point = 4;
+
+        editor.execute(Command::SwitchBuffer);
+        editor.set_minibuffer_text("*scratch*");
+        editor.submit_prompt();
+        assert_eq!(editor.current_buffer().name, "*scratch*");
+        assert_eq!(editor.point(), 6);
+
+        editor.execute(Command::SwitchBuffer);
+        editor.set_minibuffer_text("test.txt");
+        editor.submit_prompt();
+        assert_eq!(editor.current_buffer().name, "test.txt");
+        assert_eq!(editor.point(), 4);
+    }
+
+    #[test]
+    fn switch_buffer_restores_point_per_window() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.txt");
+        std::fs::write(&file, "file buffer").unwrap();
+
+        let mut editor = Editor::new_with_text("scratch buffer");
+        editor.pane_tree.focused_pane_mut().point = 2;
+        editor.open_file(&file).unwrap();
+        editor.pane_tree.focused_pane_mut().point = 5;
+
+        editor.execute(Command::SplitVertical);
+        editor.execute(Command::CycleFocus);
+        editor.pane_tree.focused_pane_mut().point = 1;
+
+        editor.execute(Command::SwitchBuffer);
+        editor.set_minibuffer_text("*scratch*");
+        editor.submit_prompt();
+        editor.pane_tree.focused_pane_mut().point = 7;
+
+        editor.execute(Command::SwitchBuffer);
+        editor.set_minibuffer_text("test.txt");
+        editor.submit_prompt();
+        assert_eq!(editor.point(), 1);
+
+        editor.execute(Command::CycleFocus);
+        assert_eq!(editor.current_buffer().name, "test.txt");
+        assert_eq!(editor.point(), 5);
+
+        editor.execute(Command::SwitchBuffer);
+        editor.set_minibuffer_text("*scratch*");
+        editor.submit_prompt();
+        assert_eq!(editor.point(), 2);
+
+        editor.execute(Command::SwitchBuffer);
+        editor.set_minibuffer_text("test.txt");
+        editor.submit_prompt();
+        assert_eq!(editor.point(), 5);
     }
 
     // === Region/Clipboard tests ===
@@ -2459,10 +2554,7 @@ mod tests {
     fn swap_point_and_mark_no_mark() {
         let mut editor = Editor::new_with_text("hello");
         editor.execute(Command::SwapPointAndMark);
-        assert_eq!(
-            editor.minibuffer.message,
-            Some("No mark set".to_string())
-        );
+        assert_eq!(editor.minibuffer.message, Some("No mark set".to_string()));
     }
 
     #[test]
@@ -2660,7 +2752,12 @@ mod tests {
         editor.isearch_update();
         // Try to cycle — no more matches
         editor.isearch_next();
-        assert!(editor.minibuffer.message.as_ref().unwrap().contains("Failing"));
+        assert!(editor
+            .minibuffer
+            .message
+            .as_ref()
+            .unwrap()
+            .contains("Failing"));
     }
 
     #[test]
@@ -2690,7 +2787,15 @@ mod tests {
         let first = editor.point();
         editor.isearch_next();
         // Should find an earlier match
-        assert!(editor.point() < first || editor.minibuffer.message.as_ref().unwrap().contains("Failing"));
+        assert!(
+            editor.point() < first
+                || editor
+                    .minibuffer
+                    .message
+                    .as_ref()
+                    .unwrap()
+                    .contains("Failing")
+        );
     }
 
     #[test]
