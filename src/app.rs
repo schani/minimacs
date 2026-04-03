@@ -374,8 +374,8 @@ where
                         } else {
                             target_col = col_in_text;
                         }
-                        // Clamp to actual line length
-                        target_col = target_col.min(line_len.saturating_sub(1));
+                        // Clamp to end of line (past last char)
+                        target_col = target_col.min(line_len);
                         break;
                     }
 
@@ -1690,7 +1690,7 @@ mod tests {
     }
 
     #[test]
-    fn mouse_click_beyond_line_end_clamps() {
+    fn mouse_click_beyond_line_end_places_cursor_past_last_char() {
         let text = "hi\nworld";
         // Click far right on the first line (line "hi" has 2 chars)
         let events = vec![mouse_click(30, 0)]; // way past end of "hi"
@@ -1702,8 +1702,8 @@ mod tests {
             .current_buffer()
             .char_to_line_col(app.editor.point());
         assert_eq!(line, 0);
-        // Should clamp to last char of line
-        assert!(col <= 1, "col should be clamped to end of line, got {}", col);
+        // Should place cursor past the last char (at col 2 for "hi")
+        assert_eq!(col, 2, "col should be past end of line, got {}", col);
     }
 
     #[test]
