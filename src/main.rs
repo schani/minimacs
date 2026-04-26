@@ -4,6 +4,7 @@ mod command;
 mod editor;
 mod event;
 mod history;
+mod indent;
 mod keymap;
 mod minibuffer;
 mod pane;
@@ -38,7 +39,7 @@ fn main() -> Result<()> {
     if let Some(path) = file_path {
         let path = std::path::Path::new(path);
         if let Err(e) = editor.open_file(path) {
-            editor.minibuffer.show_message(format!("{}", e));
+            editor.minibuffer.show_message(format!("{e}"));
         }
     }
 

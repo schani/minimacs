@@ -4,10 +4,9 @@ use ratatui::layout::Direction;
 
 use crate::buffer::Buffer;
 use crate::command::Command;
+use crate::indent::INDENT_WIDTH;
 use crate::minibuffer::{normalize_path_string, Minibuffer, PromptKind};
 use crate::pane::{Pane, PaneTree};
-
-const INDENT_WIDTH: usize = 4;
 
 /// Position for recenter-top-bottom cycling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -112,7 +111,7 @@ impl Editor {
             let name = self.buffer_by_id(buffer_id).name.clone();
             self.switch_focused_pane_to_buffer(buffer_id);
             self.minibuffer
-                .show_message(format!("Switched to buffer {}", name));
+                .show_message(format!("Switched to buffer {name}"));
             return Ok(());
         }
 
@@ -128,9 +127,9 @@ impl Editor {
         };
         let name = buf.name.clone();
         let msg = if buf.path.as_ref().is_some_and(|p| p.exists()) {
-            format!("Opened {}", name)
+            format!("Opened {name}")
         } else {
-            format!("(New file) {}", name)
+            format!("(New file) {name}")
         };
         self.buffers.push(buf);
         self.switch_focused_pane_to_buffer(id);
@@ -431,7 +430,7 @@ impl Editor {
                 self.minibuffer.finish();
                 let path = PathBuf::from(normalize_path_string(&input));
                 if let Err(e) = self.open_file(&path) {
-                    self.minibuffer.show_message(format!("{}", e));
+                    self.minibuffer.show_message(format!("{e}"));
                 }
             }
             PromptKind::SwitchBuffer => {
@@ -509,7 +508,7 @@ impl Editor {
             self.switch_focused_pane_to_buffer(buffer_id);
         } else if !name.is_empty() {
             self.minibuffer
-                .show_message(format!("No buffer named '{}'", name));
+                .show_message(format!("No buffer named '{name}'"));
         }
     }
 
@@ -525,7 +524,7 @@ impl Editor {
                 PromptKind::SaveConfirm {
                     buffer_name: name.clone(),
                 },
-                &format!("Buffer {} modified; kill anyway? (y/n) ", name),
+                &format!("Buffer {name} modified; kill anyway? (y/n) "),
             );
             return;
         }
@@ -818,7 +817,7 @@ impl Editor {
             }
         }
 
-        let insert_str = format!("{}{}", le, indent);
+        let insert_str = format!("{le}{indent}");
         self.active_buffer_mut()
             .history
             .record_insert(pos, &insert_str);
@@ -1245,10 +1244,10 @@ impl Editor {
         match self.current_buffer_mut().save() {
             Ok(()) => {
                 let name = self.current_buffer().name.clone();
-                self.minibuffer.show_message(format!("Wrote {}", name));
+                self.minibuffer.show_message(format!("Wrote {name}"));
             }
             Err(e) => {
-                self.minibuffer.show_message(format!("Error saving: {}", e));
+                self.minibuffer.show_message(format!("Error saving: {e}"));
             }
         }
     }
@@ -1515,7 +1514,7 @@ impl Editor {
             }
         } else {
             self.minibuffer
-                .show_message(format!("Failing I-search: {}", query));
+                .show_message(format!("Failing I-search: {query}"));
         }
     }
 
@@ -1569,7 +1568,7 @@ impl Editor {
                     PromptKind::SaveConfirm {
                         buffer_name: name.clone(),
                     },
-                    &format!("Save buffer {}? (y/n/q) ", name),
+                    &format!("Save buffer {name}? (y/n/q) "),
                 );
                 return;
             }

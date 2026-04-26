@@ -41,6 +41,7 @@ src/
   render.rs         render() -- walks pane tree, produces ratatui widgets
   minibuffer.rs     Minibuffer/Prompt -- prompt state, tab completion functions
   history.rs        History -- undo/redo with edit grouping
+  indent.rs         Shared indentation constants (INDENT_WIDTH = 4)
   syntax.rs         SyntaxState -- tree-sitter highlighting
   event.rs          EventSource trait -- abstracts terminal vs test input
 ```
@@ -232,7 +233,12 @@ cursor by 3 lines without changing which pane is focused.
    - Splits the pane rect into a text area and a 1-row mode line.
    - For each visible line: if syntax state exists, computes per-character
      styles from tree-sitter highlight spans; otherwise uses default style.
-   - Long lines are wrapped with a `\` continuation marker in the last column.
+   - Literal tab characters are expanded for display only to spaces ending at
+     the next `INDENT_WIDTH` tab stop. The buffer still stores each tab as a
+     single character, and editing/movement indexes are not changed by this
+     rendering expansion.
+   - Long lines are wrapped with a `\` continuation marker in the last column,
+     using the expanded visual width for tab characters.
    - Overlays region highlighting (white background between mark and point).
    - Overlays search match highlighting (yellow for current match, dark for
      others).
@@ -245,7 +251,8 @@ cursor by 3 lines without changing which pane is focused.
 4. Renders the minibuffer (prompt or message).
 5. Sets the terminal cursor position. If the minibuffer is active, the cursor
    goes to the minibuffer input. Otherwise it is placed at the focused pane's
-   point, accounting for line wrapping when computing the visual position.
+   point, accounting for line wrapping and display-only tab expansion when
+   computing the visual position.
 
 ## Syntax Highlighting
 

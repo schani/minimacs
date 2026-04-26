@@ -282,7 +282,7 @@ impl SyntaxState {
         let mut config = match result {
             Ok(c) => c,
             Err(e) => {
-                eprintln!("Failed to create highlight config for {:?}: {:?}", lang, e);
+                eprintln!("Failed to create highlight config for {lang:?}: {e:?}");
                 return None;
             }
         };

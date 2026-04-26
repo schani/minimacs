@@ -6,6 +6,7 @@ use ratatui::Frame;
 
 use crate::buffer::Buffer;
 use crate::editor::Editor;
+use crate::indent::INDENT_WIDTH;
 use crate::pane::{visual_lines_for_length, Pane};
 
 /// Compute the multi-column layout for completions.
@@ -109,21 +110,24 @@ pub fn render(frame: &mut Frame, editor: &Editor) {
             let (cursor_line, cursor_col) = buf.char_to_line_col(pane.point);
             let text_width = text_area.width as usize;
 
-            // Compute visual row from scroll_top, accounting for wrapping.
+            // Compute visual row from scroll_top, accounting for wrapping and
+            // display-only tab expansion.
             // Only place cursor if it's within the visible viewport.
             let mut visual_row: usize = 0;
             for lidx in pane.scroll_top..cursor_line {
-                let line_len = buf.line_len_chars(lidx);
-                visual_row += visual_lines_for_length(line_len, text_width);
+                let line_visual_width = line_visual_width(buf, lidx);
+                visual_row += visual_lines_for_length(line_visual_width, text_width);
             }
 
-            // Add offset within cursor's line if it wraps
-            let line_len = buf.line_len_chars(cursor_line);
-            let (row_in_line, col_in_segment) = if text_width > 1 && line_len > text_width {
+            // Add offset within cursor's line if it wraps.
+            let cursor_line_chars = line_chars_without_ending(buf, cursor_line);
+            let cursor_visual_col = visual_col_for_buffer_col(&cursor_line_chars, cursor_col);
+            let line_visual_width = visual_width_for_chars(&cursor_line_chars);
+            let (row_in_line, col_in_segment) = if text_width > 1 && line_visual_width > text_width {
                 let cps = text_width - 1;
-                (cursor_col / cps, cursor_col % cps)
+                (cursor_visual_col / cps, cursor_visual_col % cps)
             } else {
-                (0, cursor_col)
+                (0, cursor_visual_col)
             };
             visual_row += row_in_line;
 
@@ -160,6 +164,72 @@ pub fn render(frame: &mut Frame, editor: &Editor) {
     render_minibuffer(frame, editor, minibuffer_area);
 }
 
+#[derive(Clone, Copy)]
+struct VisualCell {
+    ch: char,
+    buffer_col: usize,
+    buffer_char_pos: usize,
+}
+
+fn line_chars_without_ending(buf: &Buffer, line_idx: usize) -> Vec<char> {
+    let line_text: String = buf.text.line(line_idx).chars().collect();
+    line_text
+        .trim_end_matches('\n')
+        .trim_end_matches('\r')
+        .chars()
+        .collect()
+}
+
+fn tab_width_at(visual_col: usize) -> usize {
+    INDENT_WIDTH - (visual_col % INDENT_WIDTH)
+}
+
+fn visual_width_for_chars(line_chars: &[char]) -> usize {
+    line_chars.iter().fold(0, |visual_col, ch| {
+        if *ch == '\t' {
+            visual_col + tab_width_at(visual_col)
+        } else {
+            visual_col + 1
+        }
+    })
+}
+
+fn line_visual_width(buf: &Buffer, line_idx: usize) -> usize {
+    visual_width_for_chars(&line_chars_without_ending(buf, line_idx))
+}
+
+fn visual_col_for_buffer_col(line_chars: &[char], buffer_col: usize) -> usize {
+    visual_width_for_chars(&line_chars[..buffer_col.min(line_chars.len())])
+}
+
+fn expand_tabs_for_display(line_chars: &[char], line_start_char: usize) -> Vec<VisualCell> {
+    let mut cells = Vec::new();
+    let mut visual_col = 0;
+
+    for (buffer_col, ch) in line_chars.iter().copied().enumerate() {
+        let buffer_char_pos = line_start_char + buffer_col;
+        if ch == '\t' {
+            let width = tab_width_at(visual_col);
+            for _ in 0..width {
+                cells.push(VisualCell {
+                    ch: ' ',
+                    buffer_col,
+                    buffer_char_pos,
+                });
+            }
+            visual_col += width;
+        } else {
+            cells.push(VisualCell {
+                ch,
+                buffer_col,
+                buffer_char_pos,
+            });
+            visual_col += 1;
+        }
+    }
+
+    cells
+}
 
 fn render_pane_text(
     frame: &mut Frame,
@@ -182,10 +252,9 @@ fn render_pane_text(
     let mut line_idx = scroll_top;
 
     while output_lines.len() < max_visual_rows && line_idx < total_lines {
-        let line_text: String = buf.text.line(line_idx).chars().collect();
-        let line_text = line_text.trim_end_matches('\n').trim_end_matches('\r');
         let line_start_char = buf.text.line_to_char(line_idx);
-        let line_chars: Vec<char> = line_text.chars().collect();
+        let line_chars = line_chars_without_ending(buf, line_idx);
+        let visual_cells = expand_tabs_for_display(&line_chars, line_start_char);
 
         if text_width == 0 {
             output_lines.push(Line::from(Span::raw(String::new())));
@@ -193,18 +262,17 @@ fn render_pane_text(
             continue;
         }
 
-        if line_chars.len() <= text_width {
+        if visual_cells.len() <= text_width {
             // Line fits in one visual row — no wrapping needed
             let mut spans = Vec::new();
 
-            if !line_chars.is_empty() {
+            if !visual_cells.is_empty() {
                 build_styled_spans(
                     &mut spans,
-                    &line_chars,
+                    &visual_cells,
                     0,
-                    line_chars.len(),
+                    visual_cells.len(),
                     line_idx,
-                    line_start_char,
                     region,
                     search_matches,
                     current_match,
@@ -218,8 +286,8 @@ fn render_pane_text(
             let chars_per_segment = (text_width - 1).max(1);
             let mut offset = 0;
 
-            while offset < line_chars.len() && output_lines.len() < max_visual_rows {
-                let remaining = line_chars.len() - offset;
+            while offset < visual_cells.len() && output_lines.len() < max_visual_rows {
+                let remaining = visual_cells.len() - offset;
                 let is_last = remaining <= text_width;
                 let segment_len = if is_last { remaining } else { chars_per_segment };
 
@@ -227,11 +295,10 @@ fn render_pane_text(
 
                 build_styled_spans(
                     &mut spans,
-                    &line_chars,
+                    &visual_cells,
                     offset,
                     offset + segment_len,
                     line_idx,
-                    line_start_char,
                     region,
                     search_matches,
                     current_match,
@@ -265,31 +332,29 @@ fn render_pane_text(
     frame.render_widget(paragraph, area);
 }
 
-/// Build styled spans for a segment of a buffer line (chars[start..end]).
+/// Build styled spans for a segment of expanded display cells.
 #[allow(clippy::too_many_arguments)]
 fn build_styled_spans(
     spans: &mut Vec<Span<'static>>,
-    line_chars: &[char],
+    visual_cells: &[VisualCell],
     start: usize,
     end: usize,
     line_idx: usize,
-    line_start_char: usize,
     region: Option<(usize, usize)>,
     search_matches: &[(usize, usize)],
     current_match: Option<usize>,
     syntax_styles: &Option<std::collections::HashMap<(usize, usize), Style>>,
 ) {
-    let segment = &line_chars[start..end];
+    let segment = &visual_cells[start..end];
     if segment.is_empty() {
         return;
     }
 
     let char_styles: Vec<Style> = segment
         .iter()
-        .enumerate()
-        .map(|(j, _)| {
-            let col = start + j; // column within the buffer line
-            let char_pos = line_start_char + col; // global char position
+        .map(|cell| {
+            let col = cell.buffer_col;
+            let char_pos = cell.buffer_char_pos;
 
             let in_region = region
                 .map(|(rs, re)| char_pos >= rs && char_pos < re)
@@ -328,7 +393,10 @@ fn build_styled_spans(
         while run_end < segment.len() && char_styles[run_end] == style {
             run_end += 1;
         }
-        let text: String = segment[run_start..run_end].iter().collect();
+        let text: String = segment[run_start..run_end]
+            .iter()
+            .map(|cell| cell.ch)
+            .collect();
         spans.push(Span::styled(text, style));
         run_start = run_end;
     }
@@ -451,7 +519,7 @@ fn render_pane_mode_line(
 
     let pending = &editor.pending_keys;
     let pending_display = if is_focused && !pending.is_empty() {
-        format!("  {}", pending)
+        format!("  {pending}")
     } else {
         String::new()
     };
@@ -465,7 +533,7 @@ fn render_pane_mode_line(
         position,
         language_display
     );
-    let right = format!("{} ", pending_display);
+    let right = format!("{pending_display} ");
 
     // Pad to fill the line
     let total_width = area.width as usize;
@@ -477,7 +545,7 @@ fn render_pane_mode_line(
         String::new()
     };
 
-    let mode_line_text = format!("{}{}{}", left, padding, right);
+    let mode_line_text = format!("{left}{padding}{right}");
 
     let style = if is_focused {
         Style::default()
@@ -560,7 +628,7 @@ fn render_minibuffer(frame: &mut Frame, editor: &Editor, area: Rect) {
     let text = if editor.minibuffer.is_active() {
         let label = &editor.minibuffer.prompt().unwrap().label;
         let input: String = editor.minibuffer_buffer.text.to_string();
-        format!("{}{}", label, input)
+        format!("{label}{input}")
     } else {
         editor.minibuffer.message.as_deref().unwrap_or("").to_string()
     };

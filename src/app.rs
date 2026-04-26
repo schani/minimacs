@@ -623,6 +623,64 @@ mod tests {
     }
 
     #[test]
+    fn literal_tab_at_line_start_displays_as_spaces_to_tab_stop() {
+        let (mut app, mut events) = test_app_with_text(20, 6, "\tfoo", vec![]);
+        app.run_until_idle(&mut events).unwrap();
+
+        let screen = capture_screen(&app.terminal);
+        let lines: Vec<&str> = screen.lines().collect();
+        assert_eq!(lines[0], "    foo");
+        assert_eq!(app.editor.buffer_text(), "\tfoo");
+    }
+
+    #[test]
+    fn literal_tabs_display_by_snapping_to_next_tab_stop() {
+        let text = "a\tfoo\nabcd\tfoo\nab\tcd\te";
+        let (mut app, mut events) = test_app_with_text(20, 8, text, vec![]);
+        app.run_until_idle(&mut events).unwrap();
+
+        let screen = capture_screen(&app.terminal);
+        let lines: Vec<&str> = screen.lines().collect();
+        assert_eq!(lines[0], "a   foo");
+        assert_eq!(lines[1], "abcd    foo");
+        assert_eq!(lines[2], "ab  cd  e");
+        assert_eq!(app.editor.buffer_text(), text);
+    }
+
+    #[test]
+    fn cursor_after_literal_tab_uses_expanded_visual_column() {
+        let events = vec![ctrl('f')];
+        let (mut app, mut events) = test_app_with_text(20, 6, "\tfoo", events);
+        app.run_until_idle(&mut events).unwrap();
+
+        assert_eq!(app.editor.point(), 1, "tab should remain one buffer character");
+        let pos = app.terminal.get_cursor_position().unwrap();
+        assert_eq!((pos.x, pos.y), (4, 0));
+    }
+
+    #[test]
+    fn cursor_after_literal_tab_snaps_to_next_tab_stop() {
+        let events = vec![ctrl('f'), ctrl('f')];
+        let (mut app, mut events) = test_app_with_text(20, 6, "a\tfoo", events);
+        app.run_until_idle(&mut events).unwrap();
+
+        assert_eq!(app.editor.point(), 2, "tab should remain one buffer character");
+        let pos = app.terminal.get_cursor_position().unwrap();
+        assert_eq!((pos.x, pos.y), (4, 0));
+    }
+
+    #[test]
+    fn literal_tabs_wrap_using_expanded_visual_width() {
+        let (mut app, mut events) = test_app_with_text(8, 6, "abcdef\tgh", vec![]);
+        app.run_until_idle(&mut events).unwrap();
+
+        let screen = capture_screen(&app.terminal);
+        let lines: Vec<&str> = screen.lines().collect();
+        assert_eq!(lines[0], "abcdef \\");
+        assert_eq!(lines[1], " gh");
+    }
+
+    #[test]
     fn tab_inserts_four_spaces() {
         let events = vec![key(KeyCode::Tab)];
         let (mut app, mut events) = test_app(40, 10, events);
