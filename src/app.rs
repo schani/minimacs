@@ -355,27 +355,25 @@ where
                 let total_lines = buf.line_count();
                 let mut visual_row: usize = 0;
                 let mut target_line = scroll_top;
-                let mut target_col = col_in_text;
+                let mut target_visual_col = col_in_text;
 
                 let mut line_idx = scroll_top;
                 while line_idx < total_lines {
-                    let line_len = buf.line_len_chars(line_idx);
-                    let num_visual = crate::pane::visual_lines_for_length(line_len, text_width);
+                    let line_visual_width = render::line_visual_width(buf, line_idx);
+                    let num_visual = crate::pane::visual_lines_for_length(line_visual_width, text_width);
 
                     if visual_row + num_visual > rel_y {
                         // The click is within this line's visual rows
                         target_line = line_idx;
                         let row_within_line = rel_y - visual_row;
 
-                        if text_width > 1 && line_len > text_width {
-                            // Wrapped line: compute column from segment
+                        if text_width > 1 && line_visual_width > text_width {
+                            // Wrapped line: compute visual column from segment
                             let chars_per_segment = text_width - 1;
-                            target_col = row_within_line * chars_per_segment + col_in_text;
+                            target_visual_col = row_within_line * chars_per_segment + col_in_text;
                         } else {
-                            target_col = col_in_text;
+                            target_visual_col = col_in_text;
                         }
-                        // Clamp to end of line (past last char)
-                        target_col = target_col.min(line_len);
                         break;
                     }
 
@@ -388,6 +386,7 @@ where
                     let char_count = buf.char_count();
                     self.editor.pane_tree.focused_pane_mut().point = char_count;
                 } else {
+                    let target_col = render::buffer_col_for_visual_col(buf, target_line, target_visual_col);
                     let char_pos = buf.line_col_to_char(target_line, target_col);
                     self.editor.pane_tree.focused_pane_mut().point = char_pos;
                 }
@@ -1762,6 +1761,51 @@ mod tests {
         assert_eq!(line, 0);
         // Should place cursor past the last char (at col 2 for "hi")
         assert_eq!(col, 2, "col should be past end of line, got {}", col);
+    }
+
+    #[test]
+    fn mouse_click_after_leading_tab_uses_visual_column() {
+        let text = "\tfoo";
+        let events = vec![mouse_click(4, 0)]; // visual column 4 is after the tab
+        let (mut app, mut events) = test_app_with_text(20, 6, text, events);
+        app.run_until_idle(&mut events).unwrap();
+
+        let (line, col) = app
+            .editor
+            .current_buffer()
+            .char_to_line_col(app.editor.point());
+        assert_eq!(line, 0);
+        assert_eq!(col, 1, "tab should count as one buffer character");
+    }
+
+    #[test]
+    fn mouse_click_after_mid_line_tab_uses_visual_column() {
+        let text = "a\tfoo";
+        let events = vec![mouse_click(4, 0)]; // visual column 4 is after "a\t"
+        let (mut app, mut events) = test_app_with_text(20, 6, text, events);
+        app.run_until_idle(&mut events).unwrap();
+
+        let (line, col) = app
+            .editor
+            .current_buffer()
+            .char_to_line_col(app.editor.point());
+        assert_eq!(line, 0);
+        assert_eq!(col, 2, "tab should count as one buffer character");
+    }
+
+    #[test]
+    fn mouse_click_wrapped_line_with_tab_uses_visual_column() {
+        let text = "abcdef\tgh";
+        let events = vec![mouse_click(1, 1)]; // row 1 col 1 is before 'g' after wrapped tab spaces
+        let (mut app, mut events) = test_app_with_text(8, 6, text, events);
+        app.run_until_idle(&mut events).unwrap();
+
+        let (line, col) = app
+            .editor
+            .current_buffer()
+            .char_to_line_col(app.editor.point());
+        assert_eq!(line, 0);
+        assert_eq!(col, 7, "click should land before 'g', after the single tab character");
     }
 
     #[test]

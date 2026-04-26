@@ -217,7 +217,8 @@ discarded branch, `clean_version` is set to `None` (unreachable).
 `Event::Mouse` handles left-button clicks. When the minibuffer is not active,
 a click determines which pane was clicked (using `calculate_rects()`), focuses
 that pane, and places the cursor at the clicked position. The position
-calculation accounts for line wrapping and scroll position.
+calculation accounts for line wrapping, scroll position, and display-only tab
+expansion while still mapping back to buffer character indices.
 Clicks below all content place the cursor at the end of the buffer.
 Mouse scroll events (`ScrollUp`/`ScrollDown`) scroll the pane under the mouse
 cursor by 3 lines without changing which pane is focused.

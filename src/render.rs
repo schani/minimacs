@@ -194,12 +194,35 @@ fn visual_width_for_chars(line_chars: &[char]) -> usize {
     })
 }
 
-fn line_visual_width(buf: &Buffer, line_idx: usize) -> usize {
+pub(crate) fn line_visual_width(buf: &Buffer, line_idx: usize) -> usize {
     visual_width_for_chars(&line_chars_without_ending(buf, line_idx))
 }
 
 fn visual_col_for_buffer_col(line_chars: &[char], buffer_col: usize) -> usize {
     visual_width_for_chars(&line_chars[..buffer_col.min(line_chars.len())])
+}
+
+pub(crate) fn buffer_col_for_visual_col(buf: &Buffer, line_idx: usize, target_visual_col: usize) -> usize {
+    let line_chars = line_chars_without_ending(buf, line_idx);
+    let mut visual_col = 0;
+
+    for (buffer_col, ch) in line_chars.iter().enumerate() {
+        if target_visual_col <= visual_col {
+            return buffer_col;
+        }
+
+        if *ch == '\t' {
+            let next_visual_col = visual_col + tab_width_at(visual_col);
+            if target_visual_col < next_visual_col {
+                return buffer_col + 1;
+            }
+            visual_col = next_visual_col;
+        } else {
+            visual_col += 1;
+        }
+    }
+
+    line_chars.len()
 }
 
 fn expand_tabs_for_display(line_chars: &[char], line_start_char: usize) -> Vec<VisualCell> {
