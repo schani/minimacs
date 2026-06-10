@@ -16,8 +16,10 @@ pub enum PromptKind {
     WriteFile,
     GotoLine,
     ISearch,
-    /// "Save buffer X? (y/n/q)"
-    SaveConfirm { buffer_name: String },
+    /// "Buffer X modified; kill anyway? (y/n)"
+    KillConfirm { buffer_id: usize },
+    /// "Save buffer X? (y/n/q)" — asked once per modified buffer when quitting.
+    QuitSaveConfirm { buffer_id: usize },
 }
 
 #[derive(Debug)]

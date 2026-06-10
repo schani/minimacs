@@ -52,6 +52,8 @@ pub struct Editor {
     last_command: Option<Command>,
     /// Tracks last recenter position for C-l cycling.
     last_recenter_position: Option<RecenterPosition>,
+    /// Buffer ids still awaiting a save-confirm answer during a quit.
+    quit_pending: Vec<usize>,
 }
 
 #[allow(dead_code)]
@@ -74,6 +76,7 @@ impl Editor {
             isearch: None,
             last_command: None,
             last_recenter_position: None,
+            quit_pending: Vec::new(),
         }
     }
 
@@ -95,6 +98,7 @@ impl Editor {
             isearch: None,
             last_command: None,
             last_recenter_position: None,
+            quit_pending: Vec::new(),
         }
     }
 
@@ -464,26 +468,58 @@ impl Editor {
                 // Enter during isearch accepts the position
                 self.isearch_accept();
             }
-            PromptKind::SaveConfirm { buffer_name } => {
+            PromptKind::KillConfirm { buffer_id } => {
                 self.minibuffer.finish();
                 match input.as_str() {
-                    "y" | "Y" => {
-                        if let Some(buf) = self.buffers.iter_mut().find(|b| b.name == buffer_name) {
-                            if buf.path.is_some() {
-                                let _ = buf.save();
+                    "y" | "Y" => self.do_kill_buffer(buffer_id),
+                    "n" | "N" => {}
+                    _ => self
+                        .minibuffer
+                        .show_message("Please answer y or n".to_string()),
+                }
+            }
+            PromptKind::QuitSaveConfirm { buffer_id } => {
+                self.minibuffer.finish();
+                match input.as_str() {
+                    "y" | "Y" => match self.buffers.iter_mut().find(|b| b.id == buffer_id) {
+                        Some(buf) if buf.path.is_some() => {
+                            let name = buf.name.clone();
+                            match buf.save() {
+                                Ok(()) => {
+                                    self.quit_pending.retain(|&id| id != buffer_id);
+                                    self.continue_quit();
+                                }
+                                Err(e) => {
+                                    self.quit_pending.clear();
+                                    self.minibuffer
+                                        .show_message(format!("Could not save {name}: {e}"));
+                                }
                             }
                         }
-                        self.should_quit = true;
-                    }
+                        Some(buf) => {
+                            let name = buf.name.clone();
+                            self.quit_pending.clear();
+                            self.minibuffer.show_message(format!(
+                                "Buffer {name} has no file; save it with C-x C-w first"
+                            ));
+                        }
+                        None => {
+                            // Buffer disappeared in the meantime; skip it.
+                            self.quit_pending.retain(|&id| id != buffer_id);
+                            self.continue_quit();
+                        }
+                    },
                     "n" | "N" => {
-                        self.should_quit = true;
+                        self.quit_pending.retain(|&id| id != buffer_id);
+                        self.continue_quit();
                     }
                     "q" | "Q" => {
+                        self.quit_pending.clear();
                         self.minibuffer.show_message("Quit".to_string());
                     }
                     _ => {
-                        self.minibuffer
-                            .show_message("Please answer y, n, or q".to_string());
+                        // Re-ask for the same buffer.
+                        self.continue_quit();
                     }
                 }
             }
@@ -516,21 +552,19 @@ impl Editor {
         if self.minibuffer.is_active() {
             return;
         }
+        let buffer_id = self.pane_tree.focused_pane().buffer_id;
         let is_modified = self.current_buffer().modified;
         let name = self.current_buffer().name.clone();
 
         if is_modified {
             self.start_minibuffer_prompt(
-                PromptKind::SaveConfirm {
-                    buffer_name: name.clone(),
-                },
+                PromptKind::KillConfirm { buffer_id },
                 &format!("Buffer {name} modified; kill anyway? (y/n) "),
             );
             return;
         }
 
-        let current_id = self.pane_tree.focused_pane().buffer_id;
-        self.do_kill_buffer(current_id);
+        self.do_kill_buffer(buffer_id);
     }
 
     fn do_kill_buffer(&mut self, buffer_id: usize) {
@@ -1561,16 +1595,31 @@ impl Editor {
         if self.minibuffer.is_active() {
             return;
         }
-        for buf in &self.buffers {
-            if buf.modified {
-                let name = buf.name.clone();
-                self.start_minibuffer_prompt(
-                    PromptKind::SaveConfirm {
-                        buffer_name: name.clone(),
-                    },
-                    &format!("Save buffer {name}? (y/n/q) "),
-                );
-                return;
+        self.quit_pending = self
+            .buffers
+            .iter()
+            .filter(|b| b.modified)
+            .map(|b| b.id)
+            .collect();
+        self.continue_quit();
+    }
+
+    /// Prompt for the next still-modified buffer awaiting a quit-time save
+    /// decision, or quit once none remain.
+    fn continue_quit(&mut self) {
+        while let Some(&id) = self.quit_pending.first() {
+            match self.buffers.iter().find(|b| b.id == id) {
+                Some(buf) if buf.modified => {
+                    let name = buf.name.clone();
+                    self.start_minibuffer_prompt(
+                        PromptKind::QuitSaveConfirm { buffer_id: id },
+                        &format!("Save buffer {name}? (y/n/q) "),
+                    );
+                    return;
+                }
+                _ => {
+                    self.quit_pending.remove(0);
+                }
             }
         }
         self.should_quit = true;
@@ -2611,7 +2660,32 @@ mod tests {
         editor.execute(Command::KillBuffer);
         assert!(editor.minibuffer.is_active());
         let prompt = editor.minibuffer.prompt().unwrap();
-        assert!(matches!(prompt.kind, PromptKind::SaveConfirm { .. }));
+        assert!(matches!(prompt.kind, PromptKind::KillConfirm { .. }));
+    }
+
+    #[test]
+    fn kill_confirm_yes_kills_buffer_without_quitting() {
+        let mut editor = Editor::new_with_text("");
+        editor.execute(Command::InsertChar('x'));
+        let old_id = editor.pane_tree.focused_pane().buffer_id;
+        editor.execute(Command::KillBuffer);
+        editor.set_minibuffer_text("y");
+        editor.submit_prompt();
+        assert!(!editor.should_quit);
+        assert!(editor.buffers.iter().all(|b| b.id != old_id));
+    }
+
+    #[test]
+    fn kill_confirm_no_keeps_buffer() {
+        let mut editor = Editor::new_with_text("");
+        editor.execute(Command::InsertChar('x'));
+        let old_id = editor.pane_tree.focused_pane().buffer_id;
+        editor.execute(Command::KillBuffer);
+        editor.set_minibuffer_text("n");
+        editor.submit_prompt();
+        assert!(!editor.should_quit);
+        assert!(editor.buffers.iter().any(|b| b.id == old_id));
+        assert_eq!(editor.buffer_text(), "x");
     }
 
     #[test]
@@ -2713,7 +2787,7 @@ mod tests {
     }
 
     #[test]
-    fn save_confirm_invalid() {
+    fn save_confirm_invalid_reprompts_same_buffer() {
         let mut editor = Editor::new_with_text("");
         editor.execute(Command::InsertChar('X'));
         editor.execute(Command::Quit);
@@ -2721,10 +2795,128 @@ mod tests {
         editor.set_minibuffer_text("x");
         editor.submit_prompt();
         assert!(!editor.should_quit);
-        assert_eq!(
-            editor.minibuffer.message,
-            Some("Please answer y, n, or q".to_string())
-        );
+        // The prompt re-asks for the same buffer instead of aborting the quit.
+        assert!(editor.minibuffer.is_active());
+        let prompt = editor.minibuffer.prompt().unwrap();
+        assert!(matches!(prompt.kind, PromptKind::QuitSaveConfirm { .. }));
+    }
+
+    #[test]
+    fn quit_prompts_for_each_modified_buffer() {
+        let dir = tempfile::tempdir().unwrap();
+        let file1 = dir.path().join("a.txt");
+        let file2 = dir.path().join("b.txt");
+        std::fs::write(&file1, "aaa").unwrap();
+        std::fs::write(&file2, "bbb").unwrap();
+
+        let mut editor = Editor::new();
+        editor.open_file(&file1).unwrap();
+        editor.execute(Command::InsertChar('1'));
+        editor.open_file(&file2).unwrap();
+        editor.execute(Command::InsertChar('2'));
+
+        editor.execute(Command::Quit);
+        assert!(editor.minibuffer.is_active());
+        editor.set_minibuffer_text("y");
+        editor.submit_prompt();
+        // First buffer saved; second modified buffer must now be prompted.
+        assert!(!editor.should_quit);
+        assert!(editor.minibuffer.is_active());
+        editor.set_minibuffer_text("y");
+        editor.submit_prompt();
+        assert!(editor.should_quit);
+        assert_eq!(std::fs::read_to_string(&file1).unwrap(), "1aaa");
+        assert_eq!(std::fs::read_to_string(&file2).unwrap(), "2bbb");
+    }
+
+    #[test]
+    fn quit_save_confirm_no_skips_buffer_and_continues() {
+        let dir = tempfile::tempdir().unwrap();
+        let file1 = dir.path().join("a.txt");
+        let file2 = dir.path().join("b.txt");
+        std::fs::write(&file1, "aaa").unwrap();
+        std::fs::write(&file2, "bbb").unwrap();
+
+        let mut editor = Editor::new();
+        editor.open_file(&file1).unwrap();
+        editor.execute(Command::InsertChar('1'));
+        editor.open_file(&file2).unwrap();
+        editor.execute(Command::InsertChar('2'));
+
+        editor.execute(Command::Quit);
+        editor.set_minibuffer_text("n");
+        editor.submit_prompt();
+        assert!(!editor.should_quit);
+        editor.set_minibuffer_text("y");
+        editor.submit_prompt();
+        assert!(editor.should_quit);
+        // First buffer was declined and not saved; second was saved.
+        assert_eq!(std::fs::read_to_string(&file1).unwrap(), "aaa");
+        assert_eq!(std::fs::read_to_string(&file2).unwrap(), "2bbb");
+    }
+
+    #[test]
+    fn quit_save_confirm_q_aborts_whole_flow() {
+        let dir = tempfile::tempdir().unwrap();
+        let file1 = dir.path().join("a.txt");
+        let file2 = dir.path().join("b.txt");
+        std::fs::write(&file1, "aaa").unwrap();
+        std::fs::write(&file2, "bbb").unwrap();
+
+        let mut editor = Editor::new();
+        editor.open_file(&file1).unwrap();
+        editor.execute(Command::InsertChar('1'));
+        editor.open_file(&file2).unwrap();
+        editor.execute(Command::InsertChar('2'));
+
+        editor.execute(Command::Quit);
+        editor.set_minibuffer_text("q");
+        editor.submit_prompt();
+        assert!(!editor.should_quit);
+        assert!(!editor.minibuffer.is_active());
+        // Nothing was saved and a fresh quit starts the flow over.
+        assert_eq!(std::fs::read_to_string(&file1).unwrap(), "aaa");
+        assert_eq!(std::fs::read_to_string(&file2).unwrap(), "bbb");
+        editor.execute(Command::Quit);
+        assert!(editor.minibuffer.is_active());
+    }
+
+    #[test]
+    fn quit_save_confirm_saves_correct_buffer_with_duplicate_names() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("a")).unwrap();
+        std::fs::create_dir(dir.path().join("b")).unwrap();
+        let file1 = dir.path().join("a").join("mod.rs");
+        let file2 = dir.path().join("b").join("mod.rs");
+        std::fs::write(&file1, "aaa").unwrap();
+        std::fs::write(&file2, "bbb").unwrap();
+
+        let mut editor = Editor::new();
+        editor.open_file(&file1).unwrap();
+        editor.open_file(&file2).unwrap();
+        // Only the second buffer (b/mod.rs) is modified.
+        editor.execute(Command::InsertChar('2'));
+
+        editor.execute(Command::Quit);
+        editor.set_minibuffer_text("y");
+        editor.submit_prompt();
+        assert!(editor.should_quit);
+        // The modified buffer must be saved to its own file, not the
+        // first buffer that happens to share the name "mod.rs".
+        assert_eq!(std::fs::read_to_string(&file1).unwrap(), "aaa");
+        assert_eq!(std::fs::read_to_string(&file2).unwrap(), "2bbb");
+    }
+
+    #[test]
+    fn quit_save_yes_without_path_aborts_with_message() {
+        let mut editor = Editor::new_with_text("");
+        editor.execute(Command::InsertChar('X'));
+        editor.execute(Command::Quit);
+        editor.set_minibuffer_text("y");
+        editor.submit_prompt();
+        assert!(!editor.should_quit);
+        let message = editor.minibuffer.message.clone().unwrap();
+        assert!(message.contains("no file"), "got message: {message}");
     }
 
     #[test]

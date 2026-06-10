@@ -310,8 +310,17 @@ The minibuffer has two states:
 
 - **Idle**: shows timed messages ("Wrote file.txt", "Quit", errors).
 - **Prompt**: active text input with a label. Prompt kinds:
-  `FindFile`, `WriteFile`, `SwitchBuffer`, `GotoLine`,
-  `SaveConfirm { buffer_name }`, `ISearch`.
+  `FindFile`, `WriteFile`, `SwitchBuffer`, `GotoLine`, `ISearch`,
+  `KillConfirm { buffer_id }`, `QuitSaveConfirm { buffer_id }`.
+
+Confirmation prompts identify buffers by id, never by name (names are not
+unique). `C-x k` on a modified buffer asks `KillConfirm`; "y" kills the
+buffer, "n" cancels. `C-x C-c` collects the ids of all modified buffers into
+`Editor::quit_pending` and asks `QuitSaveConfirm` for each in turn: "y" saves
+that buffer and moves on, "n" skips it, "q" aborts the whole quit, and any
+other answer re-asks. The editor quits only after every pending buffer has
+been answered. A "y" on a buffer with no file path aborts the quit with a
+message instead of silently discarding it.
 
 ### Minibuffer as a Real Buffer
 
