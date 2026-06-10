@@ -382,8 +382,9 @@ impl Editor {
             let vw = pane.viewport_width;
             let buf = self.current_buffer();
             let (line, _) = buf.char_to_line_col(point);
+            // Wrap by tab-expanded visual width, matching the renderer.
             let new_top = crate::pane::compute_scroll_top(scroll_top, line, vh, vw, |l| {
-                buf.line_len_chars(l)
+                crate::render::line_visual_width(buf, l)
             });
             self.pane_tree.focused_pane_mut().scroll_top = new_top;
         }
@@ -1607,7 +1608,7 @@ impl Editor {
             let buf = self.current_buffer();
             let (line, _) = buf.char_to_line_col(char_pos);
             let new_top = crate::pane::compute_scroll_top(scroll_top, line, vh, vw, |l| {
-                buf.line_len_chars(l)
+                crate::render::line_visual_width(buf, l)
             });
             self.pane_tree.focused_pane_mut().scroll_top = new_top;
             if let Some(ref mut isearch) = self.isearch {
@@ -1661,7 +1662,7 @@ impl Editor {
             let buf = self.current_buffer();
             let (line, _) = buf.char_to_line_col(char_pos);
             let new_top = crate::pane::compute_scroll_top(scroll_top, line, vh, vw, |l| {
-                buf.line_len_chars(l)
+                crate::render::line_visual_width(buf, l)
             });
             self.pane_tree.focused_pane_mut().scroll_top = new_top;
             if let Some(ref mut isearch) = self.isearch {

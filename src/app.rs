@@ -865,6 +865,55 @@ mod tests {
     }
 
     #[test]
+    fn cursor_at_eol_of_full_last_wrap_segment_stays_on_that_row() {
+        // Terminal 10 wide: text_width=10, chars-per-segment=9.
+        // An 18-char line renders as rows [0..9)+'\' and [9..18).
+        // C-e (visual col 18) must put the cursor on visual row 1, col 9 —
+        // not on top of the next buffer line's first column.
+        let text = "abcdefghijklmnopqr\nZZZ";
+        let events = vec![ctrl('e')];
+        let (mut app, mut events) = test_app_with_text(10, 6, text, events);
+        app.run_until_idle(&mut events).unwrap();
+        assert_eq!(app.editor.point(), 18);
+        let pos = app.terminal.get_cursor_position().unwrap();
+        assert_eq!((pos.x, pos.y), (9, 1));
+    }
+
+    #[test]
+    fn cursor_in_right_pane_never_drawn_outside_pane() {
+        // Terminal 21 wide; C-x 3 gives left pane 10, separator, right pane 10.
+        // A line exactly filling the right pane's width puts EOL at col 10,
+        // which has no cell; the cursor must not be drawn at x=21 (outside
+        // the terminal/pane).
+        let text = "abcdefghij"; // 10 chars
+        let events = vec![ctrl('x'), char_key('3'), ctrl('x'), char_key('o'), ctrl('e')];
+        let (mut app, mut events) = test_app_with_text(21, 6, text, events);
+        app.run_until_idle(&mut events).unwrap();
+        let pos = app.terminal.get_cursor_position().unwrap();
+        assert!(pos.x < 21, "cursor drawn outside the terminal: {pos:?}");
+    }
+
+    #[test]
+    fn scroll_accounts_for_tab_expanded_visual_width() {
+        // Terminal 20x6 => 4 text rows. Each tabby line is 8 chars but 23
+        // visual columns, so it occupies 2 visual rows. Two of them fill the
+        // viewport; moving to the third line must scroll.
+        let text = "\t\t\t\t\taaa\n\t\t\t\t\tbbb\nccc";
+        let events = vec![ctrl('n'), ctrl('n')];
+        let (mut app, mut events) = test_app_with_text(20, 6, text, events);
+        app.run_until_idle(&mut events).unwrap();
+        let (line, _) = app
+            .editor
+            .current_buffer()
+            .char_to_line_col(app.editor.point());
+        assert_eq!(line, 2);
+        assert!(
+            app.editor.pane_tree.focused_pane().scroll_top > 0,
+            "viewport must scroll when wrapped tab lines push the cursor below it"
+        );
+    }
+
+    #[test]
     fn triple_wrap_line() {
         // A very long line that wraps 3 times
         // Terminal: 15 wide, 8 tall (6 text rows + mode + minibuf)

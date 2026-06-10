@@ -124,13 +124,17 @@ pub fn render(frame: &mut Frame, editor: &Editor) {
                 visual_row += visual_lines_for_length(line_visual_width, text_width);
             }
 
-            // Add offset within cursor's line if it wraps.
+            // Add offset within cursor's line if it wraps. The last wrap
+            // segment has no continuation marker and holds a full text_width
+            // chars, so clamp the row to the line's actual row count.
             let cursor_line_chars = line_chars_without_ending(buf, cursor_line);
             let cursor_visual_col = visual_col_for_buffer_col(&cursor_line_chars, cursor_col);
             let line_visual_width = visual_width_for_chars(&cursor_line_chars);
             let (row_in_line, col_in_segment) = if text_width > 1 && line_visual_width > text_width {
                 let cps = text_width - 1;
-                (cursor_visual_col / cps, cursor_visual_col % cps)
+                let last_row = visual_lines_for_length(line_visual_width, text_width) - 1;
+                let row = (cursor_visual_col / cps).min(last_row);
+                (row, cursor_visual_col - row * cps)
             } else {
                 (0, cursor_visual_col)
             };
@@ -139,8 +143,10 @@ pub fn render(frame: &mut Frame, editor: &Editor) {
             let screen_line = visual_row as u16;
             let screen_col = col_in_segment as u16;
 
+            // Both coordinates are pane-relative; compare against the pane's
+            // dimensions, not its absolute right edge.
             if cursor_line >= pane.scroll_top
-                && screen_col < text_area.x + text_area.width
+                && screen_col < text_area.width
                 && screen_line < text_area.height
             {
                 frame.set_cursor_position((text_area.x + screen_col, text_area.y + screen_line));
