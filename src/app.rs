@@ -35,23 +35,26 @@ where
         self.render()?;
 
         loop {
-            if let Some(event) = event_source.next_event() {
-                match event {
-                    Event::Key(key_event) => {
-                        self.handle_key(key_event);
-                        if self.editor.should_quit {
-                            break;
-                        }
+            // Poll timeouts deliver no event; nothing can have changed, so
+            // skip the re-render instead of redrawing ~10×/s while idle.
+            let Some(event) = event_source.next_event() else {
+                continue;
+            };
+            match event {
+                Event::Key(key_event) => {
+                    self.handle_key(key_event);
+                    if self.editor.should_quit {
+                        break;
                     }
-                    Event::Paste(text) => {
-                        self.handle_paste(&text);
-                    }
-                    Event::Mouse(mouse_event) => {
-                        self.handle_mouse(mouse_event);
-                    }
-                    Event::Resize(_, _) => {}
-                    _ => {}
                 }
+                Event::Paste(text) => {
+                    self.handle_paste(&text);
+                }
+                Event::Mouse(mouse_event) => {
+                    self.handle_mouse(mouse_event);
+                }
+                Event::Resize(_, _) => {}
+                _ => {}
             }
 
             self.update_viewport();

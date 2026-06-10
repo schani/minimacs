@@ -5,9 +5,12 @@ This document describes the internal architecture of minimacs.
 ## Overview
 
 minimacs is a synchronous, single-threaded terminal text editor. There is no
-async runtime. The event loop polls for terminal events with a 100ms timeout,
-processes them, and re-renders the UI. ratatui handles diffing internally, so
-unconditional rendering is cheap.
+async runtime. The event loop polls for terminal events with a 100ms timeout;
+when an event arrives it is processed and the UI re-renders. Poll timeouts
+skip the render entirely — an idle minimacs does no drawing work. Per-frame
+work is bounded by the viewport (the syntax style map and cursor-row
+computation don't scale with file size), and ratatui diffs the terminal
+output.
 
 ```
 Terminal input (crossterm)

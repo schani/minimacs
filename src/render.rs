@@ -119,9 +119,15 @@ pub fn render(frame: &mut Frame, editor: &Editor) {
             // display-only tab expansion.
             // Only place cursor if it's within the visible viewport.
             let mut visual_row: usize = 0;
+            let max_rows = text_area.height as usize;
             for lidx in pane.scroll_top..cursor_line {
                 let line_visual_width = line_visual_width(buf, lidx);
                 visual_row += visual_lines_for_length(line_visual_width, text_width);
+                if visual_row >= max_rows {
+                    // Cursor is below the viewport; its exact row no longer
+                    // matters, so don't walk the rest of the buffer.
+                    break;
+                }
             }
 
             // Add offset within cursor's line if it wraps. The last wrap
@@ -477,10 +483,17 @@ fn compute_syntax_char_styles(
     // Borrow cached spans and build the HashMap for visible lines.
     let cached_spans = syntax.cached_spans();
 
-    // Build a byte-to-style lookup only for the visible portion
+    // Build a byte-to-style lookup only for the visible portion. Spans are
+    // non-overlapping and sorted, so binary-search to the first span that
+    // reaches the viewport and stop at the first one past it — the frame
+    // cost is bounded by the viewport, not the file size.
     let visible_len = last_byte - first_visible_byte;
     let mut byte_styles = vec![Style::default(); visible_len];
-    for ss in cached_spans.iter() {
+    let begin = cached_spans.partition_point(|ss| ss.end <= first_visible_byte);
+    for ss in cached_spans[begin..].iter() {
+        if ss.start >= last_byte {
+            break;
+        }
         // Clip span to the visible byte range
         let span_start = ss.start.max(first_visible_byte);
         let span_end = ss.end.min(last_byte);
