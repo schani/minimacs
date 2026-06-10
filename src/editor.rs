@@ -723,20 +723,40 @@ impl Editor {
 
     // === Movement commands ===
 
+    /// True if `pos` sits between the `\r` and `\n` of a CRLF pair.
+    /// Point must never rest there; the pair is treated as one unit.
+    fn inside_crlf(&self, pos: usize) -> bool {
+        let buf = self.active_buffer();
+        pos > 0
+            && pos < buf.char_count()
+            && buf.text.char(pos - 1) == '\r'
+            && buf.text.char(pos) == '\n'
+    }
+
     fn forward_char(&mut self) {
         let len = self.active_buffer().char_count();
-        let pane = self.active_pane_mut();
-        if pane.point < len {
-            pane.point += 1;
+        let mut pos = self.active_pane().point;
+        if pos < len {
+            pos += 1;
+            if self.inside_crlf(pos) {
+                pos += 1;
+            }
         }
+        let pane = self.active_pane_mut();
+        pane.point = pos;
         pane.preferred_column = None;
     }
 
     fn backward_char(&mut self) {
-        let pane = self.active_pane_mut();
-        if pane.point > 0 {
-            pane.point -= 1;
+        let mut pos = self.active_pane().point;
+        if pos > 0 {
+            pos -= 1;
+            if self.inside_crlf(pos) {
+                pos -= 1;
+            }
         }
+        let pane = self.active_pane_mut();
+        pane.point = pos;
         pane.preferred_column = None;
     }
 
@@ -1294,9 +1314,11 @@ impl Editor {
     fn delete_backward(&mut self) {
         let pos = self.active_pane().point;
         if pos > 0 {
-            self.apply_edit(pos - 1, pos, "", EditRecord::Delete);
+            // Delete a CRLF pair as a unit.
+            let start = if self.inside_crlf(pos - 1) { pos - 2 } else { pos - 1 };
+            self.apply_edit(start, pos, "", EditRecord::Delete);
             let pane = self.active_pane_mut();
-            pane.point = pos - 1;
+            pane.point = start;
             pane.preferred_column = None;
         }
     }
@@ -1305,7 +1327,9 @@ impl Editor {
         let len = self.active_buffer().char_count();
         let pos = self.active_pane().point;
         if pos < len {
-            self.apply_edit(pos, pos + 1, "", EditRecord::Delete);
+            // Delete a CRLF pair as a unit.
+            let end = if self.inside_crlf(pos + 1) { pos + 2 } else { pos + 1 };
+            self.apply_edit(pos, end, "", EditRecord::Delete);
             self.active_pane_mut().preferred_column = None;
         }
     }
@@ -1320,7 +1344,9 @@ impl Editor {
         if col == line_len {
             let total = buf.char_count();
             if pos < total {
-                let deleted = self.apply_edit(pos, pos + 1, "", EditRecord::Delete);
+                // At EOL, kill the whole line ending (one or two chars for CRLF).
+                let end = if self.inside_crlf(pos + 1) { pos + 2 } else { pos + 1 };
+                let deleted = self.apply_edit(pos, end, "", EditRecord::Delete);
                 if append {
                     self.clipboard.push_str(&deleted);
                 } else {
@@ -3242,6 +3268,58 @@ mod tests {
         names.sort();
         names.dedup();
         assert_eq!(names.len(), 3, "all three buffers need distinct names");
+    }
+
+    // === CRLF atomicity ===
+
+    fn crlf_editor() -> Editor {
+        // "ab\r\ncd": chars are a(0) b(1) \r(2) \n(3) c(4) d(5)
+        Editor::new_with_text("ab\r\ncd")
+    }
+
+    #[test]
+    fn forward_char_skips_over_crlf_pair() {
+        let mut editor = crlf_editor();
+        editor.pane_tree.focused_pane_mut().point = 2;
+        editor.execute(Command::ForwardChar);
+        assert_eq!(editor.point(), 4, "point must not land between \\r and \\n");
+    }
+
+    #[test]
+    fn backward_char_skips_over_crlf_pair() {
+        let mut editor = crlf_editor();
+        editor.pane_tree.focused_pane_mut().point = 4;
+        editor.execute(Command::BackwardChar);
+        assert_eq!(editor.point(), 2);
+    }
+
+    #[test]
+    fn delete_backward_removes_whole_crlf() {
+        let mut editor = crlf_editor();
+        editor.pane_tree.focused_pane_mut().point = 4;
+        editor.execute(Command::DeleteBackward);
+        assert_eq!(editor.buffer_text(), "abcd");
+        assert_eq!(editor.point(), 2);
+        editor.execute(Command::Undo);
+        assert_eq!(editor.buffer_text(), "ab\r\ncd");
+    }
+
+    #[test]
+    fn delete_forward_removes_whole_crlf() {
+        let mut editor = crlf_editor();
+        editor.pane_tree.focused_pane_mut().point = 2;
+        editor.execute(Command::DeleteForward);
+        assert_eq!(editor.buffer_text(), "abcd");
+        assert_eq!(editor.point(), 2);
+    }
+
+    #[test]
+    fn kill_line_at_eol_removes_whole_crlf() {
+        let mut editor = crlf_editor();
+        editor.pane_tree.focused_pane_mut().point = 2; // EOL of "ab"
+        editor.execute(Command::KillLine);
+        assert_eq!(editor.buffer_text(), "abcd");
+        assert_eq!(editor.clipboard, "\r\n");
     }
 
     // === Non-ASCII (char-vs-byte) correctness ===
