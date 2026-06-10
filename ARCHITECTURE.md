@@ -31,7 +31,7 @@ Terminal input (crossterm)
 
 ```
 src/
-  main.rs           Terminal setup, CLI args, runs the event loop
+  main.rs           Terminal setup/teardown, panic hook, CLI args, runs the event loop
   app.rs            App<B: Backend> -- event loop and key routing
   editor.rs         Editor -- command execution, all state mutation
   buffer.rs         Buffer -- Rope text storage, file I/O, metadata
@@ -197,6 +197,15 @@ a `clean_version` recording the version at last save/load. `is_clean()` returns
 true when no uncommitted edits exist and the current version matches the clean
 version. When the redo stack is cleared and the clean version was on the
 discarded branch, `clean_version` is set to `None` (unreachable).
+
+## Terminal Lifecycle
+
+`main()` installs a panic hook before entering raw mode. Both the normal exit
+path and the panic hook call `restore_terminal()`, which best-effort disables
+raw mode, pops keyboard enhancement flags, leaves the alternate screen,
+disables bracketed paste and mouse capture, and shows the cursor. Every step
+runs even if earlier ones fail, and the panic hook chains to the previously
+installed hook so the panic message prints on the normal screen.
 
 ## Event Loop
 
