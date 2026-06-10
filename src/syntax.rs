@@ -39,6 +39,8 @@ const HIGHLIGHT_NAMES: &[&str] = &[
     "variable",
     "variable.builtin",
     "variable.parameter",
+    "markup.heading",
+    "markup.link",
 ];
 
 /// A styled span: byte range + style.
@@ -76,9 +78,12 @@ pub(crate) fn style_for_highlight(idx: usize) -> Style {
         "text.emphasis" => Style::default().add_modifier(Modifier::ITALIC),
         "text.strong" => Style::default().add_modifier(Modifier::BOLD),
         "text.literal" => Style::default().fg(Color::Rgb(163, 21, 21)),          // #A31515
-        "text.uri" => Style::default()
+        "text.uri" | "markup.link" => Style::default()
             .fg(Color::Rgb(0, 112, 193))
             .add_modifier(Modifier::UNDERLINED),
+        "markup.heading" => Style::default()
+            .fg(Color::Rgb(0, 0, 255))
+            .add_modifier(Modifier::BOLD),
         "text.reference" => Style::default().fg(Color::Rgb(0, 112, 193)),        // #0070C1
         "operator" | "label" | "punctuation" | "punctuation.bracket"
         | "punctuation.delimiter" | "punctuation.special" => Style::default(),
@@ -118,6 +123,7 @@ pub enum Language {
     Bash,
     Yaml,
     Env,
+    GitCommit,
 }
 
 impl Language {
@@ -136,6 +142,7 @@ impl Language {
             Language::Bash => "Bash",
             Language::Yaml => "YAML",
             Language::Env => "Env",
+            Language::GitCommit => "Git Commit",
         }
     }
 }
@@ -169,6 +176,13 @@ pub fn detect_language(path: &std::path::Path) -> Option<Language> {
     let name = path.file_name()?.to_str()?;
     if name == ".env" || name.starts_with(".env.") {
         return Some(Language::Env);
+    }
+    // Git message files (commit, merge, tag, notes, branch description).
+    if matches!(
+        name,
+        "COMMIT_EDITMSG" | "MERGE_MSG" | "TAG_EDITMSG" | "NOTES_EDITMSG" | "EDIT_DESCRIPTION"
+    ) {
+        return Some(Language::GitCommit);
     }
 
     None
@@ -251,6 +265,14 @@ fn language_config(lang: Language) -> (LanguageFn, String, String, String) {
         Language::Yaml => (
             tree_sitter_yaml::LANGUAGE,
             tree_sitter_yaml::HIGHLIGHTS_QUERY.to_string(),
+            String::new(),
+            String::new(),
+        ),
+        Language::GitCommit => (
+            tree_sitter_gitcommit::LANGUAGE,
+            tree_sitter_gitcommit::HIGHLIGHTS_QUERY.to_string(),
+            // The upstream injections query injects a diff grammar (for
+            // `commit -v`) which we don't ship; skip injections.
             String::new(),
             String::new(),
         ),
@@ -464,6 +486,43 @@ mod tests {
     #[test]
     fn detect_unknown() {
         assert_eq!(detect_language(Path::new("file.xyz")), None);
+    }
+
+    #[test]
+    fn detect_git_message_files() {
+        for name in [
+            "COMMIT_EDITMSG",
+            "MERGE_MSG",
+            "TAG_EDITMSG",
+            "NOTES_EDITMSG",
+            "EDIT_DESCRIPTION",
+        ] {
+            assert_eq!(
+                detect_language(Path::new(&format!("/repo/.git/{name}"))),
+                Some(Language::GitCommit),
+                "{name} should be detected as a git message"
+            );
+        }
+        assert_eq!(Language::GitCommit.name(), "Git Commit");
+    }
+
+    #[test]
+    fn highlight_gitcommit_comment_lines() {
+        let state = SyntaxState::new(Language::GitCommit).unwrap();
+        let source =
+            b"Fix the frobnicator\n\n# Please enter the commit message for your changes.\n";
+        let spans = state.highlight(source);
+        assert!(!spans.is_empty());
+        // The `#` line must be styled as a comment.
+        let comment_style = style_for_highlight(highlight_index("comment"));
+        let comment_start = 21; // byte offset of '#'
+        assert!(
+            spans
+                .iter()
+                .any(|s| s.start <= comment_start && s.end > comment_start
+                    && s.style == comment_style),
+            "no comment span covering the # line: {spans:?}"
+        );
     }
 
     #[test]
