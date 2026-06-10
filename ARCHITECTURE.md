@@ -386,6 +386,10 @@ Prompt nesting is prevented by two mechanisms: (1) `start_minibuffer_prompt()`
 returns early if a prompt is already active; (2) `isearch_start()`,
 `kill_buffer()`, and `quit()` have local guards.
 
+Path input expands a leading `~`/`~/...` to `$HOME` inside
+`normalize_path_string()`, which both prompt submission and tab completion go
+through.
+
 Tab completion is implemented as free functions `complete_path_with_candidates()`
 and `complete_buffer_with_candidates()` in `minibuffer.rs`. Each returns
 `(completed_prefix, display_candidates)`. Path candidates use basenames with

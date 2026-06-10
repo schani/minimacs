@@ -41,10 +41,32 @@ impl Prompt {
     }
 }
 
-/// Normalize a path string by removing `.` components and resolving `..` components.
-/// Preserves trailing `/` if present.
+/// Expand a leading `~` or `~/...` to the given home directory.
+/// `~user` forms and mid-path tildes are left untouched.
+fn expand_tilde_with(input: &str, home: Option<&str>) -> String {
+    let Some(home) = home else {
+        return input.to_string();
+    };
+    if input == "~" || input == "~/" {
+        let mut s = home.to_string();
+        if input.ends_with('/') && !s.ends_with('/') {
+            s.push('/');
+        }
+        s
+    } else if let Some(rest) = input.strip_prefix("~/") {
+        format!("{}/{rest}", home.trim_end_matches('/'))
+    } else {
+        input.to_string()
+    }
+}
+
+/// Normalize a path string: expand a leading `~`, remove `.` components, and
+/// resolve `..` components. Preserves trailing `/` if present.
 pub fn normalize_path_string(input: &str) -> String {
     use std::path::Component;
+
+    let home = std::env::var("HOME").ok();
+    let input = &expand_tilde_with(input, home.as_deref());
 
     let has_trailing_slash = input.ends_with('/');
     let path = Path::new(input);
@@ -495,6 +517,42 @@ mod tests {
     #[test]
     fn normalize_no_change_for_clean_path() {
         assert_eq!(normalize_path_string("/home/user/foo"), "/home/user/foo");
+    }
+
+    #[test]
+    fn tilde_expands_to_home() {
+        assert_eq!(
+            expand_tilde_with("~/foo/bar.txt", Some("/home/u")),
+            "/home/u/foo/bar.txt"
+        );
+        assert_eq!(expand_tilde_with("~", Some("/home/u")), "/home/u");
+        assert_eq!(expand_tilde_with("~/", Some("/home/u/")), "/home/u/");
+    }
+
+    #[test]
+    fn tilde_not_expanded_mid_path_or_for_named_user() {
+        assert_eq!(
+            expand_tilde_with("/a/~/b", Some("/home/u")),
+            "/a/~/b"
+        );
+        assert_eq!(
+            expand_tilde_with("~other/foo", Some("/home/u")),
+            "~other/foo"
+        );
+        assert_eq!(expand_tilde_with("~/foo", None), "~/foo");
+    }
+
+    #[test]
+    fn normalize_expands_tilde_and_resolves_dotdot() {
+        let Some(home) = std::env::var_os("HOME") else {
+            return; // nothing to test without a home dir
+        };
+        let home = home.to_string_lossy().into_owned();
+        let home = home.trim_end_matches('/');
+        assert_eq!(
+            normalize_path_string("~/a/../b"),
+            format!("{home}/b")
+        );
     }
 
     #[test]
