@@ -434,12 +434,17 @@ Pasted text has newlines replaced with spaces when pasting into the minibuffer.
 - The original point and scroll position (restored on `C-g`).
 - The current match position.
 
-As the user types, `isearch_update()` searches the buffer text from the
-original position. `C-s`/`C-r` during search cycle to the next/previous match.
-Enter accepts the position. `C-g` restores the original position.
+As the user types, `isearch_update()` scans the buffer once and caches the
+char positions of all matches in `ISearchState::matches`, then jumps to the
+first match from the original position. `C-s`/`C-r` during search cycle to the
+next/previous match by walking the cached list — no rescan. Enter accepts the
+position. `C-g` restores the original position.
 
-All matches are collected by `isearch_matches()` for rendering. The current
-match is highlighted in yellow; other matches in a dim color.
+`isearch_matches()` (used by the renderer every frame) also just reads the
+cache. The only O(buffer) work is the single scan per query change.
+
+The current match is highlighted with an olive background; other matches in
+light orange.
 
 ## Indentation
 

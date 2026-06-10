@@ -48,7 +48,7 @@ Larger items (incremental tree-sitter parsing, missing emacs features) are in FU
 - [x] Bind a key to `Command::Redo` — it is fully implemented and wired in `execute()` but `default_keymap()` binds nothing to it, so users cannot redo at all.
 - [x] An unbound key after a prefix self-inserts: `C-x j` inserts a literal `j` and marks the buffer modified (`app.rs:158-168`). Should report "C-x j is undefined" instead.
 - [x] Expand `~` in find-file/write-file paths; currently `~/foo` is treated as a literal relative path and tab completion silently does nothing.
-- [ ] Incremental search materializes the whole buffer into a `String` on every keystroke (`editor.rs:1429`, `1479`) and `isearch_matches()` does it again every rendered frame (`editor.rs:1528-1558`, called from `render.rs:95`). Large files crawl during isearch.
+- [x] Incremental search materializes the whole buffer into a `String` on every keystroke (`editor.rs:1429`, `1479`) and `isearch_matches()` does it again every rendered frame (`editor.rs:1528-1558`, called from `render.rs:95`). Large files crawl during isearch.
 - [ ] Idle loop renders ~10×/second forever (100ms poll in `event.rs:14` + unconditional render in `app.rs:37-63`), and per-frame work includes O(buffer) paths (cursor-row loop unbounded by viewport height in `render.rs:117-119`; style map rebuilt from all cached spans even on syntax-cache hits, `render.rs:472-507`). Only render after an event or when state changed, and bound per-frame work by the viewport.
 
 ## Minor

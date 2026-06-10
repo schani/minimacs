@@ -44,6 +44,9 @@ pub struct ISearchState {
     pub original_scroll_top: usize,
     /// Current match position (char offset of match start).
     pub current_match: Option<usize>,
+    /// Char positions of all matches, recomputed once per query change.
+    /// Navigation and rendering read this instead of rescanning the buffer.
+    pub matches: Vec<usize>,
 }
 
 #[allow(dead_code)]
@@ -1581,6 +1584,7 @@ impl Editor {
             original_point: pane.point,
             original_scroll_top: pane.scroll_top,
             current_match: None,
+            matches: Vec::new(),
         });
         let label = match direction {
             SearchDirection::Forward => "I-search: ",
@@ -1589,10 +1593,56 @@ impl Editor {
         self.start_minibuffer_prompt(PromptKind::ISearch, label);
     }
 
-    /// Called when isearch input changes — find next match from current position.
+    /// Find the char positions of all occurrences of `query` in the buffer.
+    /// One O(buffer) scan; called only when the search query changes.
+    fn compute_matches_for_query(buf: &Buffer, query: &str) -> Vec<usize> {
+        if query.is_empty() {
+            return Vec::new();
+        }
+        let text: String = buf.text.chars().collect();
+        let mut matches = Vec::new();
+        let mut search_start = 0usize; // byte offset
+        let mut char_offset = 0usize;
+        while let Some(byte_pos) = text[search_start..].find(query) {
+            let match_char =
+                char_offset + text[search_start..search_start + byte_pos].chars().count();
+            matches.push(match_char);
+            // Advance past this match start by one char (overlaps allowed).
+            let next_byte = search_start
+                + byte_pos
+                + text[search_start + byte_pos..]
+                    .chars()
+                    .next()
+                    .map_or(1, |c| c.len_utf8());
+            char_offset = match_char + 1;
+            search_start = next_byte;
+        }
+        matches
+    }
+
+    /// Move point to an isearch match and scroll it into view.
+    fn isearch_goto_match(&mut self, char_pos: usize) {
+        self.pane_tree.focused_pane_mut().point = char_pos;
+        let pane = self.pane_tree.focused_pane();
+        let scroll_top = pane.scroll_top;
+        let vh = pane.viewport_height;
+        let vw = pane.viewport_width;
+        let buf = self.current_buffer();
+        let (line, _) = buf.char_to_line_col(char_pos);
+        let new_top = crate::pane::compute_scroll_top(scroll_top, line, vh, vw, |l| {
+            crate::render::line_visual_width(buf, l)
+        });
+        self.pane_tree.focused_pane_mut().scroll_top = new_top;
+        if let Some(ref mut isearch) = self.isearch {
+            isearch.current_match = Some(char_pos);
+        }
+    }
+
+    /// Called when isearch input changes — rescan the buffer once, cache all
+    /// match positions, and jump to the first match from the original point.
     pub fn isearch_update(&mut self) {
-        let (query, direction) = match &self.isearch {
-            Some(s) => (s.query.clone(), s.direction),
+        let (query, direction, original_point) = match &self.isearch {
+            Some(s) => (s.query.clone(), s.direction, s.original_point),
             None => return,
         };
         if query.is_empty() {
@@ -1604,42 +1654,29 @@ impl Editor {
             }
             if let Some(ref mut isearch) = self.isearch {
                 isearch.current_match = None;
+                isearch.matches.clear();
             }
             return;
         }
-        let buf = self.current_buffer();
-        let text: String = buf.text.chars().collect();
-        let original_char = match &self.isearch {
-            Some(s) => s.original_point,
-            None => 0,
-        };
-        // Convert char offset to byte offset for string searching
-        let search_from_byte: usize = text.chars().take(original_char).map(|c| c.len_utf8()).sum();
 
+        let matches = Self::compute_matches_for_query(self.current_buffer(), &query);
+        let query_len = query.chars().count();
         let found = match direction {
-            SearchDirection::Forward => text[search_from_byte..]
-                .find(&query)
-                .map(|byte_i| text[..search_from_byte + byte_i].chars().count()),
-            SearchDirection::Backward => text[..search_from_byte]
-                .rfind(&query)
-                .map(|byte_i| text[..byte_i].chars().count()),
+            SearchDirection::Forward => {
+                matches.iter().copied().find(|&p| p >= original_point)
+            }
+            SearchDirection::Backward => matches
+                .iter()
+                .copied()
+                .rev()
+                .find(|&p| p + query_len <= original_point),
         };
+        if let Some(ref mut isearch) = self.isearch {
+            isearch.matches = matches;
+        }
 
         if let Some(char_pos) = found {
-            self.pane_tree.focused_pane_mut().point = char_pos;
-            let pane = self.pane_tree.focused_pane();
-            let scroll_top = pane.scroll_top;
-            let vh = pane.viewport_height;
-            let vw = pane.viewport_width;
-            let buf = self.current_buffer();
-            let (line, _) = buf.char_to_line_col(char_pos);
-            let new_top = crate::pane::compute_scroll_top(scroll_top, line, vh, vw, |l| {
-                crate::render::line_visual_width(buf, l)
-            });
-            self.pane_tree.focused_pane_mut().scroll_top = new_top;
-            if let Some(ref mut isearch) = self.isearch {
-                isearch.current_match = Some(char_pos);
-            }
+            self.isearch_goto_match(char_pos);
         } else {
             self.minibuffer.show_message("Failing I-search".to_string());
             if let Some(ref mut isearch) = self.isearch {
@@ -1648,52 +1685,30 @@ impl Editor {
         }
     }
 
-    /// Cycle to next/previous match during isearch.
+    /// Cycle to next/previous match during isearch, using the cached matches.
     pub fn isearch_next(&mut self) {
-        let (query, direction) = match &self.isearch {
-            Some(s) => (s.query.clone(), s.direction),
-            None => return,
-        };
-        if query.is_empty() {
-            return;
-        }
-        let buf = self.current_buffer();
-        let text: String = buf.text.chars().collect();
-        let current_point = self.pane_tree.focused_pane().point;
-
-        let found = match direction {
-            SearchDirection::Forward => {
-                // Search from current_point + 1
-                let start = (current_point + 1).min(text.chars().count());
-                // Convert char offset to byte offset for string search
-                let byte_start: usize = text.chars().take(start).map(|c| c.len_utf8()).sum();
-                text[byte_start..]
-                    .find(&query)
-                    .map(|byte_i| start + text[byte_start..byte_start + byte_i].chars().count())
+        let (query, found) = match &self.isearch {
+            Some(s) if !s.query.is_empty() => {
+                let current_point = self.pane_tree.focused_pane().point;
+                let query_len = s.query.chars().count();
+                let found = match s.direction {
+                    SearchDirection::Forward => {
+                        s.matches.iter().copied().find(|&p| p > current_point)
+                    }
+                    SearchDirection::Backward => s
+                        .matches
+                        .iter()
+                        .copied()
+                        .rev()
+                        .find(|&p| p + query_len <= current_point),
+                };
+                (s.query.clone(), found)
             }
-            SearchDirection::Backward => {
-                let byte_end: usize = text.chars().take(current_point).map(|c| c.len_utf8()).sum();
-                text[..byte_end]
-                    .rfind(&query)
-                    .map(|byte_i| text[..byte_i].chars().count())
-            }
+            _ => return,
         };
 
         if let Some(char_pos) = found {
-            self.pane_tree.focused_pane_mut().point = char_pos;
-            let pane = self.pane_tree.focused_pane();
-            let scroll_top = pane.scroll_top;
-            let vh = pane.viewport_height;
-            let vw = pane.viewport_width;
-            let buf = self.current_buffer();
-            let (line, _) = buf.char_to_line_col(char_pos);
-            let new_top = crate::pane::compute_scroll_top(scroll_top, line, vh, vw, |l| {
-                crate::render::line_visual_width(buf, l)
-            });
-            self.pane_tree.focused_pane_mut().scroll_top = new_top;
-            if let Some(ref mut isearch) = self.isearch {
-                isearch.current_match = Some(char_pos);
-            }
+            self.isearch_goto_match(char_pos);
         } else {
             self.minibuffer
                 .show_message(format!("Failing I-search: {query}"));
@@ -1706,37 +1721,19 @@ impl Editor {
         self.minibuffer.finish();
     }
 
-    /// Get all visible match positions for rendering (char offset, query_len).
+    /// All match positions for rendering (char offset, query char length).
+    /// Reads the cache built by `isearch_update` — no buffer scan per frame.
     pub fn isearch_matches(&self) -> Vec<(usize, usize)> {
         let isearch = match &self.isearch {
             Some(s) if !s.query.is_empty() => s,
             _ => return Vec::new(),
         };
-        let buf = self.current_buffer();
-        let text: String = buf.text.chars().collect();
-        let query = &isearch.query;
-        let query_char_len = query.chars().count();
-
-        let mut matches = Vec::new();
-        let mut search_start = 0usize; // byte offset
-        let mut char_offset = 0usize;
-
-        while let Some(byte_pos) = text[search_start..].find(query) {
-            let match_char =
-                char_offset + text[search_start..search_start + byte_pos].chars().count();
-            matches.push((match_char, query_char_len));
-            // Advance past this match by one char
-            let next_byte = search_start
-                + byte_pos
-                + text[search_start + byte_pos..]
-                    .chars()
-                    .next()
-                    .map_or(1, |c| c.len_utf8());
-            char_offset = match_char + 1;
-            search_start = next_byte;
-        }
-
-        matches
+        let query_char_len = isearch.query.chars().count();
+        isearch
+            .matches
+            .iter()
+            .map(|&pos| (pos, query_char_len))
+            .collect()
     }
 
     fn quit(&mut self) {
