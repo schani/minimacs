@@ -254,7 +254,9 @@ installed hook so the panic message prints on the normal screen.
    - If a minibuffer prompt is active, `handle_minibuffer_key()` processes the key.
    - Otherwise, `KeymapState::process_key()` walks the trie.
    - If the keymap returns `NotFound` and the key is a printable character with
-     no modifiers, it falls through to `InsertChar`.
+     no modifiers, it falls through to `InsertChar` — unless the key ended a
+     pending chord (e.g. `C-x j`), in which case a "C-x j is undefined"
+     message is shown instead of self-inserting.
 3. After each event: update viewport dimensions for all panes, then render.
 4. Loop until `editor.should_quit`.
 

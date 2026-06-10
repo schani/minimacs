@@ -6,7 +6,7 @@ use ratatui::Terminal;
 use crate::command::Command;
 use crate::editor::{EditRecord, Editor};
 use crate::event::EventSource;
-use crate::keymap::{KeymapResult, KeymapState, default_keymap};
+use crate::keymap::{default_keymap, Key, KeymapResult, KeymapState};
 use crate::minibuffer::PromptKind;
 use crate::render;
 
@@ -147,6 +147,7 @@ where
             }
         }
 
+        let pending_before = self.keymap_state.pending_display();
         match self.keymap_state.process_key(key) {
             KeymapResult::Matched(cmd) => {
                 self.editor.pending_keys.clear();
@@ -157,6 +158,14 @@ where
             }
             KeymapResult::NotFound => {
                 self.editor.pending_keys.clear();
+                if !pending_before.is_empty() {
+                    // A dead-end chord (e.g. C-x j) must not self-insert.
+                    let chord = format!("{pending_before}{}", Key::from_event(key).display());
+                    self.editor
+                        .minibuffer
+                        .show_message(format!("{chord} is undefined"));
+                    return;
+                }
                 // Self-insert fallback for printable chars
                 if let KeyCode::Char(c) = key.code {
                     if !key.modifiers.contains(KeyModifiers::CONTROL)
@@ -703,6 +712,23 @@ mod tests {
         app.run_until_idle(&mut events).unwrap();
         assert!(!app.editor.should_quit);
         assert_eq!(app.editor.pending_keys, "");
+    }
+
+    #[test]
+    fn unbound_key_after_prefix_does_not_self_insert() {
+        let mut events = vec![ctrl('x'), char_key('j')];
+        events.extend(key_events("")); // no-op, keeps style consistent
+        let (mut app, mut events) = test_app(40, 10, events);
+        app.run_until_idle(&mut events).unwrap();
+        // The dead-end chord must not insert a literal 'j' or modify the buffer.
+        assert_eq!(app.editor.buffer_text(), "");
+        assert!(!app.editor.current_buffer().modified);
+        // The user gets feedback instead.
+        let screen = capture_screen(&app.terminal);
+        assert!(
+            screen.contains("C-x j is undefined"),
+            "screen: {screen}"
+        );
     }
 
     #[test]
