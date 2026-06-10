@@ -61,9 +61,10 @@ impl History {
 
         // Check if this insert is adjacent to the last one (for grouping)
         let should_group = if let Some(last) = self.current_group.last() {
-            // Adjacent if the new position is right after the last insertion
+            // Adjacent if the new position is right after the last insertion.
+            // Positions are char indices, so length must be in chars too.
             last.deleted.is_empty()
-                && last.position + last.inserted.len() == position
+                && last.position + last.inserted.chars().count() == position
                 && !text.contains(' ')
                 && !text.contains('\n')
         } else {
@@ -243,6 +244,19 @@ mod tests {
         let group = hist.undo().unwrap();
         // All adjacent chars should be in one group
         assert_eq!(group.edits.len(), 5);
+    }
+
+    #[test]
+    fn multibyte_inserts_group_together() {
+        let mut hist = History::new();
+        // Positions are char indices; multibyte chars must not break grouping.
+        hist.record_insert(0, "é");
+        hist.record_insert(1, "x");
+        hist.record_insert(2, "ü");
+        hist.commit();
+
+        let group = hist.undo().unwrap();
+        assert_eq!(group.edits.len(), 3);
     }
 
     #[test]

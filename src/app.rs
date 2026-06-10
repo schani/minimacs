@@ -4,7 +4,7 @@ use ratatui::backend::Backend;
 use ratatui::Terminal;
 
 use crate::command::Command;
-use crate::editor::Editor;
+use crate::editor::{EditRecord, Editor};
 use crate::event::EventSource;
 use crate::keymap::{KeymapResult, KeymapState, default_keymap};
 use crate::minibuffer::PromptKind;
@@ -253,13 +253,11 @@ where
 
         // Only replace buffer text if the completion advanced the prefix
         if completed != input {
-            let buf = &mut self.editor.minibuffer_buffer;
-            buf.history.commit();
-            let old_len = buf.char_count();
-            buf.history.record_replace(0, &input, &completed);
-            buf.remove(0, old_len);
-            buf.insert(0, &completed);
-            buf.history.commit();
+            self.editor.minibuffer_buffer.history.commit();
+            let old_len = self.editor.minibuffer_buffer.char_count();
+            self.editor
+                .apply_edit(0, old_len, &completed, EditRecord::Replace);
+            self.editor.minibuffer_buffer.history.commit();
             self.editor.minibuffer_pane.point = completed.chars().count();
             self.editor.minibuffer.completion_page = 0;
         } else if had_completions && self.editor.minibuffer.completions.is_some() {
@@ -283,11 +281,8 @@ where
         // Insert pasted text as a single undo group
         self.editor.active_buffer_mut().history.commit();
         let point = self.editor.active_pane().point;
-        let buf = self.editor.active_buffer_mut();
-        buf.history.record_insert(point, &text);
-        buf.insert(point, &text);
-        let new_point = point + text.chars().count();
-        self.editor.active_pane_mut().point = new_point;
+        self.editor.apply_edit(point, point, &text, EditRecord::Insert);
+        self.editor.active_pane_mut().point = point + text.chars().count();
         self.editor.active_buffer_mut().history.commit();
     }
 

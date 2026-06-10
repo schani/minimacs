@@ -23,6 +23,17 @@ pub enum SearchDirection {
     Backward,
 }
 
+/// How an edit made through [`Editor::apply_edit`] is recorded in undo
+/// history.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EditRecord {
+    Insert,
+    Delete,
+    Replace,
+    /// Don't record — used when replaying undo/redo groups.
+    NoHistory,
+}
+
 /// State for incremental search.
 #[derive(Debug)]
 pub struct ISearchState {
@@ -687,16 +698,7 @@ impl Editor {
         }
 
         // Delete from pos to start
-        let deleted: String = self
-            .active_buffer()
-            .text
-            .slice(pos..start)
-            .chars()
-            .collect();
-        self.active_buffer_mut()
-            .history
-            .record_delete(pos, &deleted);
-        self.active_buffer_mut().remove(pos, start);
+        self.apply_edit(pos, start, "", EditRecord::Delete);
         self.active_pane_mut().point = pos;
         self.active_pane_mut().preferred_column = None;
     }
@@ -816,11 +818,61 @@ impl Editor {
 
     // === Editing commands ===
 
+    /// Central edit primitive: replace the chars in `[start, end)` of the
+    /// active buffer with `text`. All positions are char indices — never mix
+    /// in byte lengths. Records history according to `record` and adjusts
+    /// point/mark and saved view state in every pane viewing the buffer.
+    /// Callers that want a point other than what marker semantics give
+    /// (e.g. point after inserted text) set the active pane's point
+    /// explicitly afterwards, in char units. Returns the deleted text.
+    pub(crate) fn apply_edit(
+        &mut self,
+        start: usize,
+        end: usize,
+        text: &str,
+        record: EditRecord,
+    ) -> String {
+        let (buffer_id, start, removed, inserted, deleted) = {
+            let buf = self.active_buffer_mut();
+            let len = buf.char_count();
+            let start = start.min(len);
+            let end = end.min(len).max(start);
+            let deleted: String = if end > start {
+                buf.text.slice(start..end).chars().collect()
+            } else {
+                String::new()
+            };
+            match record {
+                EditRecord::Insert => buf.history.record_insert(start, text),
+                EditRecord::Delete => buf.history.record_delete(start, &deleted),
+                EditRecord::Replace => buf.history.record_replace(start, &deleted, text),
+                EditRecord::NoHistory => {}
+            }
+            if end > start {
+                buf.remove(start, end);
+            }
+            if !text.is_empty() {
+                buf.insert(start, text);
+            }
+            (buf.id, start, end - start, text.chars().count(), deleted)
+        };
+
+        if buffer_id == usize::MAX {
+            // The minibuffer buffer is viewed only by the minibuffer pane.
+            self.minibuffer_pane
+                .adjust_for_edit(buffer_id, start, removed, inserted);
+        } else {
+            self.pane_tree.for_each_pane_mut(&mut |pane| {
+                pane.adjust_for_edit(buffer_id, start, removed, inserted);
+            });
+        }
+        deleted
+    }
+
     fn insert_char(&mut self, c: char) {
         let pos = self.active_pane().point;
         let s = c.to_string();
-        self.active_buffer_mut().history.record_insert(pos, &s);
-        self.active_buffer_mut().insert(pos, &s);
+        self.apply_edit(pos, pos, &s, EditRecord::Insert);
         let pane = self.active_pane_mut();
         pane.point = pos + 1;
         pane.preferred_column = None;
@@ -852,20 +904,16 @@ impl Editor {
         }
 
         let insert_str = format!("{le}{indent}");
-        self.active_buffer_mut()
-            .history
-            .record_insert(pos, &insert_str);
-        self.active_buffer_mut().insert(pos, &insert_str);
+        self.apply_edit(pos, pos, &insert_str, EditRecord::Insert);
         let pane = self.active_pane_mut();
-        pane.point = pos + insert_str.len();
+        pane.point = pos + insert_str.chars().count();
         pane.preferred_column = None;
     }
 
     fn insert_tab(&mut self) {
         let pos = self.active_pane().point;
         let spaces = " ".repeat(INDENT_WIDTH);
-        self.active_buffer_mut().history.record_insert(pos, &spaces);
-        self.active_buffer_mut().insert(pos, &spaces);
+        self.apply_edit(pos, pos, &spaces, EditRecord::Insert);
         let pane = self.active_pane_mut();
         pane.point = pos + INDENT_WIDTH;
         pane.preferred_column = None;
@@ -893,15 +941,11 @@ impl Editor {
         let old_ws: String = " ".repeat(ws_len);
         let new_ws = format!("{}{}", " ".repeat(INDENT_WIDTH), old_ws);
 
-        self.active_buffer_mut()
-            .history
-            .record_replace(line_start, &old_ws, &new_ws);
-        self.active_buffer_mut()
-            .remove(line_start, line_start + ws_len);
-        self.active_buffer_mut().insert(line_start, &new_ws);
+        let old_point = self.active_pane().point;
+        self.apply_edit(line_start, line_start + ws_len, &new_ws, EditRecord::Replace);
         self.active_buffer_mut().history.commit();
         let pane = self.active_pane_mut();
-        pane.point += INDENT_WIDTH;
+        pane.point = old_point + INDENT_WIDTH;
         pane.preferred_column = None;
     }
 
@@ -945,23 +989,22 @@ impl Editor {
         };
         let new_ws: String = " ".repeat(remaining_ws_len - remove_count);
 
-        self.active_buffer_mut().history.record_replace(
+        let old_point = self.active_pane().point;
+        self.apply_edit(
             line_start,
-            &" ".repeat(remaining_ws_len),
+            line_start + remaining_ws_len,
             &new_ws,
+            EditRecord::Replace,
         );
-        self.active_buffer_mut()
-            .remove(line_start, line_start + remaining_ws_len);
-        self.active_buffer_mut().insert(line_start, &new_ws);
         self.active_buffer_mut().history.commit();
 
         let pane = self.active_pane_mut();
         // Adjust point, but don't go before line start
-        let point_col = pane.point - line_start;
+        let point_col = old_point - line_start;
         if point_col <= remove_count {
             pane.point = line_start;
         } else {
-            pane.point -= remove_count;
+            pane.point = old_point - remove_count;
         }
         pane.preferred_column = None;
     }
@@ -989,7 +1032,6 @@ impl Editor {
             buf.char_count()
         };
 
-        let old_text: String = buf.text.slice(span_start..span_end).chars().collect();
         let indent_str = " ".repeat(INDENT_WIDTH);
 
         // Build new text and track per-line delta for cursor adjustment
@@ -1030,11 +1072,7 @@ impl Editor {
             }
         }
 
-        self.active_buffer_mut()
-            .history
-            .record_replace(span_start, &old_text, &new_text);
-        self.active_buffer_mut().remove(span_start, span_end);
-        self.active_buffer_mut().insert(span_start, &new_text);
+        self.apply_edit(span_start, span_end, &new_text, EditRecord::Replace);
         self.active_buffer_mut().history.commit();
 
         let pane = self.active_pane_mut();
@@ -1063,8 +1101,6 @@ impl Editor {
         } else {
             buf.char_count()
         };
-
-        let old_text: String = buf.text.slice(span_start..span_end).chars().collect();
 
         let pane = self.active_pane();
         let point = pane.point;
@@ -1126,11 +1162,7 @@ impl Editor {
             return;
         }
 
-        self.active_buffer_mut()
-            .history
-            .record_replace(span_start, &old_text, &new_text);
-        self.active_buffer_mut().remove(span_start, span_end);
-        self.active_buffer_mut().insert(span_start, &new_text);
+        self.apply_edit(span_start, span_end, &new_text, EditRecord::Replace);
         self.active_buffer_mut().history.commit();
 
         let pane = self.active_pane_mut();
@@ -1142,16 +1174,7 @@ impl Editor {
     fn delete_backward(&mut self) {
         let pos = self.active_pane().point;
         if pos > 0 {
-            let deleted: String = self
-                .active_buffer()
-                .text
-                .slice(pos - 1..pos)
-                .chars()
-                .collect();
-            self.active_buffer_mut()
-                .history
-                .record_delete(pos - 1, &deleted);
-            self.active_buffer_mut().remove(pos - 1, pos);
+            self.apply_edit(pos - 1, pos, "", EditRecord::Delete);
             let pane = self.active_pane_mut();
             pane.point = pos - 1;
             pane.preferred_column = None;
@@ -1162,16 +1185,7 @@ impl Editor {
         let len = self.active_buffer().char_count();
         let pos = self.active_pane().point;
         if pos < len {
-            let deleted: String = self
-                .active_buffer()
-                .text
-                .slice(pos..pos + 1)
-                .chars()
-                .collect();
-            self.active_buffer_mut()
-                .history
-                .record_delete(pos, &deleted);
-            self.active_buffer_mut().remove(pos, pos + 1);
+            self.apply_edit(pos, pos + 1, "", EditRecord::Delete);
             self.active_pane_mut().preferred_column = None;
         }
     }
@@ -1186,11 +1200,7 @@ impl Editor {
         if col == line_len {
             let total = buf.char_count();
             if pos < total {
-                let deleted: String = buf.text.slice(pos..pos + 1).chars().collect();
-                self.active_buffer_mut()
-                    .history
-                    .record_delete(pos, &deleted);
-                self.active_buffer_mut().remove(pos, pos + 1);
+                let deleted = self.apply_edit(pos, pos + 1, "", EditRecord::Delete);
                 if append {
                     self.clipboard.push_str(&deleted);
                 } else {
@@ -1199,11 +1209,7 @@ impl Editor {
             }
         } else {
             let end = buf.line_col_to_char(line, line_len);
-            let deleted: String = buf.text.slice(pos..end).chars().collect();
-            self.active_buffer_mut()
-                .history
-                .record_delete(pos, &deleted);
-            self.active_buffer_mut().remove(pos, end);
+            let deleted = self.apply_edit(pos, end, "", EditRecord::Delete);
             if append {
                 self.clipboard.push_str(&deleted);
             } else {
@@ -1220,17 +1226,14 @@ impl Editor {
     fn undo(&mut self) {
         if let Some(group) = self.active_buffer_mut().history.undo() {
             for edit in group.edits.iter().rev() {
-                if !edit.inserted.is_empty() {
-                    let end = edit.position + edit.inserted.len();
-                    self.active_buffer_mut().remove(edit.position, end);
-                }
-                if !edit.deleted.is_empty() {
-                    self.active_buffer_mut()
-                        .insert(edit.position, &edit.deleted);
-                }
+                // Reverse the edit: replace what it inserted with what it
+                // deleted. Lengths are char counts, matching positions.
+                let end = edit.position + edit.inserted.chars().count();
+                self.apply_edit(edit.position, end, &edit.deleted, EditRecord::NoHistory);
             }
             if let Some(first) = group.edits.first() {
-                self.active_pane_mut().point = first.position;
+                let len = self.active_buffer().char_count();
+                self.active_pane_mut().point = first.position.min(len);
             }
             self.active_buffer_mut().update_modified();
             if !self.minibuffer.is_active() {
@@ -1245,17 +1248,15 @@ impl Editor {
     fn redo(&mut self) {
         if let Some(group) = self.active_buffer_mut().history.redo() {
             for edit in &group.edits {
-                if !edit.deleted.is_empty() {
-                    let end = edit.position + edit.deleted.len();
-                    self.active_buffer_mut().remove(edit.position, end);
-                }
-                if !edit.inserted.is_empty() {
-                    self.active_buffer_mut()
-                        .insert(edit.position, &edit.inserted);
-                }
+                // Re-apply the edit: replace what it deleted with what it
+                // inserted. Lengths are char counts, matching positions.
+                let end = edit.position + edit.deleted.chars().count();
+                self.apply_edit(edit.position, end, &edit.inserted, EditRecord::NoHistory);
             }
             if let Some(last) = group.edits.last() {
-                self.active_pane_mut().point = last.position + last.inserted.len();
+                let len = self.active_buffer().char_count();
+                self.active_pane_mut().point =
+                    (last.position + last.inserted.chars().count()).min(len);
             }
             self.active_buffer_mut().update_modified();
             if !self.minibuffer.is_active() {
@@ -1327,14 +1328,7 @@ impl Editor {
 
     fn cut(&mut self) {
         if let Some((start, end)) = self.active_region() {
-            let text: String = self
-                .active_buffer()
-                .text
-                .slice(start..end)
-                .chars()
-                .collect();
-            self.active_buffer_mut().history.record_delete(start, &text);
-            self.active_buffer_mut().remove(start, end);
+            let text = self.apply_edit(start, end, "", EditRecord::Delete);
             self.active_buffer_mut().history.commit();
             self.clipboard = text.clone();
             self.set_os_clipboard(&text);
@@ -1377,10 +1371,9 @@ impl Editor {
                 text
             };
             let pos = self.active_pane().point;
-            self.active_buffer_mut().history.record_insert(pos, &text);
-            self.active_buffer_mut().insert(pos, &text);
+            self.apply_edit(pos, pos, &text, EditRecord::Insert);
             self.active_buffer_mut().history.commit();
-            self.active_pane_mut().point = pos + text.len();
+            self.active_pane_mut().point = pos + text.chars().count();
         }
         self.active_pane_mut().preferred_column = None;
     }
@@ -2917,6 +2910,172 @@ mod tests {
         assert!(!editor.should_quit);
         let message = editor.minibuffer.message.clone().unwrap();
         assert!(message.contains("no file"), "got message: {message}");
+    }
+
+    // === Non-ASCII (char-vs-byte) correctness ===
+
+    #[test]
+    fn undo_non_ascii_insert_at_end() {
+        let mut editor = Editor::new_with_text("");
+        editor.execute(Command::InsertChar('é'));
+        editor.execute(Command::Undo);
+        assert_eq!(editor.buffer_text(), "");
+    }
+
+    #[test]
+    fn undo_non_ascii_insert_mid_buffer() {
+        let mut editor = Editor::new_with_text("abcd");
+        editor.execute(Command::ForwardChar);
+        editor.execute(Command::ForwardChar);
+        editor.execute(Command::InsertChar('é'));
+        assert_eq!(editor.buffer_text(), "abécd");
+        editor.execute(Command::Undo);
+        assert_eq!(editor.buffer_text(), "abcd");
+    }
+
+    #[test]
+    fn redo_non_ascii_roundtrip() {
+        let mut editor = Editor::new_with_text("");
+        editor.execute(Command::InsertChar('é'));
+        editor.execute(Command::InsertChar('ü'));
+        editor.execute(Command::Undo);
+        assert_eq!(editor.buffer_text(), "");
+        editor.execute(Command::Redo);
+        assert_eq!(editor.buffer_text(), "éü");
+        assert_eq!(editor.point(), 2);
+    }
+
+    #[test]
+    fn undo_non_ascii_kill_line() {
+        let mut editor = Editor::new_with_text("héllo wörld");
+        editor.execute(Command::KillLine);
+        assert_eq!(editor.buffer_text(), "");
+        editor.execute(Command::Undo);
+        assert_eq!(editor.buffer_text(), "héllo wörld");
+    }
+
+    #[test]
+    fn paste_non_ascii_sets_point_in_chars() {
+        let mut editor = Editor::new_with_text("");
+        editor.clipboard = "héllo".to_string();
+        editor.execute(Command::Paste);
+        assert_eq!(editor.point(), 5);
+        editor.execute(Command::InsertChar('!'));
+        assert_eq!(editor.buffer_text(), "héllo!");
+    }
+
+    #[test]
+    fn consecutive_non_ascii_inserts_undo_as_one_group() {
+        let mut editor = Editor::new_with_text("");
+        editor.execute(Command::InsertChar('é'));
+        editor.execute(Command::InsertChar('x'));
+        editor.execute(Command::InsertChar('ü'));
+        editor.execute(Command::Undo);
+        // All three chars form one undo group, like ASCII inserts do.
+        assert_eq!(editor.buffer_text(), "");
+    }
+
+    // === Multi-pane point/mark adjustment ===
+
+    /// Split, move the *other* pane's point to the buffer end, and refocus
+    /// the original pane. Returns with the original pane focused.
+    fn split_with_other_pane_at_end(editor: &mut Editor) {
+        editor.execute(Command::SplitVertical);
+        editor.execute(Command::CycleFocus);
+        editor.execute(Command::BufferEnd);
+        editor.execute(Command::CycleFocus);
+    }
+
+    #[test]
+    fn cut_in_one_pane_adjusts_point_in_other_pane() {
+        let mut editor = Editor::new_with_text("hello world");
+        split_with_other_pane_at_end(&mut editor); // other pane: point=11
+        editor.execute(Command::BufferBeginning);
+        editor.execute(Command::SetMark);
+        editor.execute(Command::BufferEnd);
+        editor.execute(Command::Cut);
+        assert_eq!(editor.buffer_text(), "");
+        editor.execute(Command::CycleFocus);
+        assert_eq!(editor.point(), 0);
+        editor.execute(Command::InsertChar('x')); // must not panic
+        assert_eq!(editor.buffer_text(), "x");
+    }
+
+    #[test]
+    fn insert_in_one_pane_shifts_point_in_other_pane() {
+        let mut editor = Editor::new_with_text("abc");
+        split_with_other_pane_at_end(&mut editor); // other pane: point=3
+        editor.execute(Command::BufferBeginning);
+        editor.execute(Command::InsertChar('x')); // "xabc"
+        editor.execute(Command::CycleFocus);
+        assert_eq!(editor.point(), 4);
+    }
+
+    #[test]
+    fn delete_in_one_pane_adjusts_mark_in_other_pane() {
+        let mut editor = Editor::new_with_text("hello world");
+        // The other pane keeps a mark at the buffer end.
+        editor.execute(Command::SplitVertical);
+        editor.execute(Command::CycleFocus);
+        editor.execute(Command::BufferEnd);
+        editor.execute(Command::SetMark);
+        editor.execute(Command::BufferBeginning);
+        editor.execute(Command::CycleFocus);
+        // In the focused pane, delete "world" (chars 6..11).
+        editor.execute(Command::BufferBeginning);
+        for _ in 0..6 {
+            editor.execute(Command::ForwardChar);
+        }
+        editor.execute(Command::SetMark);
+        editor.execute(Command::BufferEnd);
+        editor.execute(Command::Cut);
+        assert_eq!(editor.buffer_text(), "hello ");
+        // The other pane's mark (was 11) must have been clamped into bounds;
+        // cutting its region must not panic and cuts the remaining text.
+        editor.execute(Command::CycleFocus);
+        editor.execute(Command::Cut);
+        assert_eq!(editor.buffer_text(), "");
+    }
+
+    #[test]
+    fn undo_in_one_pane_adjusts_point_in_other_pane() {
+        let mut editor = Editor::new_with_text("");
+        editor.execute(Command::InsertChar('a'));
+        editor.execute(Command::InsertChar('b'));
+        split_with_other_pane_at_end(&mut editor); // other pane: point=2
+        editor.execute(Command::Undo); // buffer back to ""
+        assert_eq!(editor.buffer_text(), "");
+        editor.execute(Command::CycleFocus);
+        assert_eq!(editor.point(), 0);
+        editor.execute(Command::InsertChar('x')); // must not panic
+    }
+
+    #[test]
+    fn edit_adjusts_saved_view_state_of_other_pane() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("other.txt");
+        std::fs::write(&file, "xyz").unwrap();
+
+        let mut editor = Editor::new_with_text("hello world");
+        // The other pane views the scratch buffer with point at the end,
+        // then switches away (saving that view state).
+        editor.execute(Command::SplitVertical);
+        editor.execute(Command::CycleFocus);
+        editor.execute(Command::BufferEnd);
+        editor.open_file(&file).unwrap();
+        editor.execute(Command::CycleFocus);
+        // Delete everything in the scratch buffer from the first pane.
+        editor.execute(Command::SetMark);
+        editor.execute(Command::BufferEnd);
+        editor.execute(Command::Cut);
+        assert_eq!(editor.buffer_text(), "");
+        // Switching the other pane back must restore an in-bounds point.
+        editor.execute(Command::CycleFocus);
+        editor.execute(Command::SwitchBuffer);
+        editor.set_minibuffer_text("*scratch*");
+        editor.submit_prompt();
+        assert_eq!(editor.point(), 0);
+        editor.execute(Command::InsertChar('x')); // must not panic
     }
 
     #[test]

@@ -52,6 +52,20 @@ pub fn compute_scroll_top(
     new_top
 }
 
+/// Map a char position through an edit that replaced `removed` chars at
+/// `start` with `inserted` chars. Positions at or before the edit stay put
+/// (emacs marker semantics); positions inside the removed span are kept
+/// within the new text; positions after shift by the length delta.
+fn adjust_position(p: usize, start: usize, removed: usize, inserted: usize) -> usize {
+    if p <= start {
+        p
+    } else if p >= start + removed {
+        p - removed + inserted
+    } else {
+        p.min(start + inserted)
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct BufferViewState {
     point: usize,
@@ -125,6 +139,31 @@ impl Pane {
         self.mark = state.mark.map(|mark| mark.min(buffer_len));
         self.preferred_column = state.preferred_column;
         self.scroll_top = state.scroll_top;
+    }
+
+    /// Adjust point, mark, and saved view state for an edit to `buffer_id`
+    /// that replaced `removed` chars starting at char index `start` with
+    /// `inserted` chars. Keeps positions in other panes valid when a shared
+    /// buffer is edited.
+    pub fn adjust_for_edit(
+        &mut self,
+        buffer_id: BufferId,
+        start: usize,
+        removed: usize,
+        inserted: usize,
+    ) {
+        if self.buffer_id == buffer_id {
+            self.point = adjust_position(self.point, start, removed, inserted);
+            self.mark = self
+                .mark
+                .map(|m| adjust_position(m, start, removed, inserted));
+        }
+        if let Some(state) = self.buffer_states.get_mut(&buffer_id) {
+            state.point = adjust_position(state.point, start, removed, inserted);
+            state.mark = state
+                .mark
+                .map(|m| adjust_position(m, start, removed, inserted));
+        }
     }
 
     pub fn alternate_buffer_id(&self) -> Option<BufferId> {
@@ -535,6 +574,60 @@ impl PaneTree {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn adjust_for_edit_shifts_point_and_mark_after_insertion() {
+        let mut pane = Pane::new(1);
+        pane.point = 5;
+        pane.mark = Some(3);
+        pane.adjust_for_edit(1, 2, 0, 4); // insert 4 chars at 2
+        assert_eq!(pane.point, 9);
+        assert_eq!(pane.mark, Some(7));
+    }
+
+    #[test]
+    fn adjust_for_edit_point_at_insertion_stays() {
+        let mut pane = Pane::new(1);
+        pane.point = 2;
+        pane.adjust_for_edit(1, 2, 0, 4);
+        assert_eq!(pane.point, 2);
+    }
+
+    #[test]
+    fn adjust_for_edit_clamps_point_inside_deleted_region() {
+        let mut pane = Pane::new(1);
+        pane.point = 5;
+        pane.adjust_for_edit(1, 2, 6, 0); // delete [2,8)
+        assert_eq!(pane.point, 2);
+    }
+
+    #[test]
+    fn adjust_for_edit_shifts_point_after_deletion() {
+        let mut pane = Pane::new(1);
+        pane.point = 10;
+        pane.adjust_for_edit(1, 2, 3, 0); // delete [2,5)
+        assert_eq!(pane.point, 7);
+    }
+
+    #[test]
+    fn adjust_for_edit_ignores_other_buffers() {
+        let mut pane = Pane::new(1);
+        pane.point = 10;
+        pane.mark = Some(4);
+        pane.adjust_for_edit(2, 0, 5, 0);
+        assert_eq!(pane.point, 10);
+        assert_eq!(pane.mark, Some(4));
+    }
+
+    #[test]
+    fn adjust_for_edit_updates_saved_buffer_states() {
+        let mut pane = Pane::new(1);
+        pane.point = 10;
+        pane.switch_buffer(2, 100); // saves state for buffer 1 (point 10)
+        pane.adjust_for_edit(1, 0, 5, 0); // delete first 5 chars of buffer 1
+        pane.restore_buffer_state(1, 95);
+        assert_eq!(pane.point, 5);
+    }
 
     #[test]
     fn new_pane_tree() {

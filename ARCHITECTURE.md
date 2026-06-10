@@ -95,6 +95,29 @@ struct Editor {
 minibuffer is active, otherwise the focused pane's buffer. All editing and
 movement methods use these instead of `current_buffer()` / `focused_pane()`.
 
+### The Edit Primitive
+
+All buffer mutation goes through `Editor::apply_edit(start, end, text, record)`,
+which replaces the chars in `[start, end)` of the active buffer with `text` and
+returns the deleted text. All positions and lengths are **char indices** — byte
+lengths (`String::len()`) must never be mixed in. `apply_edit`:
+
+1. Clamps the range to the buffer bounds.
+2. Records undo history according to `EditRecord`
+   (`Insert`/`Delete`/`Replace`/`NoHistory` — the latter used when replaying
+   undo/redo groups).
+3. Performs the rope edit.
+4. Calls `Pane::adjust_for_edit` on every pane viewing the buffer (or on the
+   minibuffer pane for the minibuffer buffer), keeping point, mark, and saved
+   per-buffer view states valid. Positions at or before the edit stay put
+   (emacs marker semantics), positions inside a removed span are kept within
+   the new text, and positions after it shift by the length delta.
+
+Commands then set the active pane's point explicitly (in char units) when they
+want something other than marker semantics, e.g. point after inserted text.
+Undo/redo replay each recorded edit through `apply_edit` with `NoHistory`, so
+other panes' points are adjusted there too.
+
 ### Buffer
 
 Text is stored in a `ropey::Rope`. Each buffer has an independent undo history
