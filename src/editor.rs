@@ -3270,6 +3270,21 @@ mod tests {
         assert_eq!(names.len(), 3, "all three buffers need distinct names");
     }
 
+    #[test]
+    fn mark_stays_valid_through_undo() {
+        let mut editor = Editor::new_with_text("hello");
+        editor.execute(Command::BufferEnd);
+        editor.execute(Command::SetMark); // mark at 5
+        editor.execute(Command::InsertChar('x'));
+        editor.execute(Command::InsertChar('y')); // "helloxy", mark still 5
+        editor.execute(Command::Undo); // back to "hello"
+        let pane = editor.pane_tree.focused_pane();
+        let len = editor.current_buffer().char_count();
+        assert!(pane.mark.unwrap() <= len, "mark out of bounds after undo");
+        // Region operations on the surviving mark must not panic.
+        editor.execute(Command::Copy);
+    }
+
     // === CRLF atomicity ===
 
     fn crlf_editor() -> Editor {
