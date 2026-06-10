@@ -124,6 +124,12 @@ Text is stored in a `ropey::Rope`. Each buffer has an independent undo history
 and optional syntax highlighting state. Buffers have no cursor -- cursor
 position is per-pane.
 
+Buffer names are the file basename, uniquified emacs-style on collision by
+appending trailing path components (`mod.rs<lib>`), falling back to a numeric
+suffix (`mod.rs<2>`). `Editor::unique_buffer_name` enforces this when opening
+files and when renaming via `C-x C-w`, so name-based lookup (`C-x b`) is
+unambiguous.
+
 ```rust
 struct Buffer {
     id: BufferId,       // usize, monotonically increasing, never reused

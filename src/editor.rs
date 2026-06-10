@@ -132,7 +132,7 @@ impl Editor {
 
         let id = self.next_buffer_id;
         self.next_buffer_id += 1;
-        let buf = match Buffer::from_file(id, &canonical) {
+        let mut buf = match Buffer::from_file(id, &canonical) {
             Ok(buf) => buf,
             Err(_) if !canonical.exists() => {
                 // File doesn't exist yet — create a new empty buffer with the path
@@ -140,6 +140,7 @@ impl Editor {
             }
             Err(e) => return Err(e),
         };
+        buf.name = self.unique_buffer_name(&buf.name, buf.path.as_deref());
         let name = buf.name.clone();
         let msg = if buf.path.as_ref().is_some_and(|p| p.exists()) {
             format!("Opened {name}")
@@ -150,6 +151,55 @@ impl Editor {
         self.switch_focused_pane_to_buffer(id);
         self.minibuffer.show_message(msg);
         Ok(())
+    }
+
+    /// Disambiguate a buffer name against the existing buffers, emacs-style:
+    /// `mod.rs` collides → `mod.rs<lib>` (trailing path components), falling
+    /// back to `mod.rs<2>` when paths can't tell them apart.
+    fn unique_buffer_name(&self, base: &str, path: Option<&Path>) -> String {
+        self.unique_buffer_name_excluding(base, path, None)
+    }
+
+    /// Like [`unique_buffer_name`], but ignores the buffer with id `exclude`
+    /// (used when renaming an existing buffer).
+    fn unique_buffer_name_excluding(
+        &self,
+        base: &str,
+        path: Option<&Path>,
+        exclude: Option<usize>,
+    ) -> String {
+        let taken = |name: &str| {
+            self.buffers
+                .iter()
+                .any(|b| b.name == name && Some(b.id) != exclude)
+        };
+        if !taken(base) {
+            return base.to_string();
+        }
+        if let Some(parent) = path.and_then(|p| p.parent()) {
+            let components: Vec<String> = parent
+                .components()
+                .filter_map(|c| match c {
+                    std::path::Component::Normal(s) => Some(s.to_string_lossy().into_owned()),
+                    _ => None,
+                })
+                .collect();
+            for n in 1..=components.len() {
+                let qualifier = components[components.len() - n..].join("/");
+                let candidate = format!("{base}<{qualifier}>");
+                if !taken(&candidate) {
+                    return candidate;
+                }
+            }
+        }
+        let mut i = 2;
+        loop {
+            let candidate = format!("{base}<{i}>");
+            if !taken(&candidate) {
+                return candidate;
+            }
+            i += 1;
+        }
     }
 
     pub fn clear_last_command(&mut self) {
@@ -455,11 +505,14 @@ impl Editor {
             PromptKind::WriteFile => {
                 self.minibuffer.finish();
                 let path = PathBuf::from(normalize_path_string(&input));
-                self.current_buffer_mut().path = Some(path.clone());
-                self.current_buffer_mut().name = path
+                let base = path
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_else(|| input.clone());
+                let id = self.current_buffer().id;
+                let name = self.unique_buffer_name_excluding(&base, Some(&path), Some(id));
+                self.current_buffer_mut().path = Some(path);
+                self.current_buffer_mut().name = name;
                 self.save();
             }
             PromptKind::GotoLine => {
@@ -2910,6 +2963,79 @@ mod tests {
         assert!(!editor.should_quit);
         let message = editor.minibuffer.message.clone().unwrap();
         assert!(message.contains("no file"), "got message: {message}");
+    }
+
+    // === Buffer name uniquification ===
+
+    #[test]
+    fn duplicate_basenames_get_uniquified_names() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("a")).unwrap();
+        std::fs::create_dir(dir.path().join("b")).unwrap();
+        let file1 = dir.path().join("a").join("mod.rs");
+        let file2 = dir.path().join("b").join("mod.rs");
+        std::fs::write(&file1, "aaa").unwrap();
+        std::fs::write(&file2, "bbb").unwrap();
+
+        let mut editor = Editor::new();
+        editor.open_file(&file1).unwrap();
+        editor.open_file(&file2).unwrap();
+
+        let names: Vec<&str> = editor.buffers.iter().map(|b| b.name.as_str()).collect();
+        assert_eq!(names.iter().filter(|n| **n == "mod.rs").count(), 1);
+        assert!(
+            names.contains(&"mod.rs<b>"),
+            "second buffer should be disambiguated by parent dir: {names:?}"
+        );
+    }
+
+    #[test]
+    fn uniquified_buffer_reachable_via_switch_buffer() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("a")).unwrap();
+        std::fs::create_dir(dir.path().join("b")).unwrap();
+        let file1 = dir.path().join("a").join("mod.rs");
+        let file2 = dir.path().join("b").join("mod.rs");
+        std::fs::write(&file1, "aaa").unwrap();
+        std::fs::write(&file2, "bbb").unwrap();
+
+        let mut editor = Editor::new();
+        editor.open_file(&file1).unwrap();
+        editor.open_file(&file2).unwrap();
+
+        editor.execute(Command::SwitchBuffer);
+        editor.set_minibuffer_text("mod.rs");
+        editor.submit_prompt();
+        assert_eq!(editor.buffer_text(), "aaa");
+
+        editor.execute(Command::SwitchBuffer);
+        editor.set_minibuffer_text("mod.rs<b>");
+        editor.submit_prompt();
+        assert_eq!(editor.buffer_text(), "bbb");
+    }
+
+    #[test]
+    fn three_way_name_collision_yields_distinct_names() {
+        let dir = tempfile::tempdir().unwrap();
+        for sub in ["x", "y", "z"] {
+            std::fs::create_dir(dir.path().join(sub)).unwrap();
+            std::fs::write(dir.path().join(sub).join("mod.rs"), sub).unwrap();
+        }
+
+        let mut editor = Editor::new();
+        for sub in ["x", "y", "z"] {
+            editor.open_file(&dir.path().join(sub).join("mod.rs")).unwrap();
+        }
+
+        let mut names: Vec<&str> = editor
+            .buffers
+            .iter()
+            .map(|b| b.name.as_str())
+            .filter(|n| n.starts_with("mod.rs"))
+            .collect();
+        names.sort();
+        names.dedup();
+        assert_eq!(names.len(), 3, "all three buffers need distinct names");
     }
 
     // === Non-ASCII (char-vs-byte) correctness ===
