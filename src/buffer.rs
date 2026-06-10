@@ -145,12 +145,19 @@ impl Buffer {
     /// then rename over the target. A crash or full disk mid-write can never
     /// destroy the existing file.
     pub fn save(&mut self) -> Result<()> {
-        use std::io::Write;
-
         let path = match &self.path {
             Some(p) => p.clone(),
             None => bail!("Buffer has no file path"),
         };
+        self.save_as(&path)
+    }
+
+    /// Save to `path` (atomically, like [`save`]). The buffer's path and
+    /// clean state are only updated after the write succeeds, so a failed
+    /// save never changes the buffer's identity.
+    pub fn save_as(&mut self, path: &Path) -> Result<()> {
+        use std::io::Write;
+
         let content: String = self.text.to_string();
 
         let dir = match path.parent() {
@@ -160,16 +167,27 @@ impl Buffer {
         let mut tmp = tempfile::NamedTempFile::new_in(&dir)?;
         tmp.write_all(content.as_bytes())?;
         // Keep the target's permissions; a fresh temp file defaults to 0600.
-        if let Ok(meta) = fs::metadata(&path) {
+        if let Ok(meta) = fs::metadata(path) {
             tmp.as_file().set_permissions(meta.permissions())?;
         }
         tmp.as_file().sync_all()?;
-        tmp.persist(&path)?;
+        tmp.persist(path)?;
 
-        self.disk_mtime = fs::metadata(&path).and_then(|m| m.modified()).ok();
+        self.path = Some(path.to_path_buf());
+        self.disk_mtime = fs::metadata(path).and_then(|m| m.modified()).ok();
         self.history.mark_clean();
         self.modified = false;
         Ok(())
+    }
+
+    /// Re-detect the syntax highlighting language from the current path
+    /// (after `C-x C-w` to a different extension).
+    pub fn redetect_syntax(&mut self) {
+        self.syntax = self
+            .path
+            .as_deref()
+            .and_then(syntax::detect_language)
+            .and_then(SyntaxState::new);
     }
 
     /// True if the file on disk has changed since we last loaded or saved it

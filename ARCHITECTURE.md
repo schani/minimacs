@@ -350,7 +350,11 @@ The minibuffer has two states:
   `KillConfirm { buffer_id }`, `QuitSaveConfirm { buffer_id }`.
 
 Confirmation prompts identify buffers by id, never by name (names are not
-unique). `C-x k` on a modified buffer asks `KillConfirm`; "y" kills the
+unique). `C-x C-w` to an existing file asks `OverwriteConfirm` first; the
+buffer's path, name, and syntax language are only updated after the write
+succeeds (`Buffer::save_as` + `redetect_syntax`), so a failed save never
+changes buffer identity. `C-x C-s` over a file changed on disk asks
+`SaveAnywayConfirm`. `C-x k` on a modified buffer asks `KillConfirm`; "y" kills the
 buffer, "n" cancels. `C-x C-c` collects the ids of all modified buffers into
 `Editor::quit_pending` and asks `QuitSaveConfirm` for each in turn: "y" saves
 that buffer and moves on, "n" skips it, "q" aborts the whole quit, and any

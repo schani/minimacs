@@ -505,15 +505,19 @@ impl Editor {
             PromptKind::WriteFile => {
                 self.minibuffer.finish();
                 let path = PathBuf::from(normalize_path_string(&input));
-                let base = path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| input.clone());
-                let id = self.current_buffer().id;
-                let name = self.unique_buffer_name_excluding(&base, Some(&path), Some(id));
-                self.current_buffer_mut().path = Some(path);
-                self.current_buffer_mut().name = name;
-                self.save();
+                let buffer_id = self.current_buffer().id;
+                let own_path = self.current_buffer().path.as_deref() == Some(path.as_path());
+                if path.exists() && !own_path {
+                    self.start_minibuffer_prompt(
+                        PromptKind::OverwriteConfirm {
+                            buffer_id,
+                            path: path.clone(),
+                        },
+                        &format!("{} exists; overwrite? (y/n) ", path.display()),
+                    );
+                    return;
+                }
+                self.write_buffer_to_path(buffer_id, path);
             }
             PromptKind::GotoLine => {
                 self.minibuffer.finish();
@@ -537,6 +541,16 @@ impl Editor {
                 match input.as_str() {
                     "y" | "Y" => self.do_kill_buffer(buffer_id),
                     "n" | "N" => {}
+                    _ => self
+                        .minibuffer
+                        .show_message("Please answer y or n".to_string()),
+                }
+            }
+            PromptKind::OverwriteConfirm { buffer_id, path } => {
+                self.minibuffer.finish();
+                match input.as_str() {
+                    "y" | "Y" => self.write_buffer_to_path(buffer_id, path),
+                    "n" | "N" => self.minibuffer.show_message("Cancelled".to_string()),
                     _ => self
                         .minibuffer
                         .show_message("Please answer y or n".to_string()),
@@ -611,6 +625,33 @@ impl Editor {
                         self.continue_quit();
                     }
                 }
+            }
+        }
+    }
+
+    /// Write a buffer to `path` (the C-x C-w flow). Buffer identity (path,
+    /// name, syntax) is only updated after the save succeeds.
+    fn write_buffer_to_path(&mut self, buffer_id: usize, path: PathBuf) {
+        let result = {
+            let Some(buf) = self.buffers.iter_mut().find(|b| b.id == buffer_id) else {
+                return;
+            };
+            buf.save_as(&path).map(|()| buf.redetect_syntax())
+        };
+        match result {
+            Ok(()) => {
+                let base = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| path.display().to_string());
+                let name = self.unique_buffer_name_excluding(&base, Some(&path), Some(buffer_id));
+                if let Some(buf) = self.buffers.iter_mut().find(|b| b.id == buffer_id) {
+                    buf.name = name.clone();
+                }
+                self.minibuffer.show_message(format!("Wrote {name}"));
+            }
+            Err(e) => {
+                self.minibuffer.show_message(format!("Error saving: {e}"));
             }
         }
     }
@@ -3044,6 +3085,87 @@ mod tests {
         editor.open_file(&file).unwrap();
         editor.execute(Command::InsertChar('X'));
         editor.execute(Command::Save);
+        assert!(!editor.minibuffer.is_active());
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "Xoriginal");
+    }
+
+    // === Write-file (C-x C-w) flow ===
+
+    #[test]
+    fn write_file_to_existing_path_prompts_before_overwriting() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("target.txt");
+        std::fs::write(&target, "precious").unwrap();
+
+        let mut editor = Editor::new_with_text("new content");
+        editor.execute(Command::WriteFile);
+        editor.set_minibuffer_text(&target.to_string_lossy());
+        editor.submit_prompt();
+        assert!(editor.minibuffer.is_active(), "must confirm overwrite");
+
+        // Declining leaves the file and the buffer identity untouched.
+        editor.set_minibuffer_text("n");
+        editor.submit_prompt();
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "precious");
+        assert_eq!(editor.current_buffer().name, "*scratch*");
+        assert!(editor.current_buffer().path.is_none());
+
+        // Confirming overwrites and renames the buffer.
+        editor.execute(Command::WriteFile);
+        editor.set_minibuffer_text(&target.to_string_lossy());
+        editor.submit_prompt();
+        editor.set_minibuffer_text("y");
+        editor.submit_prompt();
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "new content");
+        assert_eq!(editor.current_buffer().name, "target.txt");
+    }
+
+    #[test]
+    fn write_file_failure_keeps_buffer_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("no_such_dir").join("file.txt");
+
+        let mut editor = Editor::new_with_text("content");
+        editor.execute(Command::InsertChar('x'));
+        editor.execute(Command::WriteFile);
+        editor.set_minibuffer_text(&target.to_string_lossy());
+        editor.submit_prompt();
+
+        // The save failed; the buffer must not have been renamed/re-pathed.
+        assert_eq!(editor.current_buffer().name, "*scratch*");
+        assert!(editor.current_buffer().path.is_none());
+        assert!(editor.current_buffer().modified);
+    }
+
+    #[test]
+    fn write_file_redetects_syntax_for_new_extension() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("code.rs");
+
+        let mut editor = Editor::new_with_text("fn main() {}");
+        assert!(editor.current_buffer().syntax.is_none());
+        editor.execute(Command::WriteFile);
+        editor.set_minibuffer_text(&target.to_string_lossy());
+        editor.submit_prompt();
+        assert!(
+            editor.current_buffer().syntax.is_some(),
+            "writing to .rs must enable rust highlighting"
+        );
+    }
+
+    #[test]
+    fn write_file_to_own_path_does_not_prompt() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.txt");
+        std::fs::write(&file, "original").unwrap();
+
+        let mut editor = Editor::new();
+        editor.open_file(&file).unwrap();
+        editor.execute(Command::InsertChar('X'));
+        let own_path = editor.current_buffer().path.clone().unwrap();
+        editor.execute(Command::WriteFile);
+        editor.set_minibuffer_text(&own_path.to_string_lossy());
+        editor.submit_prompt();
         assert!(!editor.minibuffer.is_active());
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "Xoriginal");
     }

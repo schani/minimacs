@@ -20,6 +20,8 @@ pub enum PromptKind {
     KillConfirm { buffer_id: usize },
     /// "X changed on disk; save anyway? (y/n)"
     SaveAnywayConfirm { buffer_id: usize },
+    /// "X exists; overwrite? (y/n)" — C-x C-w to an existing file.
+    OverwriteConfirm { buffer_id: usize, path: PathBuf },
     /// "Save buffer X? (y/n/q)" — asked once per modified buffer when quitting.
     QuitSaveConfirm { buffer_id: usize },
 }
