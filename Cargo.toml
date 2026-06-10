@@ -15,6 +15,7 @@ ropey = "1"
 unicode-segmentation = "1"
 unicode-width = "0.2"
 anyhow = "1"
+tempfile = "3"
 arboard = { version = "3", features = ["wayland-data-control"], optional = true }
 tree-sitter = "0.25"
 tree-sitter-language = "0.1"

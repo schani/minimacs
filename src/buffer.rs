@@ -134,13 +134,31 @@ impl Buffer {
         })
     }
 
+    /// Save atomically: write to a temp file in the same directory, fsync,
+    /// then rename over the target. A crash or full disk mid-write can never
+    /// destroy the existing file.
     pub fn save(&mut self) -> Result<()> {
+        use std::io::Write;
+
         let path = match &self.path {
             Some(p) => p.clone(),
             None => bail!("Buffer has no file path"),
         };
         let content: String = self.text.to_string();
-        fs::write(&path, &content)?;
+
+        let dir = match path.parent() {
+            Some(d) if !d.as_os_str().is_empty() => d.to_path_buf(),
+            _ => PathBuf::from("."),
+        };
+        let mut tmp = tempfile::NamedTempFile::new_in(&dir)?;
+        tmp.write_all(content.as_bytes())?;
+        // Keep the target's permissions; a fresh temp file defaults to 0600.
+        if let Ok(meta) = fs::metadata(&path) {
+            tmp.as_file().set_permissions(meta.permissions())?;
+        }
+        tmp.as_file().sync_all()?;
+        tmp.persist(&path)?;
+
         self.history.mark_clean();
         self.modified = false;
         Ok(())
@@ -313,6 +331,41 @@ mod tests {
 
         let content = fs::read_to_string(&file).unwrap();
         assert_eq!(content, "hello there\nworld\n");
+    }
+
+    #[test]
+    fn save_leaves_no_temp_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.txt");
+        fs::write(&file, "hello").unwrap();
+
+        let mut buf = Buffer::from_file(0, &file).unwrap();
+        buf.insert(0, "x");
+        buf.save().unwrap();
+
+        let entries: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(entries, vec!["test.txt"], "no temp files may remain");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_preserves_file_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("script.sh");
+        fs::write(&file, "echo hi").unwrap();
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let mut buf = Buffer::from_file(0, &file).unwrap();
+        buf.insert(0, "#!/bin/sh\n");
+        buf.save().unwrap();
+
+        let mode = fs::metadata(&file).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o755, "save must not clobber file permissions");
     }
 
     #[test]

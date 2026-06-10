@@ -124,6 +124,10 @@ Text is stored in a `ropey::Rope`. Each buffer has an independent undo history
 and optional syntax highlighting state. Buffers have no cursor -- cursor
 position is per-pane.
 
+Saving is atomic: `Buffer::save()` writes to a temp file in the target's
+directory, copies the target's permissions, fsyncs, and renames over the
+target, so a crash or full disk mid-write cannot destroy the existing file.
+
 Buffer names are the file basename, uniquified emacs-style on collision by
 appending trailing path components (`mod.rs<lib>`), falling back to a numeric
 suffix (`mod.rs<2>`). `Editor::unique_buffer_name` enforces this when opening
