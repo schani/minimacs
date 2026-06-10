@@ -126,7 +126,10 @@ position is per-pane.
 
 Saving is atomic: `Buffer::save()` writes to a temp file in the target's
 directory, copies the target's permissions, fsyncs, and renames over the
-target, so a crash or full disk mid-write cannot destroy the existing file.
+target, so a crash or full disk mid-write cannot destroy the existing file. Each
+buffer remembers the file's mtime from load/save; `C-x C-s` checks
+`externally_modified()` and asks "changed on disk; save anyway? (y/n)" before
+clobbering changes made by another program.
 
 Buffer names are the file basename, uniquified emacs-style on collision by
 appending trailing path components (`mod.rs<lib>`), falling back to a numeric

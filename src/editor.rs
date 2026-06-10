@@ -542,6 +542,31 @@ impl Editor {
                         .show_message("Please answer y or n".to_string()),
                 }
             }
+            PromptKind::SaveAnywayConfirm { buffer_id } => {
+                self.minibuffer.finish();
+                match input.as_str() {
+                    "y" | "Y" => {
+                        if let Some(buf) = self.buffers.iter_mut().find(|b| b.id == buffer_id) {
+                            let name = buf.name.clone();
+                            match buf.save() {
+                                Ok(()) => {
+                                    self.minibuffer.show_message(format!("Wrote {name}"));
+                                }
+                                Err(e) => {
+                                    self.minibuffer
+                                        .show_message(format!("Error saving: {e}"));
+                                }
+                            }
+                        }
+                    }
+                    "n" | "N" => {
+                        self.minibuffer.show_message("Save cancelled".to_string());
+                    }
+                    _ => self
+                        .minibuffer
+                        .show_message("Please answer y or n".to_string()),
+                }
+            }
             PromptKind::QuitSaveConfirm { buffer_id } => {
                 self.minibuffer.finish();
                 match input.as_str() {
@@ -1327,6 +1352,15 @@ impl Editor {
         let has_path = self.current_buffer().path.is_some();
         if !has_path {
             self.write_file_prompt();
+            return;
+        }
+        if self.current_buffer().externally_modified() {
+            let buffer_id = self.current_buffer().id;
+            let name = self.current_buffer().name.clone();
+            self.start_minibuffer_prompt(
+                PromptKind::SaveAnywayConfirm { buffer_id },
+                &format!("{name} changed on disk; save anyway? (y/n) "),
+            );
             return;
         }
         match self.current_buffer_mut().save() {
@@ -2963,6 +2997,55 @@ mod tests {
         assert!(!editor.should_quit);
         let message = editor.minibuffer.message.clone().unwrap();
         assert!(message.contains("no file"), "got message: {message}");
+    }
+
+    // === External modification detection ===
+
+    #[test]
+    fn save_over_externally_modified_file_prompts() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.txt");
+        std::fs::write(&file, "original").unwrap();
+
+        let mut editor = Editor::new();
+        editor.open_file(&file).unwrap();
+        editor.execute(Command::InsertChar('X'));
+
+        // Another program rewrites the file.
+        std::fs::write(&file, "external change").unwrap();
+        let f = std::fs::OpenOptions::new().write(true).open(&file).unwrap();
+        f.set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(10))
+            .unwrap();
+        drop(f);
+
+        editor.execute(Command::Save);
+        assert!(editor.minibuffer.is_active(), "save must prompt first");
+        // Declining keeps the on-disk content.
+        editor.set_minibuffer_text("n");
+        editor.submit_prompt();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "external change");
+        assert!(editor.current_buffer().modified);
+
+        // Confirming overwrites.
+        editor.execute(Command::Save);
+        editor.set_minibuffer_text("y");
+        editor.submit_prompt();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "Xoriginal");
+        assert!(!editor.current_buffer().modified);
+    }
+
+    #[test]
+    fn save_without_external_change_does_not_prompt() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.txt");
+        std::fs::write(&file, "original").unwrap();
+
+        let mut editor = Editor::new();
+        editor.open_file(&file).unwrap();
+        editor.execute(Command::InsertChar('X'));
+        editor.execute(Command::Save);
+        assert!(!editor.minibuffer.is_active());
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "Xoriginal");
     }
 
     // === Buffer name uniquification ===

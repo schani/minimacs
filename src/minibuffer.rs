@@ -18,6 +18,8 @@ pub enum PromptKind {
     ISearch,
     /// "Buffer X modified; kill anyway? (y/n)"
     KillConfirm { buffer_id: usize },
+    /// "X changed on disk; save anyway? (y/n)"
+    SaveAnywayConfirm { buffer_id: usize },
     /// "Save buffer X? (y/n/q)" — asked once per modified buffer when quitting.
     QuitSaveConfirm { buffer_id: usize },
 }

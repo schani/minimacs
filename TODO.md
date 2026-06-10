@@ -39,7 +39,7 @@ Larger items (incremental tree-sitter parsing, missing emacs features) are in FU
 ## Major
 
 - [x] Atomic saves: write to a temp file in the same directory and rename over the target (`buffer.rs:142` currently truncates in place with `fs::write`, so a crash or full disk mid-write destroys the file). Consider fsync.
-- [ ] Detect external file modification: remember mtime at load/save and warn before saving over (or editing) a file changed on disk. There is also no revert-buffer command.
+- [x] Detect external file modification: remember mtime at load/save and warn before saving over (or editing) a file changed on disk. There is also no revert-buffer command.
 - [ ] `C-x C-w` mutates the buffer's path and name *before* knowing the save succeeded (`editor.rs:440-449`), silently overwrites existing files without confirmation, and never re-detects syntax for the new extension.
 - [ ] Wide-character and grapheme-cluster support: `unicode-width` and `unicode-segmentation` are declared in Cargo.toml but never imported anywhere in src/. `visual_width_for_chars` (`render.rs:187-195`) counts every non-tab char as width 1, so CJK/emoji lines get wrong cursor position, wrap points, mouse mapping, and highlight columns; cursor movement and backspace step through combining sequences one scalar at a time.
 - [ ] Scroll-to-keep-cursor-visible counts raw chars (`editor.rs:320`) while the renderer wraps by tab-expanded visual width (`render.rs:118-119`), so on tab-heavy files the cursor can move below the viewport without scrolling (reintroduces the previously fixed "cursor beyond last line" bug for tabs).

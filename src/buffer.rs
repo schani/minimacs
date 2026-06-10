@@ -35,6 +35,9 @@ pub struct Buffer {
     pub history: History,
     pub syntax: Option<SyntaxState>,
     pub edit_generation: usize,
+    /// Modification time of the file when we last loaded or saved it.
+    /// Used to detect external changes before clobbering them on save.
+    disk_mtime: Option<std::time::SystemTime>,
 }
 
 #[allow(dead_code)]
@@ -51,6 +54,7 @@ impl Buffer {
             history: History::new(),
             syntax: None,
             edit_generation: 0,
+            disk_mtime: None,
         }
     }
 
@@ -72,6 +76,7 @@ impl Buffer {
             history: History::new(),
             syntax: syntax_state,
             edit_generation: 0,
+            disk_mtime: None,
         }
     }
 
@@ -87,6 +92,7 @@ impl Buffer {
             history: History::new(),
             syntax: None,
             edit_generation: 0,
+            disk_mtime: None,
         }
     }
 
@@ -131,6 +137,7 @@ impl Buffer {
             history: History::new(),
             syntax: syntax_state,
             edit_generation: 0,
+            disk_mtime: fs::metadata(path).and_then(|m| m.modified()).ok(),
         })
     }
 
@@ -159,9 +166,26 @@ impl Buffer {
         tmp.as_file().sync_all()?;
         tmp.persist(&path)?;
 
+        self.disk_mtime = fs::metadata(&path).and_then(|m| m.modified()).ok();
         self.history.mark_clean();
         self.modified = false;
         Ok(())
+    }
+
+    /// True if the file on disk has changed since we last loaded or saved it
+    /// (i.e. saving now would clobber someone else's changes).
+    pub fn externally_modified(&self) -> bool {
+        let Some(path) = &self.path else {
+            return false;
+        };
+        let current = fs::metadata(path).and_then(|m| m.modified()).ok();
+        match (self.disk_mtime, current) {
+            (Some(known), Some(now)) => known != now,
+            // We never saw the file on disk, and it still isn't there.
+            (None, None) => false,
+            // Created or deleted behind our back.
+            _ => true,
+        }
     }
 
     /// Total number of lines in the buffer.
@@ -331,6 +355,35 @@ mod tests {
 
         let content = fs::read_to_string(&file).unwrap();
         assert_eq!(content, "hello there\nworld\n");
+    }
+
+    #[test]
+    fn externally_modified_detection() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.txt");
+        fs::write(&file, "hello").unwrap();
+
+        let mut buf = Buffer::from_file(0, &file).unwrap();
+        assert!(!buf.externally_modified());
+
+        // Simulate another program changing the file (force a distinct mtime).
+        fs::write(&file, "changed elsewhere").unwrap();
+        let f = fs::OpenOptions::new().write(true).open(&file).unwrap();
+        f.set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(10))
+            .unwrap();
+        drop(f);
+        assert!(buf.externally_modified());
+
+        // Saving takes ownership of the file again.
+        buf.insert(0, "x");
+        buf.save().unwrap();
+        assert!(!buf.externally_modified());
+    }
+
+    #[test]
+    fn pathless_buffer_is_never_externally_modified() {
+        let buf = Buffer::new_scratch(0);
+        assert!(!buf.externally_modified());
     }
 
     #[test]
