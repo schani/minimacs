@@ -34,7 +34,7 @@ Larger items (incremental tree-sitter parsing, missing emacs features) are in FU
 - [x] Quitting with multiple modified buffers prompts only for the first and silently discards the changes of all the others.
 - [x] The `SaveConfirm` handler looks the buffer up by name (`editor.rs:471`); buffer names are file basenames and never uniquified, so with two files of the same basename it can save the wrong buffer. Uniquify buffer names (emacs style, e.g. `mod.rs<lib>`) — duplicate names also make the second buffer unreachable via `C-x b`.
 - [x] Completion rendering byte-slices candidate strings at arbitrary indices (`render.rs:624`, `639`); tab-completing in a directory with non-ASCII filenames in a narrow terminal panics. Also `completions_layout` divides by zero when terminal width is 0 (`render.rs:17-18`).
-- [ ] Add non-ASCII test data across the suite (insert, delete, undo, paste, search, completion, rendering). There is currently zero Unicode text in any test, which is why the byte-vs-char bugs survived.
+- [x] Add non-ASCII test data across the suite (insert, delete, undo, paste, search, completion, rendering). There is currently zero Unicode text in any test, which is why the byte-vs-char bugs survived.
 
 ## Major
 

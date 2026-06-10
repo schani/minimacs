@@ -554,6 +554,19 @@ mod tests {
     }
 
     #[test]
+    fn typing_non_ascii_renders_and_edits_correctly() {
+        let mut events = key_events("héllo wörld");
+        events.push(key(KeyCode::Backspace)); // delete 'd'
+        events.push(ctrl('a'));
+        events.push(char_key('à')); // insert at beginning
+        let (mut app, mut events) = test_app(40, 10, events);
+        app.run_until_idle(&mut events).unwrap();
+        assert_eq!(app.editor.buffer_text(), "àhéllo wörl");
+        let screen = capture_screen(&app.terminal);
+        assert!(screen.contains("àhéllo wörl"), "screen: {screen}");
+    }
+
+    #[test]
     fn navigation_with_ctrl_keys() {
         let mut events = key_events("hello");
         events.push(ctrl('a')); // beginning of line

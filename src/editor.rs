@@ -3091,6 +3091,34 @@ mod tests {
     }
 
     #[test]
+    fn isearch_finds_non_ascii_query_at_char_position() {
+        let mut editor = Editor::new_with_text("héllo wörld");
+        editor.execute(Command::ISearchForward);
+        if let Some(ref mut isearch) = editor.isearch {
+            isearch.query = "wörld".to_string();
+        }
+        editor.isearch_update();
+        // "wörld" ends at char index 11 (point goes to match end), and the
+        // match starts at char index 6 — not at the byte offsets 13/8.
+        let state = editor.isearch.as_ref().unwrap();
+        assert_eq!(state.current_match, Some(6));
+        assert_eq!(editor.point(), 6);
+    }
+
+    #[test]
+    fn isearch_backward_non_ascii() {
+        let mut editor = Editor::new_with_text("ééé aaa ééé");
+        editor.execute(Command::BufferEnd);
+        editor.execute(Command::ISearchBackward);
+        if let Some(ref mut isearch) = editor.isearch {
+            isearch.query = "ééé".to_string();
+        }
+        editor.isearch_update();
+        let state = editor.isearch.as_ref().unwrap();
+        assert_eq!(state.current_match, Some(8));
+    }
+
+    #[test]
     fn consecutive_non_ascii_inserts_undo_as_one_group() {
         let mut editor = Editor::new_with_text("");
         editor.execute(Command::InsertChar('é'));
