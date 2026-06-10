@@ -251,7 +251,9 @@ installed hook so the panic message prints on the normal screen.
 2. Route the event:
    - `C-g` always cancels (hard-coded, bypasses keymap).
    - If incremental search is active, `handle_isearch_key()` processes the key.
-   - If a minibuffer prompt is active, `handle_minibuffer_key()` processes the key.
+   - If a minibuffer prompt is active, Enter (submit) and Tab (complete) are
+     intercepted inline in `handle_key()`; all other keys fall through to the
+     keymap.
    - Otherwise, `KeymapState::process_key()` walks the trie.
    - If the keymap returns `NotFound` and the key is a printable character with
      no modifiers, it falls through to `InsertChar` — unless the key ended a
@@ -287,15 +289,16 @@ cursor by 3 lines without changing which pane is focused.
      rendering expansion.
    - Long lines are wrapped with a `\` continuation marker in the last column,
      using the expanded visual width for tab characters.
-   - Overlays region highlighting (white background between mark and point).
-   - Overlays search match highlighting (yellow for current match, dark for
-     others).
+   - Overlays region highlighting (light blue background between mark and
+     point).
+   - Overlays search match highlighting (olive background for the current
+     match, light orange for others).
    - Text content is rendered as spans within a single `Paragraph` widget.
    - Renders the mode line: modified flag, buffer name, `(line,col)`,
      position percentage, language name (if syntax is active), and any
      pending key chord prefix.
-   - Focused pane gets a white-background bold mode line; unfocused panes
-     get dark gray background with white text.
+   - Focused pane gets a blue-background bold mode line with white text;
+     unfocused panes get a light gray background with dark text.
 4. Renders the minibuffer (prompt or message).
 5. Sets the terminal cursor position. If the minibuffer is active, the cursor
    goes to the minibuffer input. Otherwise it is placed at the focused pane's
