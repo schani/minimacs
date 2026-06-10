@@ -1253,6 +1253,39 @@ fn quit_save_confirm_q_aborts_whole_flow() {
 }
 
 #[test]
+fn quit_save_confirm_a_aborts_editor_without_saving() {
+    let dir = tempfile::tempdir().unwrap();
+    let file1 = dir.path().join("a.txt");
+    let file2 = dir.path().join("b.txt");
+    std::fs::write(&file1, "aaa").unwrap();
+    std::fs::write(&file2, "bbb").unwrap();
+
+    let mut editor = Editor::new();
+    editor.open_file(&file1).unwrap();
+    editor.execute(Command::InsertChar('1'));
+    editor.open_file(&file2).unwrap();
+    editor.execute(Command::InsertChar('2'));
+
+    editor.execute(Command::Quit);
+    editor.set_minibuffer_text("a");
+    editor.submit_prompt();
+    // Quits immediately, discarding everything, and signals abort so main
+    // exits non-zero (for use as a git editor).
+    assert!(editor.should_quit);
+    assert!(editor.quit_abort);
+    assert_eq!(std::fs::read_to_string(&file1).unwrap(), "aaa");
+    assert_eq!(std::fs::read_to_string(&file2).unwrap(), "bbb");
+}
+
+#[test]
+fn normal_quit_is_not_an_abort() {
+    let mut editor = Editor::new();
+    editor.execute(Command::Quit);
+    assert!(editor.should_quit);
+    assert!(!editor.quit_abort);
+}
+
+#[test]
 fn quit_save_confirm_saves_correct_buffer_with_duplicate_names() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir(dir.path().join("a")).unwrap();

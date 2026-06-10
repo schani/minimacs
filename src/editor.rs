@@ -41,6 +41,9 @@ pub struct Editor {
     pub clipboard: String,
     pub cwd: PathBuf,
     pub should_quit: bool,
+    /// Set when the user aborts via the quit prompt's `a` answer; main exits
+    /// non-zero so callers like git abandon the operation.
+    pub quit_abort: bool,
     pub pending_keys: String,
     pub minibuffer: Minibuffer,
     pub minibuffer_buffer: Buffer,
@@ -67,6 +70,7 @@ impl Editor {
             clipboard: String::new(),
             cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             should_quit: false,
+            quit_abort: false,
             pending_keys: String::new(),
             minibuffer: Minibuffer::new(),
             minibuffer_buffer: Buffer::from_str(usize::MAX, "*minibuffer*", ""),
@@ -89,6 +93,7 @@ impl Editor {
             clipboard: String::new(),
             cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             should_quit: false,
+            quit_abort: false,
             pending_keys: String::new(),
             minibuffer: Minibuffer::new(),
             minibuffer_buffer: Buffer::from_str(usize::MAX, "*minibuffer*", ""),

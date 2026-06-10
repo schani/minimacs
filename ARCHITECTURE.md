@@ -382,8 +382,10 @@ changes buffer identity. `C-x C-s` over a file changed on disk asks
 `SaveAnywayConfirm`. `C-x k` on a modified buffer asks `KillConfirm`; "y" kills the
 buffer, "n" cancels. `C-x C-c` collects the ids of all modified buffers into
 `Editor::quit_pending` and asks `QuitSaveConfirm` for each in turn: "y" saves
-that buffer and moves on, "n" skips it, "q" aborts the whole quit, and any
-other answer re-asks. The editor quits only after every pending buffer has
+that buffer and moves on, "n" skips it, "q" cancels the quit, "a" aborts —
+quit immediately, discard all unsaved changes, and exit with status 1 (like
+vim's `:cq`, so git abandons the operation when minimacs is `core.editor`) —
+and any other answer re-asks. The editor quits only after every pending buffer has
 been answered. A "y" on a buffer with no file path aborts the quit with a
 message instead of silently discarding it.
 

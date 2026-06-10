@@ -147,7 +147,7 @@ cancels and restores the original position.
 | Key | Action |
 |-----|--------|
 | `C-g` | Cancel (clears pending keys, deactivates mark, cancels prompts) |
-| `C-x C-c` | Quit (prompts to save modified buffers) |
+| `C-x C-c` | Quit (prompts to save modified buffers; `a` aborts with exit status 1, for git) |
 
 ## Testing
 

@@ -209,6 +209,14 @@ impl Editor {
                         self.quit_pending.clear();
                         self.minibuffer.show_message("Quit".to_string());
                     }
+                    "a" | "A" => {
+                        // Abort: quit immediately, discard all unsaved
+                        // changes, and exit non-zero so callers like git
+                        // abandon the operation (vim's :cq).
+                        self.quit_pending.clear();
+                        self.quit_abort = true;
+                        self.should_quit = true;
+                    }
                     _ => {
                         // Re-ask for the same buffer.
                         self.continue_quit();
@@ -267,7 +275,7 @@ impl Editor {
                     let name = buf.name.clone();
                     self.start_minibuffer_prompt(
                         PromptKind::QuitSaveConfirm { buffer_id: id },
-                        &format!("Save buffer {name}? (y/n/q) "),
+                        &format!("Save buffer {name}? (y/n/q, a aborts) "),
                     );
                     return;
                 }
