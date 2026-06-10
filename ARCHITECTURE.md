@@ -121,6 +121,13 @@ want something other than marker semantics, e.g. point after inserted text.
 Undo/redo replay each recorded edit through `apply_edit` with `NoHistory`, so
 other panes' points are adjusted there too.
 
+`C-f`/`C-b` and Backspace/`C-d` move and delete by **grapheme cluster**
+(`unicode-segmentation`): combining sequences and emoji ZWJ sequences are one
+step, and CRLF pairs are likewise atomic (`next_grapheme_boundary` /
+`prev_grapheme_boundary`). Point can still be set mid-cluster by line
+movement's column clamping; that is benign, since rendering resolves any
+position to a valid column.
+
 ### Buffer
 
 Text is stored in a `ropey::Rope`. Each buffer has an independent undo history
@@ -286,12 +293,18 @@ cursor by 3 lines without changing which pane is focused.
    - Splits the pane rect into a text area and a 1-row mode line.
    - For each visible line: if syntax state exists, computes per-character
      styles from tree-sitter highlight spans; otherwise uses default style.
-   - Literal tab characters are expanded for display only to spaces ending at
-     the next `INDENT_WIDTH` tab stop. The buffer still stores each tab as a
-     single character, and editing/movement indexes are not changed by this
-     rendering expansion.
+   - Each line is expanded into `VisualCell`s, one per terminal column:
+     literal tabs expand to spaces ending at the next `INDENT_WIDTH` tab stop;
+     double-width chars (CJK, emoji) contribute their cell plus an empty
+     continuation cell; combining marks are appended to the preceding cell's
+     text (width 0). The buffer still stores each char individually, and
+     editing/movement indexes are not changed by this rendering expansion.
+     Width comes from `unicode-width` (`char_width()`), used consistently by
+     wrapping, cursor placement, mouse mapping, and scrolling. Known
+     limitation: a double-width char that straddles a wrap boundary may render
+     one column off on that row.
    - Long lines are wrapped with a `\` continuation marker in the last column,
-     using the expanded visual width for tab characters.
+     using the expanded visual width.
    - Overlays region highlighting (light blue background between mark and
      point).
    - Overlays search match highlighting (olive background for the current

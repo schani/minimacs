@@ -181,11 +181,21 @@ pub fn render(frame: &mut Frame, editor: &Editor) {
     render_minibuffer(frame, editor, minibuffer_area);
 }
 
-#[derive(Clone, Copy)]
+/// One terminal column of a rendered line. A tab expands to several cells; a
+/// double-width char contributes its cell plus one continuation cell with
+/// empty text; combining marks are appended to the preceding cell's text.
+#[derive(Clone)]
 struct VisualCell {
-    ch: char,
+    text: String,
     buffer_col: usize,
     buffer_char_pos: usize,
+}
+
+/// Terminal column width of a char (0 for combining marks, 2 for CJK/emoji).
+/// Tabs are handled separately via `tab_width_at`.
+pub(crate) fn char_width(ch: char) -> usize {
+    use unicode_width::UnicodeWidthChar;
+    ch.width().unwrap_or(0)
 }
 
 fn line_chars_without_ending(buf: &Buffer, line_idx: usize) -> Vec<char> {
@@ -206,7 +216,7 @@ fn visual_width_for_chars(line_chars: &[char]) -> usize {
         if *ch == '\t' {
             visual_col + tab_width_at(visual_col)
         } else {
-            visual_col + 1
+            visual_col + char_width(*ch)
         }
     })
 }
@@ -224,26 +234,31 @@ pub(crate) fn buffer_col_for_visual_col(buf: &Buffer, line_idx: usize, target_vi
     let mut visual_col = 0;
 
     for (buffer_col, ch) in line_chars.iter().enumerate() {
+        // Combining marks occupy no column of their own; never land on them.
+        if *ch != '\t' && char_width(*ch) == 0 {
+            continue;
+        }
         if target_visual_col <= visual_col {
             return buffer_col;
         }
 
-        if *ch == '\t' {
-            let next_visual_col = visual_col + tab_width_at(visual_col);
-            if target_visual_col < next_visual_col {
-                return buffer_col + 1;
-            }
-            visual_col = next_visual_col;
+        let width = if *ch == '\t' {
+            tab_width_at(visual_col)
         } else {
-            visual_col += 1;
+            char_width(*ch)
+        };
+        if target_visual_col < visual_col + width {
+            // Inside a multi-column char (tab or wide char): land after it.
+            return buffer_col + 1;
         }
+        visual_col += width;
     }
 
     line_chars.len()
 }
 
 fn expand_tabs_for_display(line_chars: &[char], line_start_char: usize) -> Vec<VisualCell> {
-    let mut cells = Vec::new();
+    let mut cells: Vec<VisualCell> = Vec::new();
     let mut visual_col = 0;
 
     for (buffer_col, ch) in line_chars.iter().copied().enumerate() {
@@ -252,19 +267,44 @@ fn expand_tabs_for_display(line_chars: &[char], line_start_char: usize) -> Vec<V
             let width = tab_width_at(visual_col);
             for _ in 0..width {
                 cells.push(VisualCell {
-                    ch: ' ',
+                    text: " ".to_string(),
                     buffer_col,
                     buffer_char_pos,
                 });
             }
             visual_col += width;
-        } else {
-            cells.push(VisualCell {
-                ch,
-                buffer_col,
-                buffer_char_pos,
-            });
-            visual_col += 1;
+            continue;
+        }
+        match char_width(ch) {
+            0 => {
+                // Combining mark: render it inside the preceding cell's
+                // column. An orphan mark at line start is dropped (width 0).
+                if let Some(prev) = cells.iter_mut().rev().find(|c| !c.text.is_empty()) {
+                    prev.text.push(ch);
+                }
+            }
+            2 => {
+                cells.push(VisualCell {
+                    text: ch.to_string(),
+                    buffer_col,
+                    buffer_char_pos,
+                });
+                // Continuation column of the double-width char.
+                cells.push(VisualCell {
+                    text: String::new(),
+                    buffer_col,
+                    buffer_char_pos,
+                });
+                visual_col += 2;
+            }
+            _ => {
+                cells.push(VisualCell {
+                    text: ch.to_string(),
+                    buffer_col,
+                    buffer_char_pos,
+                });
+                visual_col += 1;
+            }
         }
     }
 
@@ -435,7 +475,7 @@ fn build_styled_spans(
         }
         let text: String = segment[run_start..run_end]
             .iter()
-            .map(|cell| cell.ch)
+            .map(|cell| cell.text.as_str())
             .collect();
         spans.push(Span::styled(text, style));
         run_start = run_end;
@@ -745,6 +785,38 @@ mod tests {
         assert_eq!(cols, 1);
         assert_eq!(rows, 3);
         assert_eq!(cw, 12);
+    }
+
+    // === Wide-character width math ===
+
+    #[test]
+    fn visual_width_counts_wide_chars_as_two_columns() {
+        let chars: Vec<char> = "你好a".chars().collect();
+        assert_eq!(visual_width_for_chars(&chars), 5);
+    }
+
+    #[test]
+    fn visual_width_counts_combining_marks_as_zero() {
+        let chars: Vec<char> = "ae\u{301}b".chars().collect();
+        assert_eq!(visual_width_for_chars(&chars), 3);
+    }
+
+    #[test]
+    fn visual_col_for_buffer_col_with_wide_chars() {
+        let chars: Vec<char> = "你a".chars().collect();
+        assert_eq!(visual_col_for_buffer_col(&chars, 0), 0);
+        assert_eq!(visual_col_for_buffer_col(&chars, 1), 2);
+        assert_eq!(visual_col_for_buffer_col(&chars, 2), 3);
+    }
+
+    #[test]
+    fn buffer_col_for_visual_col_with_wide_chars() {
+        let buf = Buffer::from_str(0, "test", "你a");
+        assert_eq!(buffer_col_for_visual_col(&buf, 0, 0), 0);
+        // Clicking the second cell of the wide char lands after it.
+        assert_eq!(buffer_col_for_visual_col(&buf, 0, 1), 1);
+        assert_eq!(buffer_col_for_visual_col(&buf, 0, 2), 1);
+        assert_eq!(buffer_col_for_visual_col(&buf, 0, 3), 2);
     }
 
     #[test]

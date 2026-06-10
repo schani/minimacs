@@ -868,6 +868,42 @@ mod tests {
     }
 
     #[test]
+    fn cursor_after_cjk_chars_uses_double_width_columns() {
+        let text = "你好ab";
+        let events = vec![ctrl('e')];
+        let (mut app, mut events) = test_app_with_text(20, 6, text, events);
+        app.run_until_idle(&mut events).unwrap();
+        let pos = app.terminal.get_cursor_position().unwrap();
+        // 你(2) 好(2) a(1) b(1) => cursor at visual column 6.
+        assert_eq!((pos.x, pos.y), (6, 0));
+    }
+
+    #[test]
+    fn cursor_after_combining_mark_does_not_advance_extra_column() {
+        let text = "e\u{301}x"; // e + combining acute (1 column) + x
+        let events = vec![ctrl('e')];
+        let (mut app, mut events) = test_app_with_text(20, 6, text, events);
+        app.run_until_idle(&mut events).unwrap();
+        let pos = app.terminal.get_cursor_position().unwrap();
+        assert_eq!((pos.x, pos.y), (2, 0));
+    }
+
+    #[test]
+    fn wide_chars_wrap_by_visual_width() {
+        // 6 CJK chars = 12 visual columns; terminal width 7 (cps 6) wraps
+        // after 3 chars. The first row must end with the continuation marker.
+        let text = "你好你好你好";
+        let (mut app, mut events) = test_app_with_text(7, 6, text, vec![]);
+        app.run_until_idle(&mut events).unwrap();
+        let screen = capture_screen(&app.terminal);
+        let first = screen.lines().next().unwrap();
+        assert!(first.contains('\\'), "first row should wrap: {first:?}");
+        // TestBackend dumps the continuation cell of a wide char as a space.
+        let condensed: String = first.chars().filter(|c| *c != ' ').collect();
+        assert!(condensed.starts_with("你好你"), "first row: {first:?}");
+    }
+
+    #[test]
     fn cursor_at_eol_of_full_last_wrap_segment_stays_on_that_row() {
         // Terminal 10 wide: text_width=10, chars-per-segment=9.
         // An 18-char line renders as rows [0..9)+'\' and [9..18).

@@ -736,30 +736,83 @@ impl Editor {
             && buf.text.char(pos) == '\n'
     }
 
-    fn forward_char(&mut self) {
-        let len = self.active_buffer().char_count();
-        let mut pos = self.active_pane().point;
-        if pos < len {
-            pos += 1;
-            if self.inside_crlf(pos) {
-                pos += 1;
-            }
+    /// Char index of the next grapheme-cluster boundary after `pos`.
+    /// Line endings (including CRLF pairs) count as one step.
+    fn next_grapheme_boundary(&self, pos: usize) -> usize {
+        use unicode_segmentation::UnicodeSegmentation;
+        let buf = self.active_buffer();
+        let len = buf.char_count();
+        if pos >= len {
+            return len;
         }
+        let (line, col) = buf.char_to_line_col(pos);
+        let line_len = buf.line_len_chars(line);
+        if col >= line_len {
+            // Stepping over the line ending.
+            let next = pos + 1;
+            return if self.inside_crlf(next) { next + 1 } else { next };
+        }
+        let line_start = buf.line_col_to_char(line, 0);
+        let line_text: String = buf
+            .text
+            .slice(line_start..line_start + line_len)
+            .chars()
+            .collect();
+        let mut start = 0;
+        for g in line_text.graphemes(true) {
+            let g_len = g.chars().count();
+            if col < start + g_len {
+                return line_start + start + g_len;
+            }
+            start += g_len;
+        }
+        pos + 1
+    }
+
+    /// Char index of the previous grapheme-cluster boundary before `pos`.
+    fn prev_grapheme_boundary(&self, pos: usize) -> usize {
+        use unicode_segmentation::UnicodeSegmentation;
+        let buf = self.active_buffer();
+        if pos == 0 {
+            return 0;
+        }
+        let (line, col) = buf.char_to_line_col(pos);
+        if col == 0 {
+            // Stepping back over the previous line's ending.
+            let prev = pos - 1;
+            return if self.inside_crlf(prev) { prev - 1 } else { prev };
+        }
+        let line_start = buf.line_col_to_char(line, 0);
+        let line_len = buf.line_len_chars(line);
+        let line_text: String = buf
+            .text
+            .slice(line_start..line_start + line_len)
+            .chars()
+            .collect();
+        let mut start = 0;
+        for g in line_text.graphemes(true) {
+            let g_len = g.chars().count();
+            if start < col && col <= start + g_len {
+                return line_start + start;
+            }
+            start += g_len;
+        }
+        pos - 1
+    }
+
+    fn forward_char(&mut self) {
+        let pos = self.active_pane().point;
+        let new_pos = self.next_grapheme_boundary(pos);
         let pane = self.active_pane_mut();
-        pane.point = pos;
+        pane.point = new_pos;
         pane.preferred_column = None;
     }
 
     fn backward_char(&mut self) {
-        let mut pos = self.active_pane().point;
-        if pos > 0 {
-            pos -= 1;
-            if self.inside_crlf(pos) {
-                pos -= 1;
-            }
-        }
+        let pos = self.active_pane().point;
+        let new_pos = self.prev_grapheme_boundary(pos);
         let pane = self.active_pane_mut();
-        pane.point = pos;
+        pane.point = new_pos;
         pane.preferred_column = None;
     }
 
@@ -1317,8 +1370,8 @@ impl Editor {
     fn delete_backward(&mut self) {
         let pos = self.active_pane().point;
         if pos > 0 {
-            // Delete a CRLF pair as a unit.
-            let start = if self.inside_crlf(pos - 1) { pos - 2 } else { pos - 1 };
+            // Delete a whole grapheme cluster (or CRLF pair) as a unit.
+            let start = self.prev_grapheme_boundary(pos);
             self.apply_edit(start, pos, "", EditRecord::Delete);
             let pane = self.active_pane_mut();
             pane.point = start;
@@ -1330,8 +1383,8 @@ impl Editor {
         let len = self.active_buffer().char_count();
         let pos = self.active_pane().point;
         if pos < len {
-            // Delete a CRLF pair as a unit.
-            let end = if self.inside_crlf(pos + 1) { pos + 2 } else { pos + 1 };
+            // Delete a whole grapheme cluster (or CRLF pair) as a unit.
+            let end = self.next_grapheme_boundary(pos);
             self.apply_edit(pos, end, "", EditRecord::Delete);
             self.active_pane_mut().preferred_column = None;
         }
@@ -3280,6 +3333,55 @@ mod tests {
         assert!(pane.mark.unwrap() <= len, "mark out of bounds after undo");
         // Region operations on the surviving mark must not panic.
         editor.execute(Command::Copy);
+    }
+
+    // === Grapheme clusters ===
+
+    #[test]
+    fn forward_char_moves_over_combining_cluster() {
+        // "ae\u{301}b": a(0) e(1) combining-acute(2) b(3)
+        let mut editor = Editor::new_with_text("ae\u{301}b");
+        editor.execute(Command::ForwardChar);
+        assert_eq!(editor.point(), 1);
+        editor.execute(Command::ForwardChar);
+        assert_eq!(editor.point(), 3, "must skip the whole e+combining cluster");
+    }
+
+    #[test]
+    fn backward_char_moves_over_combining_cluster() {
+        let mut editor = Editor::new_with_text("ae\u{301}b");
+        editor.pane_tree.focused_pane_mut().point = 3;
+        editor.execute(Command::BackwardChar);
+        assert_eq!(editor.point(), 1);
+    }
+
+    #[test]
+    fn delete_backward_removes_whole_combining_cluster() {
+        let mut editor = Editor::new_with_text("ae\u{301}b");
+        editor.pane_tree.focused_pane_mut().point = 3;
+        editor.execute(Command::DeleteBackward);
+        assert_eq!(editor.buffer_text(), "ab");
+        assert_eq!(editor.point(), 1);
+    }
+
+    #[test]
+    fn delete_forward_removes_whole_combining_cluster() {
+        let mut editor = Editor::new_with_text("ae\u{301}b");
+        editor.pane_tree.focused_pane_mut().point = 1;
+        editor.execute(Command::DeleteForward);
+        assert_eq!(editor.buffer_text(), "ab");
+        assert_eq!(editor.point(), 1);
+    }
+
+    #[test]
+    fn forward_char_moves_over_emoji_zwj_sequence() {
+        // Family emoji: man + ZWJ + woman + ZWJ + girl = 5 chars, 1 cluster.
+        let text = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}x";
+        let mut editor = Editor::new_with_text(text);
+        editor.execute(Command::ForwardChar);
+        assert_eq!(editor.point(), 5, "must skip the whole ZWJ sequence");
+        editor.execute(Command::BackwardChar);
+        assert_eq!(editor.point(), 0);
     }
 
     // === CRLF atomicity ===
