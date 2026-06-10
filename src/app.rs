@@ -1519,6 +1519,47 @@ mod tests {
     }
 
     #[test]
+    fn completions_with_non_ascii_names_in_narrow_terminal_do_not_panic() {
+        let dir = tempfile::tempdir().unwrap();
+        // Candidate names are longer (in bytes and chars) than the terminal
+        // width, with multibyte chars at every truncation point.
+        std::fs::write(dir.path().join("ééééééééé.txt"), "").unwrap();
+        std::fs::write(dir.path().join("ééééééééü.txt"), "").unwrap();
+
+        let mut events = open_find_file_with_clear();
+        for c in format!("{}/é", dir.path().display()).chars() {
+            events.push(char_key(c));
+        }
+        events.push(key(KeyCode::Tab));
+        let (mut app, mut events) = test_app(13, 12, events);
+        app.run_until_idle(&mut events).unwrap();
+        assert!(app.editor.minibuffer.completions.is_some());
+        // Rendering truncated the names without slicing mid-char.
+        let screen = capture_screen(&app.terminal);
+        assert!(screen.contains('é'), "screen: {screen}");
+    }
+
+    #[test]
+    fn completion_page_indicator_with_non_ascii_names_does_not_panic() {
+        let dir = tempfile::tempdir().unwrap();
+        // Enough unicode candidates to overflow one page in a tiny terminal.
+        for i in 0..30 {
+            std::fs::write(dir.path().join(format!("éée{i:02}.txt")), "").unwrap();
+        }
+
+        let mut events = open_find_file_with_clear();
+        for c in format!("{}/é", dir.path().display()).chars() {
+            events.push(char_key(c));
+        }
+        events.push(key(KeyCode::Tab));
+        events.push(key(KeyCode::Tab)); // advance a page
+        let (mut app, mut events) = test_app(14, 8, events);
+        app.run_until_idle(&mut events).unwrap();
+        let screen = capture_screen(&app.terminal);
+        assert!(screen.contains("[Page"), "screen: {screen}");
+    }
+
+    #[test]
     fn multi_column_completions_in_wide_terminal() {
         let dir = tempfile::tempdir().unwrap();
         for i in 0..10 {

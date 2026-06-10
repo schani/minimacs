@@ -11,9 +11,10 @@ use crate::pane::{visual_lines_for_length, Pane};
 
 /// Compute the multi-column layout for completions.
 ///
-/// Returns `(num_cols, num_rows, col_width)`.
+/// `max_candidate_len` is in display columns (chars). Returns
+/// `(num_cols, num_rows, col_width)`.
 pub fn completions_layout(num_candidates: usize, max_candidate_len: usize, width: usize) -> (usize, usize, usize) {
-    let col_width = (max_candidate_len + 2).max(1).min(width);
+    let col_width = (max_candidate_len + 2).max(1).min(width.max(1));
     let num_cols = (width / col_width).max(1);
     let num_rows = num_candidates.div_ceil(num_cols);
     (num_cols, num_rows, col_width)
@@ -27,7 +28,11 @@ pub fn completions_height(editor: &Editor, total_height: u16, total_width: u16) 
     match &editor.minibuffer.completions {
         Some(candidates) if !candidates.is_empty() => {
             let max_rows = ((total_height.saturating_sub(2)) / 3).max(1) as usize;
-            let max_len = candidates.iter().map(|c| c.len()).max().unwrap_or(0);
+            let max_len = candidates
+                .iter()
+                .map(|c| c.chars().count())
+                .max()
+                .unwrap_or(0);
             let (_num_cols, num_rows, _col_width) = completions_layout(candidates.len(), max_len, total_width as usize);
             num_rows.min(max_rows) as u16
         }
@@ -592,7 +597,13 @@ fn render_completions(frame: &mut Frame, candidates: &[String], page: usize, are
         return;
     }
 
-    let max_len = candidates.iter().map(|c| c.len()).max().unwrap_or(0);
+    // All measurements below are in chars (display columns), never bytes:
+    // candidate names can contain multibyte characters.
+    let max_len = candidates
+        .iter()
+        .map(|c| c.chars().count())
+        .max()
+        .unwrap_or(0);
     let (num_cols, _num_rows, col_width) = completions_layout(candidates.len(), max_len, width);
 
     // How many candidates can we display per page?
@@ -606,37 +617,42 @@ fn render_completions(frame: &mut Frame, candidates: &[String], page: usize, are
     let mut lines: Vec<Line> = Vec::with_capacity(rows);
     for row in 0..rows {
         let mut text = String::new();
+        let mut text_cols = 0;
         for col in 0..num_cols {
             let idx = start + col * rows + row;
             if idx < candidates.len() && idx < start + displayable {
                 let name = &candidates[idx];
-                if text.len() + name.len() <= width {
+                let name_cols = name.chars().count();
+                if text_cols + name_cols <= width {
                     text.push_str(name);
                     // Pad to column width
-                    let padding = col_width.saturating_sub(name.len());
-                    let remaining_width = width.saturating_sub(text.len());
+                    let padding = col_width.saturating_sub(name_cols);
+                    let remaining_width = width.saturating_sub(text_cols + name_cols);
                     let pad = padding.min(remaining_width);
                     text.extend(std::iter::repeat_n(' ', pad));
+                    text_cols += name_cols + pad;
                 } else {
                     // Truncate to fit
-                    let remaining = width.saturating_sub(text.len());
-                    if remaining > 0 {
-                        text.push_str(&name[..remaining.min(name.len())]);
-                    }
+                    let remaining = width.saturating_sub(text_cols);
+                    text.extend(name.chars().take(remaining));
+                    text_cols += remaining.min(name_cols);
                 }
             }
         }
         // Pad remaining width with spaces for background fill
-        if text.len() < width {
-            text.extend(std::iter::repeat_n(' ', width - text.len()));
+        if text_cols < width {
+            text.extend(std::iter::repeat_n(' ', width - text_cols));
         }
 
         // If this is the last row and there are multiple pages, show page indicator
         if row == rows - 1 && page_count > 1 {
             let suffix = format!("[Page {}/{}]", page + 1, page_count);
-            if suffix.len() <= width {
-                let start = width - suffix.len();
-                text.replace_range(start..width, &suffix);
+            let suffix_cols = suffix.chars().count();
+            if suffix_cols <= width {
+                let keep = width - suffix_cols;
+                let mut truncated: String = text.chars().take(keep).collect();
+                truncated.push_str(&suffix);
+                text = truncated;
             }
         }
 
@@ -710,6 +726,14 @@ mod tests {
         assert_eq!(cols, 1);
         assert_eq!(rows, 3);
         assert_eq!(cw, 12);
+    }
+
+    #[test]
+    fn completions_layout_zero_width_does_not_divide_by_zero() {
+        let (cols, rows, cw) = completions_layout(5, 10, 0);
+        assert!(cols >= 1);
+        assert_eq!(rows, 5);
+        assert!(cw >= 1);
     }
 
     #[test]
