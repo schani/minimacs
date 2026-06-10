@@ -185,6 +185,14 @@ fn alt(c: char) -> Key {
     }
 }
 
+fn ctrl_alt(c: char) -> Key {
+    Key {
+        code: KeyCode::Char(c),
+        ctrl: true,
+        alt: true,
+    }
+}
+
 fn alt_key(code: KeyCode) -> Key {
     Key {
         code,
@@ -253,6 +261,11 @@ pub fn default_keymap() -> KeymapNode {
     // Kitty keyboard protocol sends C-_ as base key '-' with Ctrl+Shift;
     // Key::from_event strips Shift, so we need ctrl('-')
     root.bind(&[ctrl('-')], Command::Undo);
+    // Redo on C-M-_ (emacs undo-redo), with the same terminal variants
+    root.bind(&[ctrl_alt('/')], Command::Redo);
+    root.bind(&[ctrl_alt('_')], Command::Redo);
+    root.bind(&[ctrl_alt('7')], Command::Redo);
+    root.bind(&[ctrl_alt('-')], Command::Redo);
 
     // Mark/Region
     root.bind(&[ctrl(' ')], Command::SetMark);
@@ -433,6 +446,21 @@ mod tests {
         match state.process_key(event) {
             KeymapResult::Matched(cmd) => assert_eq!(cmd, Command::ForwardWord),
             other => panic!("Expected Matched(ForwardWord), got {:?}", other),
+        }
+    }
+
+    // Redo must be reachable: C-M-_ in all the terminal variants that
+    // mirror the Undo workarounds below.
+    #[test]
+    fn redo_bound_to_ctrl_meta_underscore_all_variants() {
+        for c in ['_', '-', '7', '/'] {
+            let mut state = KeymapState::new(default_keymap());
+            let event =
+                KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL | KeyModifiers::ALT);
+            match state.process_key(event) {
+                KeymapResult::Matched(cmd) => assert_eq!(cmd, Command::Redo),
+                other => panic!("Expected Matched(Redo) for C-M-{c}, got {other:?}"),
+            }
         }
     }
 

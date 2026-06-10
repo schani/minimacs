@@ -99,6 +99,7 @@ minimacs
 | `C-d` / Delete | Delete forward |
 | `C-k` | Kill line (cut to end of line) |
 | `C-/` or `C-_` | Undo |
+| `C-M-/` or `C-M-_` | Redo |
 
 ### Mark and Region
 
