@@ -54,7 +54,7 @@ Larger items (incremental tree-sitter parsing, missing emacs features) are in FU
 ## Minor
 
 - [ ] Deletions split CRLF pairs: `kill_line` at EOL, `delete_forward`, and `delete_backward` remove a single char, turning `\r\n` into `\n` and mixing line endings; `forward_char` can place point between `\r` and `\n`.
-- [ ] `common_prefix` (`minibuffer.rs:205-225`) is only correct for sorted input; `complete_buffer_with_candidates` passes matches in creation order, so TAB can rewrite the minibuffer to a "prefix" that excludes a valid match.
+- [x] `common_prefix` (`minibuffer.rs:205-225`) is only correct for sorted input; `complete_buffer_with_candidates` passes matches in creation order, so TAB can rewrite the minibuffer to a "prefix" that excludes a valid match.
 - [ ] Undo does not restore mark and only sets point on the active pane (`editor.rs:1198-1200`).
 - [ ] The pre-commit coverage check silently degrades to plain `cargo test` when `cargo-llvm-cov` is not installed, and `build.rs` never updates a stale hook (`build.rs:7,17-21`). The hook also tests the working tree, not the staged index.
 - [ ] Update ARCHITECTURE.md: it references a nonexistent `handle_minibuffer_key()` (line 209), describes outdated colors for region/match highlighting and mode lines (lines 243-251), and the claim "unconditional rendering is cheap" (line 9) is contradicted by the per-frame O(buffer) paths above.

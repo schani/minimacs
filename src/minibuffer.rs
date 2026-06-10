@@ -230,23 +230,20 @@ pub fn complete_buffer(input: &str, buffer_names: &[String]) -> String {
 }
 
 /// Find the common prefix of a list of strings.
+/// Longest common prefix of all strings, regardless of their order.
 fn common_prefix(strings: &[String]) -> Option<String> {
-    if strings.is_empty() {
-        return None;
-    }
-    let first = &strings[0];
-    let mut len = first.len();
+    let first = strings.first()?;
+    let mut prefix_chars = first.chars().count();
     for s in &strings[1..] {
-        len = first
+        let shared = first
             .chars()
             .zip(s.chars())
             .take_while(|(a, b)| a == b)
             .count();
-        // Convert char count back to byte length
-        len = first.char_indices().nth(len).map_or(first.len(), |(i, _)| i);
+        prefix_chars = prefix_chars.min(shared);
     }
-    if len > 0 {
-        Some(first[..len].to_string())
+    if prefix_chars > 0 {
+        Some(first.chars().take(prefix_chars).collect())
     } else {
         None
     }
@@ -412,6 +409,27 @@ mod tests {
         let mut mb = Minibuffer::new();
         mb.show_message("hello".to_string());
         assert_eq!(mb.message, Some("hello".to_string()));
+    }
+
+    #[test]
+    fn common_prefix_unsorted_input() {
+        // Previously only the first and last-compared strings determined the
+        // result; "a" in the middle must shorten the prefix to "a".
+        assert_eq!(
+            common_prefix(&["abc".into(), "a".into(), "abd".into()]),
+            Some("a".to_string())
+        );
+    }
+
+    #[test]
+    fn common_prefix_multibyte_divergence() {
+        // "é" and "ü" share a leading UTF-8 byte; the prefix must be cut at
+        // a char boundary, not a byte boundary.
+        assert_eq!(common_prefix(&["éa".into(), "üb".into()]), None);
+        assert_eq!(
+            common_prefix(&["éa".into(), "éb".into()]),
+            Some("é".to_string())
+        );
     }
 
     #[test]
