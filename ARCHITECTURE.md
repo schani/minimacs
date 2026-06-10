@@ -36,7 +36,11 @@ Terminal input (crossterm)
 src/
   main.rs           Terminal setup/teardown, panic hook, CLI args, runs the event loop
   app.rs            App<B: Backend> -- event loop and key routing
-  editor.rs         Editor -- command execution, all state mutation
+  editor.rs         Editor -- struct, apply_edit, movement/editing, dispatch
+  editor/isearch.rs   Incremental search state and commands
+  editor/prompts.rs   Prompt starters, submit_prompt, confirm/quit flows
+  editor/fileops.rs   open_file, save, kill-buffer, buffer-name uniquification
+  editor/tests.rs     Editor unit tests
   buffer.rs         Buffer -- Rope text storage, file I/O, metadata
   pane.rs           PaneTree/PaneNode/Pane -- window layout tree
   keymap.rs         Key/KeymapNode/KeymapState -- multi-key chord trie

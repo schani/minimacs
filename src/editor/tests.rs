@@ -1,4 +1,5 @@
 use super::*;
+use crate::minibuffer::PromptKind;
 
 #[test]
 fn forward_char_moves_one() {
