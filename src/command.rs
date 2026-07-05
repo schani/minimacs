@@ -1,5 +1,4 @@
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code)]
 pub enum Command {
     // Movement
     ForwardChar,
@@ -18,7 +17,6 @@ pub enum Command {
     // Editing
     InsertChar(char),
     InsertNewline,
-    InsertTab,
     IndentLine,
     DedentLine,
     DeleteBackward,

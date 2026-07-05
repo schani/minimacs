@@ -83,7 +83,6 @@ pub(crate) enum EditRecord {
     NoHistory,
 }
 
-#[allow(dead_code)]
 pub struct Editor {
     pub buffers: Vec<Buffer>,
     pub next_buffer_id: usize,
@@ -109,7 +108,6 @@ pub struct Editor {
     quit_pending: Vec<usize>,
 }
 
-#[allow(dead_code)]
 impl Editor {
     pub fn new() -> Self {
         let buf = Buffer::new_scratch(0);
@@ -135,6 +133,7 @@ impl Editor {
         }
     }
 
+    #[cfg(test)]
     pub fn new_with_text(text: &str) -> Self {
         let buf = Buffer::from_str(0, "*scratch*", text);
         let mut mb_pane = Pane::new(usize::MAX);
@@ -224,14 +223,17 @@ impl Editor {
             .expect("buffer must exist")
     }
 
+    #[cfg(test)]
     pub fn buffer_text(&self) -> String {
         self.current_buffer().text.to_string()
     }
 
+    #[cfg(test)]
     pub fn point(&self) -> usize {
         self.pane_tree.focused_pane().point
     }
 
+    #[cfg(test)]
     pub fn commit_undo_group(&mut self) {
         self.active_buffer_mut().history.commit();
     }
@@ -258,7 +260,7 @@ impl Editor {
                     self.submit_prompt();
                     return;
                 }
-                Command::InsertTab | Command::IndentLine | Command::DedentLine => {
+                Command::IndentLine | Command::DedentLine => {
                     // Tab completion is handled in app.rs key routing
                     return;
                 }
@@ -279,7 +281,7 @@ impl Editor {
 
         // Mark non-edit actions for undo grouping
         match &cmd {
-            Command::InsertChar(_) | Command::InsertNewline | Command::InsertTab => {}
+            Command::InsertChar(_) | Command::InsertNewline => {}
             Command::IndentLine | Command::DedentLine => {}
             Command::DeleteBackward
             | Command::DeleteForward
@@ -309,7 +311,6 @@ impl Editor {
             Command::RecenterTopBottom => self.recenter_top_bottom(),
             Command::InsertChar(c) => self.insert_char(c),
             Command::InsertNewline => self.insert_newline(),
-            Command::InsertTab => self.insert_tab(),
             Command::IndentLine => self.indent_line(),
             Command::DedentLine => self.dedent_line(),
             Command::DeleteBackward => self.delete_backward(),
@@ -792,15 +793,6 @@ impl Editor {
         pane.preferred_column = None;
     }
 
-    fn insert_tab(&mut self) {
-        let pos = self.active_pane().point;
-        let spaces = " ".repeat(INDENT_WIDTH);
-        self.apply_edit(pos, pos, &spaces, EditRecord::Insert);
-        let pane = self.active_pane_mut();
-        pane.point = pos + INDENT_WIDTH;
-        pane.preferred_column = None;
-    }
-
     fn indent_line(&mut self) {
         if self.active_region().is_some() {
             self.indent_region();
@@ -1174,16 +1166,6 @@ impl Editor {
         } else {
             self.minibuffer.show_message("No mark set".to_string());
         }
-    }
-
-    fn region_text(&self) -> Option<String> {
-        self.region().map(|(start, end)| {
-            self.current_buffer()
-                .text
-                .slice(start..end)
-                .chars()
-                .collect()
-        })
     }
 
     /// Get region from the active pane (minibuffer pane or focused pane).

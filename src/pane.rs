@@ -110,7 +110,6 @@ struct BufferViewState {
 }
 
 /// A single pane (window) viewing a buffer.
-#[allow(dead_code)]
 pub struct Pane {
     pub buffer_id: BufferId,
     pub point: usize,
@@ -250,7 +249,6 @@ pub struct PaneTree {
     focus_path: Vec<usize>,
 }
 
-#[allow(dead_code)]
 impl PaneTree {
     pub fn new(buffer_id: BufferId) -> Self {
         Self {
@@ -512,10 +510,12 @@ impl PaneTree {
     }
 
     /// Count the number of leaf panes.
+    #[cfg(test)]
     pub fn pane_count(&self) -> usize {
         Self::count_leaves(&self.root)
     }
 
+    #[cfg(test)]
     fn count_leaves(node: &PaneNode) -> usize {
         match node {
             PaneNode::Leaf(_) => 1,
@@ -573,11 +573,13 @@ impl PaneTree {
         node
     }
 
-    /// Iterate over all panes (for checking modified buffers, etc.)
+    /// Iterate over all panes.
+    #[cfg(test)]
     pub fn for_each_pane<F: FnMut(&Pane)>(&self, f: &mut F) {
         Self::visit_panes(&self.root, f);
     }
 
+    #[cfg(test)]
     fn visit_panes<F: FnMut(&Pane)>(node: &PaneNode, f: &mut F) {
         match node {
             PaneNode::Leaf(pane) => f(pane),

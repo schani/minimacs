@@ -286,7 +286,6 @@ struct HighlightCache {
 }
 
 /// Holds a parsed tree and highlight config for a buffer.
-#[allow(dead_code)]
 pub struct SyntaxState {
     pub language: Language,
     config: HighlightConfiguration,

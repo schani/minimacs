@@ -1,4 +1,5 @@
 use crossterm::event::{self, Event};
+#[cfg(test)]
 use std::collections::VecDeque;
 use std::time::Duration;
 
@@ -20,12 +21,12 @@ impl EventSource for TerminalEventSource {
 }
 
 /// Test event source: replays a queue of events.
-#[allow(dead_code)]
+#[cfg(test)]
 pub struct TestEventSource {
     events: VecDeque<Event>,
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 impl TestEventSource {
     pub fn new(events: Vec<Event>) -> Self {
         Self {
@@ -34,6 +35,7 @@ impl TestEventSource {
     }
 }
 
+#[cfg(test)]
 impl EventSource for TestEventSource {
     fn next_event(&mut self) -> Option<Event> {
         self.events.pop_front()

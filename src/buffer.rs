@@ -23,14 +23,12 @@ impl LineEnding {
     }
 }
 
-#[allow(dead_code)]
 pub struct Buffer {
     pub id: BufferId,
     pub text: Rope,
     pub path: Option<PathBuf>,
     pub name: String,
     pub modified: bool,
-    pub read_only: bool,
     pub line_ending: LineEnding,
     pub history: History,
     pub syntax: Option<SyntaxState>,
@@ -40,7 +38,6 @@ pub struct Buffer {
     disk_mtime: Option<std::time::SystemTime>,
 }
 
-#[allow(dead_code)]
 impl Buffer {
     pub fn new_scratch(id: BufferId) -> Self {
         Self {
@@ -49,7 +46,6 @@ impl Buffer {
             path: None,
             name: "*scratch*".to_string(),
             modified: false,
-            read_only: false,
             line_ending: LineEnding::Lf,
             history: History::new(),
             syntax: None,
@@ -71,7 +67,6 @@ impl Buffer {
             path: Some(path.to_path_buf()),
             name,
             modified: false,
-            read_only: false,
             line_ending: LineEnding::Lf,
             history: History::new(),
             syntax: syntax_state,
@@ -87,7 +82,6 @@ impl Buffer {
             path: None,
             name: name.to_string(),
             modified: false,
-            read_only: false,
             line_ending: LineEnding::Lf,
             history: History::new(),
             syntax: None,
@@ -132,7 +126,6 @@ impl Buffer {
             path: Some(path.to_path_buf()),
             name,
             modified: false,
-            read_only: false,
             line_ending,
             history: History::new(),
             syntax: syntax_state,
@@ -443,7 +436,7 @@ mod tests {
     fn from_file_non_utf8() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("binary.bin");
-        fs::write(&file, &[0xff, 0xfe, 0x00]).unwrap();
+        fs::write(&file, [0xff, 0xfe, 0x00]).unwrap();
 
         let result = Buffer::from_file(0, &file);
         assert!(result.is_err());

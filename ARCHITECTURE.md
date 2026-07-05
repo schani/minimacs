@@ -162,7 +162,6 @@ struct Buffer {
     path: Option<PathBuf>,
     name: String,
     modified: bool,
-    read_only: bool,
     line_ending: LineEnding,
     history: History,
     syntax: Option<SyntaxState>,
@@ -412,8 +411,8 @@ means kill/yank in the minibuffer uses the same clipboard as the main editor.
 
 Key routing: Enter submits the prompt, Tab triggers completion (both intercepted
 before the keymap). All other keys go through the normal keymap. `InsertNewline`,
-`InsertTab`, `IndentLine`, and `DedentLine` are intercepted in `execute()` when
-the minibuffer is active.
+`IndentLine`, and `DedentLine` are intercepted in `execute()` when the
+minibuffer is active.
 
 Prompt handlers may move point in the focused pane without going through
 `execute()` (e.g. goto-line), so `submit_prompt()` ends by calling

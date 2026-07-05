@@ -95,13 +95,11 @@ pub enum KeymapResult {
 }
 
 /// State machine for multi-key chord processing.
-#[allow(dead_code)]
 pub struct KeymapState {
     pending_keys: Vec<Key>,
     keymap: KeymapNode, // root of trie
 }
 
-#[allow(dead_code)]
 impl KeymapState {
     pub fn new(keymap: KeymapNode) -> Self {
         Self {
@@ -163,6 +161,7 @@ impl KeymapState {
     }
 
     /// Whether we have pending keys.
+    #[cfg(test)]
     pub fn has_pending(&self) -> bool {
         !self.pending_keys.is_empty()
     }

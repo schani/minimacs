@@ -100,14 +100,6 @@ fn insert_newline() {
 }
 
 #[test]
-fn insert_tab_inserts_four_spaces() {
-    let mut editor = Editor::new_with_text("");
-    editor.execute(Command::InsertTab);
-    assert_eq!(editor.buffer_text(), "    ");
-    assert_eq!(editor.point(), 4);
-}
-
-#[test]
 fn delete_backward_basic() {
     let mut editor = Editor::new_with_text("hello");
     editor.pane_tree.focused_pane_mut().point = 3;

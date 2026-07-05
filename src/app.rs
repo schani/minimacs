@@ -68,7 +68,7 @@ where
     }
 
     /// Run until all events are consumed (for tests).
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn run_until_idle(&mut self, event_source: &mut dyn EventSource) -> Result<()> {
         self.update_viewport();
         self.render()?;
