@@ -634,7 +634,7 @@ impl Editor {
         text: &str,
         record: EditRecord,
     ) -> String {
-        let (buffer_id, start, removed, inserted, deleted) = {
+        let (buffer_id, delta, deleted) = {
             let buf = self.active_buffer_mut();
             let len = buf.char_count();
             let start = start.min(len);
@@ -644,6 +644,12 @@ impl Editor {
             } else {
                 String::new()
             };
+            // Line-level effect of the edit, measured with the rope's own
+            // line semantics: removed line breaks before the edit, inserted
+            // line breaks after it. Everything before `start` is unchanged,
+            // so `first_line` is valid on both sides of the edit.
+            let first_line = buf.char_to_line_col(start).0;
+            let removed_lines = buf.char_to_line_col(end).0 - first_line;
             match record {
                 EditRecord::Insert => buf.history.record_insert(start, text),
                 EditRecord::Delete => buf.history.record_delete(start, &deleted),
@@ -656,16 +662,25 @@ impl Editor {
             if !text.is_empty() {
                 buf.insert(start, text);
             }
-            (buf.id, start, end - start, text.chars().count(), deleted)
+            let inserted = text.chars().count();
+            let inserted_lines = buf.char_to_line_col(start + inserted).0 - first_line;
+            let delta = crate::pane::EditDelta {
+                start,
+                removed: end - start,
+                inserted,
+                first_line,
+                removed_lines,
+                inserted_lines,
+            };
+            (buf.id, delta, deleted)
         };
 
         if buffer_id == usize::MAX {
             // The minibuffer buffer is viewed only by the minibuffer pane.
-            self.minibuffer_pane
-                .adjust_for_edit(buffer_id, start, removed, inserted);
+            self.minibuffer_pane.adjust_for_edit(buffer_id, delta);
         } else {
             self.pane_tree.for_each_pane_mut(&mut |pane| {
-                pane.adjust_for_edit(buffer_id, start, removed, inserted);
+                pane.adjust_for_edit(buffer_id, delta);
             });
         }
         deleted

@@ -397,6 +397,35 @@ fn goto_line_via_prompt() {
 }
 
 #[test]
+fn edit_above_other_pane_viewport_shifts_its_scroll() {
+    let text: String = (1..=200).map(|i| format!("line{i}\n")).collect();
+    let mut editor = Editor::new_with_text(&text);
+    editor.execute(Command::SplitVertical);
+
+    // Scroll the other pane (same buffer) down to line 100.
+    editor.pane_tree.cycle_focus();
+    {
+        let point = editor.current_buffer().line_col_to_char(100, 0);
+        let pane = editor.pane_tree.focused_pane_mut();
+        pane.scroll_top = 100;
+        pane.point = point;
+    }
+    editor.pane_tree.cycle_focus();
+
+    // Delete the first 50 lines from the focused pane.
+    let end = editor.current_buffer().line_col_to_char(50, 0);
+    editor.apply_edit(0, end, "", EditRecord::Delete);
+
+    // The other pane must still show the same content: scroll_top shifted
+    // up by the 50 removed lines, point still at the same line's start.
+    editor.pane_tree.cycle_focus();
+    let pane = editor.pane_tree.focused_pane();
+    assert_eq!(pane.scroll_top, 50);
+    let (line, col) = editor.current_buffer().char_to_line_col(pane.point);
+    assert_eq!((line, col), (50, 0));
+}
+
+#[test]
 fn goto_line_scrolls_target_into_view() {
     let text: String = (1..=200).map(|i| format!("line{i}\n")).collect();
     let mut editor = Editor::new_with_text(&text);

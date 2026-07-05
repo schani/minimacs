@@ -115,10 +115,14 @@ lengths (`String::len()`) must never be mixed in. `apply_edit`:
    undo/redo groups).
 3. Performs the rope edit.
 4. Calls `Pane::adjust_for_edit` on every pane viewing the buffer (or on the
-   minibuffer pane for the minibuffer buffer), keeping point, mark, and saved
-   per-buffer view states valid. Positions at or before the edit stay put
-   (emacs marker semantics), positions inside a removed span are kept within
-   the new text, and positions after it shift by the length delta.
+   minibuffer pane for the minibuffer buffer), keeping point, mark, scroll
+   position, and saved per-buffer view states valid. Positions at or before
+   the edit stay put (emacs marker semantics), positions inside a removed
+   span are kept within the new text, and positions after it shift by the
+   length delta. `scroll_top` is adjusted the same way in line units (an
+   `EditDelta` carries the edit's char span plus its line-level effect), so
+   a pane keeps showing the same content when another pane edits above its
+   viewport.
 
 Commands then set the active pane's point explicitly (in char units) when they
 want something other than marker semantics, e.g. point after inserted text.

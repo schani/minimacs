@@ -52,10 +52,11 @@ pub fn compute_scroll_top(
     new_top
 }
 
-/// Map a char position through an edit that replaced `removed` chars at
-/// `start` with `inserted` chars. Positions at or before the edit stay put
-/// (emacs marker semantics); positions inside the removed span are kept
-/// within the new text; positions after shift by the length delta.
+/// Map a position through an edit that replaced `removed` units at `start`
+/// with `inserted` units. Positions at or before the edit stay put (emacs
+/// marker semantics); positions inside the removed span are kept within the
+/// new text; positions after shift by the length delta. Used both for char
+/// positions (point, mark) and, with line units, for `scroll_top`.
 fn adjust_position(p: usize, start: usize, removed: usize, inserted: usize) -> usize {
     if p <= start {
         p
@@ -63,6 +64,40 @@ fn adjust_position(p: usize, start: usize, removed: usize, inserted: usize) -> u
         p - removed + inserted
     } else {
         p.min(start + inserted)
+    }
+}
+
+/// Describes a buffer edit for position adjustment: the replaced char span
+/// plus its line-level effect, so panes can adjust char positions (point,
+/// mark) and line positions (`scroll_top`) through the same edit.
+#[derive(Debug, Clone, Copy)]
+pub struct EditDelta {
+    /// Char index where the edit starts.
+    pub start: usize,
+    /// Chars removed at `start`.
+    pub removed: usize,
+    /// Chars inserted at `start`.
+    pub inserted: usize,
+    /// Line containing `start` (the same before and after the edit).
+    pub first_line: usize,
+    /// Line breaks removed by the edit.
+    pub removed_lines: usize,
+    /// Line breaks inserted by the edit.
+    pub inserted_lines: usize,
+}
+
+#[cfg(test)]
+impl EditDelta {
+    /// An edit that adds or removes no line breaks.
+    pub fn same_line(start: usize, removed: usize, inserted: usize) -> Self {
+        Self {
+            start,
+            removed,
+            inserted,
+            first_line: 0,
+            removed_lines: 0,
+            inserted_lines: 0,
+        }
     }
 }
 
@@ -141,28 +176,34 @@ impl Pane {
         self.scroll_top = state.scroll_top;
     }
 
-    /// Adjust point, mark, and saved view state for an edit to `buffer_id`
-    /// that replaced `removed` chars starting at char index `start` with
-    /// `inserted` chars. Keeps positions in other panes valid when a shared
-    /// buffer is edited.
-    pub fn adjust_for_edit(
-        &mut self,
-        buffer_id: BufferId,
-        start: usize,
-        removed: usize,
-        inserted: usize,
-    ) {
+    /// Adjust point, mark, scroll position, and saved view state for an edit
+    /// to `buffer_id`. Keeps positions in other panes valid when a shared
+    /// buffer is edited; `scroll_top` shifts with the edit's line delta so
+    /// the pane keeps showing the same content.
+    pub fn adjust_for_edit(&mut self, buffer_id: BufferId, delta: EditDelta) {
+        let EditDelta {
+            start,
+            removed,
+            inserted,
+            first_line,
+            removed_lines,
+            inserted_lines,
+        } = delta;
         if self.buffer_id == buffer_id {
             self.point = adjust_position(self.point, start, removed, inserted);
             self.mark = self
                 .mark
                 .map(|m| adjust_position(m, start, removed, inserted));
+            self.scroll_top =
+                adjust_position(self.scroll_top, first_line, removed_lines, inserted_lines);
         }
         if let Some(state) = self.buffer_states.get_mut(&buffer_id) {
             state.point = adjust_position(state.point, start, removed, inserted);
             state.mark = state
                 .mark
                 .map(|m| adjust_position(m, start, removed, inserted));
+            state.scroll_top =
+                adjust_position(state.scroll_top, first_line, removed_lines, inserted_lines);
         }
     }
 
@@ -580,7 +621,7 @@ mod tests {
         let mut pane = Pane::new(1);
         pane.point = 5;
         pane.mark = Some(3);
-        pane.adjust_for_edit(1, 2, 0, 4); // insert 4 chars at 2
+        pane.adjust_for_edit(1, EditDelta::same_line(2, 0, 4)); // insert 4 chars at 2
         assert_eq!(pane.point, 9);
         assert_eq!(pane.mark, Some(7));
     }
@@ -589,7 +630,7 @@ mod tests {
     fn adjust_for_edit_point_at_insertion_stays() {
         let mut pane = Pane::new(1);
         pane.point = 2;
-        pane.adjust_for_edit(1, 2, 0, 4);
+        pane.adjust_for_edit(1, EditDelta::same_line(2, 0, 4));
         assert_eq!(pane.point, 2);
     }
 
@@ -597,7 +638,7 @@ mod tests {
     fn adjust_for_edit_clamps_point_inside_deleted_region() {
         let mut pane = Pane::new(1);
         pane.point = 5;
-        pane.adjust_for_edit(1, 2, 6, 0); // delete [2,8)
+        pane.adjust_for_edit(1, EditDelta::same_line(2, 6, 0)); // delete [2,8)
         assert_eq!(pane.point, 2);
     }
 
@@ -605,7 +646,7 @@ mod tests {
     fn adjust_for_edit_shifts_point_after_deletion() {
         let mut pane = Pane::new(1);
         pane.point = 10;
-        pane.adjust_for_edit(1, 2, 3, 0); // delete [2,5)
+        pane.adjust_for_edit(1, EditDelta::same_line(2, 3, 0)); // delete [2,5)
         assert_eq!(pane.point, 7);
     }
 
@@ -614,7 +655,7 @@ mod tests {
         let mut pane = Pane::new(1);
         pane.point = 10;
         pane.mark = Some(4);
-        pane.adjust_for_edit(2, 0, 5, 0);
+        pane.adjust_for_edit(2, EditDelta::same_line(0, 5, 0));
         assert_eq!(pane.point, 10);
         assert_eq!(pane.mark, Some(4));
     }
@@ -624,9 +665,69 @@ mod tests {
         let mut pane = Pane::new(1);
         pane.point = 10;
         pane.switch_buffer(2, 100); // saves state for buffer 1 (point 10)
-        pane.adjust_for_edit(1, 0, 5, 0); // delete first 5 chars of buffer 1
+        pane.adjust_for_edit(1, EditDelta::same_line(0, 5, 0)); // delete first 5 chars of buffer 1
         pane.restore_buffer_state(1, 95);
         assert_eq!(pane.point, 5);
+    }
+
+    #[test]
+    fn scroll_top_shifts_down_when_lines_removed_above() {
+        let mut pane = Pane::new(1);
+        pane.scroll_top = 100;
+        // Delete lines 0..50 (2500 chars, 50 line breaks).
+        pane.adjust_for_edit(
+            1,
+            EditDelta { start: 0, removed: 2500, inserted: 0, first_line: 0, removed_lines: 50, inserted_lines: 0 },
+        );
+        assert_eq!(pane.scroll_top, 50);
+    }
+
+    #[test]
+    fn scroll_top_shifts_up_when_lines_inserted_above() {
+        let mut pane = Pane::new(1);
+        pane.scroll_top = 100;
+        // Insert 10 lines at the top of the buffer.
+        pane.adjust_for_edit(
+            1,
+            EditDelta { start: 0, removed: 0, inserted: 60, first_line: 0, removed_lines: 0, inserted_lines: 10 },
+        );
+        assert_eq!(pane.scroll_top, 110);
+    }
+
+    #[test]
+    fn scroll_top_unchanged_for_edit_below_viewport() {
+        let mut pane = Pane::new(1);
+        pane.scroll_top = 10;
+        pane.adjust_for_edit(
+            1,
+            EditDelta { start: 5000, removed: 100, inserted: 0, first_line: 50, removed_lines: 2, inserted_lines: 0 },
+        );
+        assert_eq!(pane.scroll_top, 10);
+    }
+
+    #[test]
+    fn scroll_top_clamps_when_its_line_is_removed() {
+        let mut pane = Pane::new(1);
+        pane.scroll_top = 100;
+        // Delete lines 50..150; the top line no longer exists.
+        pane.adjust_for_edit(
+            1,
+            EditDelta { start: 2500, removed: 5000, inserted: 0, first_line: 50, removed_lines: 100, inserted_lines: 0 },
+        );
+        assert_eq!(pane.scroll_top, 50);
+    }
+
+    #[test]
+    fn saved_state_scroll_top_adjusted_too() {
+        let mut pane = Pane::new(1);
+        pane.scroll_top = 100;
+        pane.switch_buffer(2, 100); // saves state for buffer 1 (scroll_top 100)
+        pane.adjust_for_edit(
+            1,
+            EditDelta { start: 0, removed: 2500, inserted: 0, first_line: 0, removed_lines: 50, inserted_lines: 0 },
+        );
+        pane.restore_buffer_state(1, 7000);
+        assert_eq!(pane.scroll_top, 50);
     }
 
     #[test]
