@@ -282,14 +282,11 @@ where
 
     fn handle_paste(&mut self, text: &str) {
         self.editor.clear_last_command();
-        // Sanitize: replace newlines with spaces when pasting into minibuffer
-        let text = if self.editor.minibuffer.is_active() {
+        if self.editor.minibuffer.is_active() {
             self.editor.minibuffer.completions = None;
             self.editor.minibuffer.completion_page = 0;
-            text.replace("\r\n", " ").replace('\n', " ")
-        } else {
-            text.to_string()
-        };
+        }
+        let text = self.editor.normalized_paste(text);
         // Insert pasted text as a single undo group
         self.editor.active_buffer_mut().history.commit();
         let point = self.editor.active_pane().point;
@@ -763,6 +760,15 @@ mod tests {
         app.run_until_idle(&mut events).unwrap();
         assert_eq!(app.editor.buffer_text(), "pasted text");
         assert_eq!(app.editor.point(), 11);
+    }
+
+    #[test]
+    fn bracketed_paste_converts_crlf_to_buffer_ending() {
+        let events = vec![Event::Paste("x\r\ny".to_string())];
+        let (mut app, mut events) = test_app(40, 10, events);
+        app.run_until_idle(&mut events).unwrap();
+        assert_eq!(app.editor.buffer_text(), "x\ny");
+        assert_eq!(app.editor.point(), 3);
     }
 
     #[test]

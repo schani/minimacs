@@ -454,7 +454,10 @@ modulo. A `[Page X/Y]` indicator appears in the bottom-right of the completions
 area when multiple pages exist. `completion_page` resets to 0 on typing, paste,
 `C-g`, Enter, or when the completion prefix changes.
 
-Pasted text has newlines replaced with spaces when pasting into the minibuffer.
+Pasted text is normalized (`Editor::normalized_paste`, used by both `C-y` and
+bracketed paste): in the minibuffer every line-break form (`\r\n`, `\r`, `\n`)
+becomes a space; in a buffer, breaks are converted to that buffer's own line
+ending so pasting CRLF text into an LF file cannot introduce stray `\r` chars.
 
 ## Incremental Search
 

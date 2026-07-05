@@ -1164,17 +1164,30 @@ impl Editor {
         }
     }
 
+    /// Normalize text about to be pasted. The minibuffer is single-line, so
+    /// every line-break form becomes a space. Buffers get the breaks
+    /// converted to their own line ending (`Buffer::line_ending`, detected
+    /// at load and `Lf` for new buffers), so pasting CRLF text into an LF
+    /// file cannot smuggle in raw `\r` chars — which would render invisibly
+    /// and mix line endings.
+    pub(crate) fn normalized_paste(&self, text: &str) -> String {
+        let unified = text.replace("\r\n", "\n").replace('\r', "\n");
+        if self.minibuffer.is_active() {
+            unified.replace('\n', " ")
+        } else {
+            match self.active_buffer().line_ending {
+                crate::buffer::LineEnding::Lf => unified,
+                crate::buffer::LineEnding::CrLf => unified.replace('\n', "\r\n"),
+            }
+        }
+    }
+
     fn paste(&mut self) {
         let text = self
             .get_os_clipboard()
             .unwrap_or_else(|| self.clipboard.clone());
         if !text.is_empty() {
-            // Sanitize: replace newlines with spaces when pasting into minibuffer
-            let text = if self.minibuffer.is_active() {
-                text.replace("\r\n", " ").replace('\n', " ")
-            } else {
-                text
-            };
+            let text = self.normalized_paste(&text);
             let pos = self.active_pane().point;
             self.apply_edit(pos, pos, &text, EditRecord::Insert);
             self.active_buffer_mut().history.commit();

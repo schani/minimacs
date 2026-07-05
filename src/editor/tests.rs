@@ -426,6 +426,42 @@ fn edit_above_other_pane_viewport_shifts_its_scroll() {
 }
 
 #[test]
+fn paste_converts_crlf_to_lf_buffer_ending() {
+    let mut editor = Editor::new();
+    editor.clipboard = "a\r\nb".to_string();
+    editor.execute(Command::Paste);
+    assert_eq!(editor.buffer_text(), "a\nb");
+}
+
+#[test]
+fn paste_converts_lone_cr_to_buffer_ending() {
+    let mut editor = Editor::new();
+    editor.clipboard = "a\rb".to_string();
+    editor.execute(Command::Paste);
+    assert_eq!(editor.buffer_text(), "a\nb");
+}
+
+#[test]
+fn paste_converts_lf_to_crlf_buffer_ending() {
+    let mut editor = Editor::new();
+    editor.current_buffer_mut().line_ending = crate::buffer::LineEnding::CrLf;
+    editor.clipboard = "a\nb".to_string();
+    editor.execute(Command::Paste);
+    assert_eq!(editor.buffer_text(), "a\r\nb");
+    // Point must land after the converted text, not the original.
+    assert_eq!(editor.point(), 4);
+}
+
+#[test]
+fn minibuffer_paste_flattens_all_line_break_forms() {
+    let mut editor = Editor::new();
+    editor.execute(Command::SwitchBuffer);
+    editor.clipboard = "a\rb\r\nc\nd".to_string();
+    editor.execute(Command::Paste);
+    assert_eq!(editor.minibuffer_text(), "a b c d");
+}
+
+#[test]
 fn goto_line_scrolls_target_into_view() {
     let text: String = (1..=200).map(|i| format!("line{i}\n")).collect();
     let mut editor = Editor::new_with_text(&text);
