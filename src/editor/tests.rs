@@ -547,6 +547,34 @@ fn save_anyway_confirm_reasks_on_invalid_answer() {
 }
 
 #[test]
+fn pane_commands_are_ignored_while_prompt_is_active() {
+    let mut editor = Editor::new();
+    editor.execute(Command::SwitchBuffer);
+    assert!(editor.minibuffer.is_active());
+
+    editor.execute(Command::SplitVertical);
+    editor.execute(Command::SplitHorizontal);
+    assert_eq!(editor.pane_tree.pane_count(), 1);
+}
+
+#[test]
+fn focus_and_layout_frozen_while_prompt_is_active() {
+    let mut editor = Editor::new();
+    editor.execute(Command::SplitVertical);
+    let focus_before = editor.pane_tree.focus_path().to_vec();
+
+    editor.execute(Command::SwitchBuffer);
+    assert!(editor.minibuffer.is_active());
+
+    editor.execute(Command::CycleFocus);
+    assert_eq!(editor.pane_tree.focus_path(), focus_before.as_slice());
+
+    editor.execute(Command::DeletePane);
+    editor.execute(Command::DeleteOtherPanes);
+    assert_eq!(editor.pane_tree.pane_count(), 2);
+}
+
+#[test]
 fn goto_line_scrolls_target_into_view() {
     let text: String = (1..=200).map(|i| format!("line{i}\n")).collect();
     let mut editor = Editor::new_with_text(&text);

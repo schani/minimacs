@@ -424,6 +424,12 @@ Prompt nesting is prevented by two mechanisms: (1) `start_minibuffer_prompt()`
 returns early if a prompt is already active; (2) `isearch_start()`,
 `kill_buffer()`, and `quit()` have local guards.
 
+Pane layout and focus are frozen while a prompt is active: the split, delete-
+pane, and cycle-focus commands are ignored in `execute()` (and mouse clicks
+are ignored in key routing), so prompts that resolve their target at submit
+time — e.g. `C-x C-w` writes the focused pane's buffer — cannot be retargeted
+mid-prompt.
+
 Path input expands a leading `~`/`~/...` to `$HOME` inside
 `normalize_path_string()`, which both prompt submission and tab completion go
 through.

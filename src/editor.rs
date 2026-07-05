@@ -262,6 +262,17 @@ impl Editor {
                     // Tab completion is handled in app.rs key routing
                     return;
                 }
+                // Freeze pane layout and focus while a prompt is active:
+                // prompts that resolve their target at submit time (e.g.
+                // C-x C-w writes the focused pane's buffer) must not be
+                // retargeted mid-prompt. Mouse clicks are already ignored.
+                Command::SplitVertical
+                | Command::SplitHorizontal
+                | Command::DeletePane
+                | Command::DeleteOtherPanes
+                | Command::CycleFocus => {
+                    return;
+                }
                 _ => {}
             }
         }
