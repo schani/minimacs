@@ -73,6 +73,13 @@ impl Editor {
     }
 
     pub fn submit_prompt(&mut self) {
+        self.dispatch_prompt();
+        // Prompt handlers may move point in the focused pane (e.g. goto-line)
+        // without going through `execute()`, so scroll it into view here.
+        self.ensure_cursor_visible();
+    }
+
+    fn dispatch_prompt(&mut self) {
         let kind = match self.minibuffer.prompt() {
             Some(p) => p.kind.clone(),
             None => return,

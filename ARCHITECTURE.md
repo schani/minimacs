@@ -407,6 +407,11 @@ before the keymap). All other keys go through the normal keymap. `InsertNewline`
 `InsertTab`, `IndentLine`, and `DedentLine` are intercepted in `execute()` when
 the minibuffer is active.
 
+Prompt handlers may move point in the focused pane without going through
+`execute()` (e.g. goto-line), so `submit_prompt()` ends by calling
+`ensure_cursor_visible()` — the same scroll-into-view pass `execute()` runs
+after every command.
+
 Prompt nesting is prevented by two mechanisms: (1) `start_minibuffer_prompt()`
 returns early if a prompt is already active; (2) `isearch_start()`,
 `kill_buffer()`, and `quit()` have local guards.

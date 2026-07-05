@@ -397,6 +397,25 @@ fn goto_line_via_prompt() {
 }
 
 #[test]
+fn goto_line_scrolls_target_into_view() {
+    let text: String = (1..=200).map(|i| format!("line{i}\n")).collect();
+    let mut editor = Editor::new_with_text(&text);
+    editor.pane_tree.focused_pane_mut().viewport_height = 10;
+    editor.pane_tree.focused_pane_mut().viewport_width = 80;
+    editor.execute(Command::GotoLine);
+    editor.set_minibuffer_text("150");
+    editor.submit_prompt();
+    let (line, _) = editor.current_buffer().char_to_line_col(editor.point());
+    assert_eq!(line, 149);
+    let pane = editor.pane_tree.focused_pane();
+    assert!(
+        pane.scroll_top <= 149 && 149 < pane.scroll_top + pane.viewport_height,
+        "target line must be inside the viewport; scroll_top={}",
+        pane.scroll_top
+    );
+}
+
+#[test]
 fn find_file_submit() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("test.txt");

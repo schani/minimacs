@@ -277,21 +277,29 @@ impl Editor {
 
         self.last_command = Some(cmd_clone);
 
-        // After any command, ensure cursor is visible (skip for minibuffer)
-        if !self.minibuffer.is_active() {
-            let pane = self.pane_tree.focused_pane();
-            let point = pane.point;
-            let scroll_top = pane.scroll_top;
-            let vh = pane.viewport_height;
-            let vw = pane.viewport_width;
-            let buf = self.current_buffer();
-            let (line, _) = buf.char_to_line_col(point);
-            // Wrap by tab-expanded visual width, matching the renderer.
-            let new_top = crate::pane::compute_scroll_top(scroll_top, line, vh, vw, |l| {
-                crate::render::line_visual_width(buf, l)
-            });
-            self.pane_tree.focused_pane_mut().scroll_top = new_top;
+        self.ensure_cursor_visible();
+    }
+
+    /// Scroll the focused pane so its point is visible. Runs after every
+    /// command and after minibuffer prompt submission (which moves point
+    /// outside of `execute()`, e.g. goto-line). No-op while a prompt is
+    /// active — the minibuffer pane has its own cursor.
+    pub(crate) fn ensure_cursor_visible(&mut self) {
+        if self.minibuffer.is_active() {
+            return;
         }
+        let pane = self.pane_tree.focused_pane();
+        let point = pane.point;
+        let scroll_top = pane.scroll_top;
+        let vh = pane.viewport_height;
+        let vw = pane.viewport_width;
+        let buf = self.current_buffer();
+        let (line, _) = buf.char_to_line_col(point);
+        // Wrap by tab-expanded visual width, matching the renderer.
+        let new_top = crate::pane::compute_scroll_top(scroll_top, line, vh, vw, |l| {
+            crate::render::line_visual_width(buf, l)
+        });
+        self.pane_tree.focused_pane_mut().scroll_top = new_top;
     }
 
     // === Pane split commands ===
