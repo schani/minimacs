@@ -573,6 +573,15 @@ fn compute_syntax_char_styles(
     Some(result)
 }
 
+/// Join the mode line's left and right parts, padding with spaces so the
+/// line fills `total_width` display columns. Widths are measured in display
+/// columns, not bytes — buffer names can contain multibyte and wide chars.
+fn mode_line_text(left: &str, right: &str, total_width: usize) -> String {
+    use unicode_width::UnicodeWidthStr;
+    let padding = total_width.saturating_sub(left.width() + right.width());
+    format!("{left}{}{right}", " ".repeat(padding))
+}
+
 fn render_pane_mode_line(
     frame: &mut Frame,
     editor: &Editor,
@@ -622,17 +631,7 @@ fn render_pane_mode_line(
     );
     let right = format!("{pending_display} ");
 
-    // Pad to fill the line
-    let total_width = area.width as usize;
-    let left_len = left.len();
-    let right_len = right.len();
-    let padding = if total_width > left_len + right_len {
-        " ".repeat(total_width - left_len - right_len)
-    } else {
-        String::new()
-    };
-
-    let mode_line_text = format!("{left}{padding}{right}");
+    let mode_line_text = mode_line_text(&left, &right, area.width as usize);
 
     let style = if is_focused {
         Style::default()
@@ -774,6 +773,31 @@ mod tests {
         // text_width=13, cps=12. 36 chars:
         // seg1=12, remaining=24. excess=36-13=23. 1+ceil(23/12)=1+2=3.
         assert_eq!(visual_lines_for_length(36, 13), 3);
+    }
+
+    // === mode line tests ===
+
+    #[test]
+    fn mode_line_padding_uses_display_width_not_bytes() {
+        use unicode_width::UnicodeWidthStr;
+        // "日本語.md" is 9 display columns but 12 bytes; byte-based padding
+        // would overshoot and misalign the right side.
+        let text = mode_line_text(" ** 日本語.md (1,0)  Top", "C-x ", 60);
+        assert_eq!(text.width(), 60);
+        assert!(text.ends_with("C-x "));
+    }
+
+    #[test]
+    fn mode_line_padding_fills_exactly_with_ascii() {
+        use unicode_width::UnicodeWidthStr;
+        let text = mode_line_text(" -- test.txt (1,0)  All", " ", 40);
+        assert_eq!(text.width(), 40);
+    }
+
+    #[test]
+    fn mode_line_wider_than_area_gets_no_padding() {
+        let text = mode_line_text("0123456789", "abc", 5);
+        assert_eq!(text, "0123456789abc");
     }
 
     // === completions_layout tests ===
