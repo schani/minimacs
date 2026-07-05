@@ -426,6 +426,16 @@ fn edit_above_other_pane_viewport_shifts_its_scroll() {
 }
 
 #[test]
+fn os_clipboard_is_inert_under_test() {
+    // arboard is compiled out in tests: the persistent handle must no-op on
+    // set and return None on get so paste falls back to the internal
+    // clipboard (which the paste tests below rely on).
+    let mut clip = super::OsClipboard::new();
+    clip.set_text("x");
+    assert_eq!(clip.get_text(), None);
+}
+
+#[test]
 fn paste_converts_crlf_to_lf_buffer_ending() {
     let mut editor = Editor::new();
     editor.clipboard = "a\r\nb".to_string();

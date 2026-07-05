@@ -22,6 +22,56 @@ pub enum RecenterPosition {
     Bottom,
 }
 
+/// The editor's connection to the OS clipboard. One instance lives for the
+/// editor's lifetime: on X11 the selection is owned by the process that set
+/// it, and dropping the arboard handle right after a kill (as a per-call
+/// handle would) can drop the selection before another application reads
+/// it. Compiled to a no-op under test, where no display is available.
+pub(crate) struct OsClipboard {
+    #[cfg(all(feature = "clipboard", not(test)))]
+    inner: Option<arboard::Clipboard>,
+}
+
+impl OsClipboard {
+    pub(crate) fn new() -> Self {
+        Self {
+            #[cfg(all(feature = "clipboard", not(test)))]
+            inner: None,
+        }
+    }
+
+    /// Connect lazily; a failed attempt (e.g. no display) is retried on the
+    /// next call rather than cached forever.
+    #[cfg(all(feature = "clipboard", not(test)))]
+    fn connect(&mut self) -> Option<&mut arboard::Clipboard> {
+        if self.inner.is_none() {
+            self.inner = arboard::Clipboard::new().ok();
+        }
+        self.inner.as_mut()
+    }
+
+    pub(crate) fn set_text(&mut self, _text: &str) {
+        #[cfg(all(feature = "clipboard", not(test)))]
+        if let Some(clip) = self.connect() {
+            if clip.set_text(_text.to_string()).is_err() {
+                // The connection may have gone stale; drop it so the next
+                // call reconnects instead of failing forever.
+                self.inner = None;
+            }
+        }
+    }
+
+    pub(crate) fn get_text(&mut self) -> Option<String> {
+        #[cfg(all(feature = "clipboard", not(test)))]
+        if let Some(clip) = self.connect() {
+            // Errors here also cover "clipboard empty / not text", so they
+            // don't indicate a dead connection; fall through to None.
+            return clip.get_text().ok();
+        }
+        None
+    }
+}
+
 /// How an edit made through [`Editor::apply_edit`] is recorded in undo
 /// history.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,6 +99,8 @@ pub struct Editor {
     pub minibuffer_buffer: Buffer,
     pub minibuffer_pane: Pane,
     pub isearch: Option<ISearchState>,
+    /// Persistent OS clipboard connection (see [`OsClipboard`]).
+    os_clipboard: OsClipboard,
     /// Tracks the previously executed command (for consecutive-command detection).
     last_command: Option<Command>,
     /// Tracks last recenter position for C-l cycling.
@@ -76,6 +128,7 @@ impl Editor {
             minibuffer_buffer: Buffer::from_str(usize::MAX, "*minibuffer*", ""),
             minibuffer_pane: mb_pane,
             isearch: None,
+            os_clipboard: OsClipboard::new(),
             last_command: None,
             last_recenter_position: None,
             quit_pending: Vec::new(),
@@ -99,6 +152,7 @@ impl Editor {
             minibuffer_buffer: Buffer::from_str(usize::MAX, "*minibuffer*", ""),
             minibuffer_pane: mb_pane,
             isearch: None,
+            os_clipboard: OsClipboard::new(),
             last_command: None,
             last_recenter_position: None,
             quit_pending: Vec::new(),
@@ -1196,23 +1250,12 @@ impl Editor {
         self.active_pane_mut().preferred_column = None;
     }
 
-    fn set_os_clipboard(&self, _text: &str) {
-        #[cfg(all(feature = "clipboard", not(test)))]
-        {
-            if let Ok(mut clip) = arboard::Clipboard::new() {
-                let _ = clip.set_text(_text.to_string());
-            }
-        }
+    fn set_os_clipboard(&mut self, text: &str) {
+        self.os_clipboard.set_text(text);
     }
 
-    fn get_os_clipboard(&self) -> Option<String> {
-        #[cfg(all(feature = "clipboard", not(test)))]
-        {
-            if let Ok(mut clip) = arboard::Clipboard::new() {
-                return clip.get_text().ok();
-            }
-        }
-        None
+    fn get_os_clipboard(&mut self) -> Option<String> {
+        self.os_clipboard.get_text()
     }
 
     fn cancel(&mut self) {
