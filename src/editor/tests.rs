@@ -472,6 +472,81 @@ fn minibuffer_paste_flattens_all_line_break_forms() {
 }
 
 #[test]
+fn kill_confirm_reasks_on_invalid_answer() {
+    let mut editor = Editor::new();
+    editor.execute(Command::InsertChar('x'));
+    editor.execute(Command::KillBuffer);
+    assert!(editor.minibuffer.is_active());
+
+    editor.set_minibuffer_text("wat");
+    editor.submit_prompt();
+    // Invalid answer: prompt stays active with cleared input, nothing killed.
+    assert!(editor.minibuffer.is_active());
+    assert_eq!(editor.minibuffer_text(), "");
+    assert_eq!(editor.buffer_text(), "x");
+
+    editor.set_minibuffer_text("y");
+    editor.submit_prompt();
+    assert!(!editor.minibuffer.is_active());
+    assert_eq!(editor.buffer_text(), "");
+}
+
+#[test]
+fn overwrite_confirm_reasks_on_invalid_answer() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("target.txt");
+    std::fs::write(&file, "old").unwrap();
+
+    let mut editor = Editor::new_with_text("new");
+    editor.execute(Command::WriteFile);
+    editor.set_minibuffer_text(&file.to_string_lossy());
+    editor.submit_prompt();
+    assert!(editor.minibuffer.is_active(), "expected overwrite confirm");
+
+    editor.set_minibuffer_text("z");
+    editor.submit_prompt();
+    assert!(editor.minibuffer.is_active());
+    assert_eq!(editor.minibuffer_text(), "");
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "old");
+
+    editor.set_minibuffer_text("n");
+    editor.submit_prompt();
+    assert!(!editor.minibuffer.is_active());
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "old");
+}
+
+#[test]
+fn save_anyway_confirm_reasks_on_invalid_answer() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("test.txt");
+    std::fs::write(&file, "content").unwrap();
+
+    let mut editor = Editor::new();
+    editor.open_file(&file).unwrap();
+    editor.execute(Command::InsertChar('x'));
+
+    // Simulate an external change (force a distinct mtime).
+    let f = std::fs::OpenOptions::new().write(true).open(&file).unwrap();
+    f.set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(10))
+        .unwrap();
+    drop(f);
+
+    editor.execute(Command::Save);
+    assert!(editor.minibuffer.is_active(), "expected save-anyway confirm");
+
+    editor.set_minibuffer_text("z");
+    editor.submit_prompt();
+    assert!(editor.minibuffer.is_active());
+    assert_eq!(editor.minibuffer_text(), "");
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "content");
+
+    editor.set_minibuffer_text("y");
+    editor.submit_prompt();
+    assert!(!editor.minibuffer.is_active());
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "xcontent");
+}
+
+#[test]
 fn goto_line_scrolls_target_into_view() {
     let text: String = (1..=200).map(|i| format!("line{i}\n")).collect();
     let mut editor = Editor::new_with_text(&text);

@@ -13,6 +13,13 @@ impl Editor {
             return;
         }
         self.minibuffer.start_prompt(kind, label);
+        self.reset_minibuffer_input();
+    }
+
+    /// Clear the minibuffer input and its edit state, leaving any active
+    /// prompt untouched — used both when a prompt starts and to re-ask a
+    /// confirmation after an unrecognized answer.
+    fn reset_minibuffer_input(&mut self) {
         self.minibuffer_buffer.text = ropey::Rope::new();
         self.minibuffer_buffer.modified = false;
         self.minibuffer_buffer.history = crate::history::History::new();
@@ -132,51 +139,50 @@ impl Editor {
                 // Enter during isearch accepts the position
                 self.isearch_accept();
             }
-            PromptKind::KillConfirm { buffer_id } => {
-                self.minibuffer.finish();
-                match input.as_str() {
-                    "y" | "Y" => self.do_kill_buffer(buffer_id),
-                    "n" | "N" => {}
-                    _ => self
-                        .minibuffer
-                        .show_message("Please answer y or n".to_string()),
+            // Confirmation prompts: an unrecognized answer clears the input
+            // and re-asks (the prompt state stays alive); only a recognized
+            // answer finishes the prompt.
+            PromptKind::KillConfirm { buffer_id } => match input.as_str() {
+                "y" | "Y" => {
+                    self.minibuffer.finish();
+                    self.do_kill_buffer(buffer_id);
                 }
-            }
-            PromptKind::OverwriteConfirm { buffer_id, path } => {
-                self.minibuffer.finish();
-                match input.as_str() {
-                    "y" | "Y" => self.write_buffer_to_path(buffer_id, path),
-                    "n" | "N" => self.minibuffer.show_message("Cancelled".to_string()),
-                    _ => self
-                        .minibuffer
-                        .show_message("Please answer y or n".to_string()),
+                "n" | "N" => self.minibuffer.finish(),
+                _ => self.reset_minibuffer_input(),
+            },
+            PromptKind::OverwriteConfirm { buffer_id, path } => match input.as_str() {
+                "y" | "Y" => {
+                    self.minibuffer.finish();
+                    self.write_buffer_to_path(buffer_id, path);
                 }
-            }
-            PromptKind::SaveAnywayConfirm { buffer_id } => {
-                self.minibuffer.finish();
-                match input.as_str() {
-                    "y" | "Y" => {
-                        if let Some(buf) = self.buffers.iter_mut().find(|b| b.id == buffer_id) {
-                            let name = buf.name.clone();
-                            match buf.save() {
-                                Ok(()) => {
-                                    self.minibuffer.show_message(format!("Wrote {name}"));
-                                }
-                                Err(e) => {
-                                    self.minibuffer
-                                        .show_message(format!("Error saving: {e}"));
-                                }
+                "n" | "N" => {
+                    self.minibuffer.finish();
+                    self.minibuffer.show_message("Cancelled".to_string());
+                }
+                _ => self.reset_minibuffer_input(),
+            },
+            PromptKind::SaveAnywayConfirm { buffer_id } => match input.as_str() {
+                "y" | "Y" => {
+                    self.minibuffer.finish();
+                    if let Some(buf) = self.buffers.iter_mut().find(|b| b.id == buffer_id) {
+                        let name = buf.name.clone();
+                        match buf.save() {
+                            Ok(()) => {
+                                self.minibuffer.show_message(format!("Wrote {name}"));
+                            }
+                            Err(e) => {
+                                self.minibuffer
+                                    .show_message(format!("Error saving: {e}"));
                             }
                         }
                     }
-                    "n" | "N" => {
-                        self.minibuffer.show_message("Save cancelled".to_string());
-                    }
-                    _ => self
-                        .minibuffer
-                        .show_message("Please answer y or n".to_string()),
                 }
-            }
+                "n" | "N" => {
+                    self.minibuffer.finish();
+                    self.minibuffer.show_message("Save cancelled".to_string());
+                }
+                _ => self.reset_minibuffer_input(),
+            },
             PromptKind::QuitSaveConfirm { buffer_id } => {
                 self.minibuffer.finish();
                 match input.as_str() {

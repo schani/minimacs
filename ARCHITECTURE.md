@@ -388,10 +388,14 @@ buffer, "n" cancels. `C-x C-c` collects the ids of all modified buffers into
 `Editor::quit_pending` and asks `QuitSaveConfirm` for each in turn: "y" saves
 that buffer and moves on, "n" skips it, "q" cancels the quit, "a" aborts —
 quit immediately, discard all unsaved changes, and exit with status 1 (like
-vim's `:cq`, so git abandons the operation when minimacs is `core.editor`) —
-and any other answer re-asks. The editor quits only after every pending buffer has
-been answered. A "y" on a buffer with no file path aborts the quit with a
-message instead of silently discarding it.
+vim's `:cq`, so git abandons the operation when minimacs is `core.editor`).
+The editor quits only after every pending buffer has been answered. A "y" on
+a buffer with no file path aborts the quit with a message instead of silently
+discarding it.
+
+All confirmation prompts treat an unrecognized answer the same way: the input
+is cleared and the prompt re-asks (the prompt state stays alive); only a
+recognized answer finishes the prompt.
 
 ### Minibuffer as a Real Buffer
 
