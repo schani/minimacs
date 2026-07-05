@@ -101,6 +101,15 @@ pub fn render(frame: &mut Frame, editor: &Editor) {
         } else {
             Vec::new()
         };
+        // match_covering() relies on sorted starts and a uniform match
+        // length; isearch_update guarantees both today — catch regressions
+        // (e.g. a future regex search) in debug builds.
+        debug_assert!(
+            search_matches
+                .windows(2)
+                .all(|w| w[0].0 <= w[1].0 && w[0].1 == w[1].1),
+            "isearch matches must be sorted and uniform in length"
+        );
         let current_match = if is_focused {
             editor.isearch.as_ref().and_then(|s| s.current_match)
         } else {
@@ -412,6 +421,19 @@ fn render_pane_text(
     frame.render_widget(paragraph, area);
 }
 
+/// Char position of the search match covering `char_pos`, if any.
+///
+/// Invariants (established by `isearch_update`, asserted per frame in
+/// `render()`): `matches` is sorted by start position and every match has
+/// the same length — the query's. Overlaps are fine: with equal lengths the
+/// match with the largest start ≤ `char_pos` reaches furthest, so only that
+/// one needs checking.
+fn match_covering(matches: &[(usize, usize)], char_pos: usize) -> Option<usize> {
+    let idx = matches.partition_point(|&(pos, _)| pos <= char_pos);
+    let &(pos, len) = matches.get(idx.checked_sub(1)?)?;
+    (char_pos < pos + len).then_some(pos)
+}
+
 /// Build styled spans for a segment of expanded display cells.
 #[allow(clippy::too_many_arguments)]
 fn build_styled_spans(
@@ -430,6 +452,9 @@ fn build_styled_spans(
         return;
     }
 
+    // All matches share the query's length (see `match_covering`).
+    let match_len = search_matches.first().map(|&(_, len)| len).unwrap_or(0);
+
     let char_styles: Vec<Style> = segment
         .iter()
         .map(|cell| {
@@ -443,14 +468,10 @@ fn build_styled_spans(
             if in_region {
                 Style::default().bg(Color::Rgb(173, 214, 255))
             } else {
-                let is_current_match = current_match.is_some_and(|cm| {
-                    search_matches
-                        .iter()
-                        .any(|(pos, len)| *pos == cm && char_pos >= *pos && char_pos < *pos + *len)
-                });
-                let is_other_match = search_matches
-                    .iter()
-                    .any(|(pos, len)| char_pos >= *pos && char_pos < *pos + *len);
+                let is_current_match = current_match
+                    .is_some_and(|cm| char_pos >= cm && char_pos < cm + match_len);
+                let is_other_match =
+                    !is_current_match && match_covering(search_matches, char_pos).is_some();
 
                 if is_current_match {
                     Style::default().bg(Color::Rgb(168, 172, 148)).fg(Color::Black)
@@ -785,6 +806,43 @@ mod tests {
         // text_width=13, cps=12. 36 chars:
         // seg1=12, remaining=24. excess=36-13=23. 1+ceil(23/12)=1+2=3.
         assert_eq!(visual_lines_for_length(36, 13), 3);
+    }
+
+    // === isearch match lookup tests ===
+
+    #[test]
+    fn match_covering_empty() {
+        assert_eq!(match_covering(&[], 5), None);
+    }
+
+    #[test]
+    fn match_covering_start_inclusive_end_exclusive() {
+        let matches = [(10, 3)];
+        assert_eq!(match_covering(&matches, 9), None);
+        assert_eq!(match_covering(&matches, 10), Some(10));
+        assert_eq!(match_covering(&matches, 12), Some(10));
+        assert_eq!(match_covering(&matches, 13), None);
+    }
+
+    #[test]
+    fn match_covering_gap_between_matches() {
+        let matches = [(0, 2), (10, 2)];
+        assert_eq!(match_covering(&matches, 1), Some(0));
+        assert_eq!(match_covering(&matches, 5), None);
+        assert_eq!(match_covering(&matches, 10), Some(10));
+    }
+
+    #[test]
+    fn match_covering_overlapping_matches() {
+        // Searching "aa" in "aaaa" produces overlapping matches; equal
+        // lengths mean the latest start <= pos is always the one that
+        // reaches furthest, so every position in 0..4 is covered.
+        let matches = [(0, 2), (1, 2), (2, 2)];
+        for pos in 0..4 {
+            assert!(match_covering(&matches, pos).is_some(), "pos {pos}");
+        }
+        assert_eq!(match_covering(&matches, 3), Some(2));
+        assert_eq!(match_covering(&matches, 4), None);
     }
 
     // === mode line tests ===
