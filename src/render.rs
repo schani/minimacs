@@ -721,6 +721,16 @@ fn render_completions(frame: &mut Frame, candidates: &[String], page: usize, are
     frame.render_widget(paragraph, area);
 }
 
+/// Display column of the minibuffer cursor: the label's width plus the
+/// width of the input up to `point`. All in display columns — labels embed
+/// buffer names and input can hold wide or combining chars, so neither byte
+/// length nor char count is correct.
+fn minibuffer_cursor_col(label: &str, input: &str, point: usize) -> usize {
+    use unicode_width::UnicodeWidthStr;
+    let before: String = input.chars().take(point).collect();
+    label.width() + before.width()
+}
+
 fn render_minibuffer(frame: &mut Frame, editor: &Editor, area: Rect) {
     let text = if editor.minibuffer.is_active() {
         let label = &editor.minibuffer.prompt().unwrap().label;
@@ -734,7 +744,9 @@ fn render_minibuffer(frame: &mut Frame, editor: &Editor, area: Rect) {
 
     // If minibuffer has a prompt, set cursor there
     if let Some(prompt) = editor.minibuffer.prompt() {
-        let cursor_pos = prompt.label.len() + editor.minibuffer_pane.point;
+        let input: String = editor.minibuffer_buffer.text.to_string();
+        let cursor_pos =
+            minibuffer_cursor_col(&prompt.label, &input, editor.minibuffer_pane.point);
         let x = area.x + cursor_pos as u16;
         if x < area.x + area.width {
             frame.set_cursor_position((x, area.y));
@@ -798,6 +810,34 @@ mod tests {
     fn mode_line_wider_than_area_gets_no_padding() {
         let text = mode_line_text("0123456789", "abc", 5);
         assert_eq!(text, "0123456789abc");
+    }
+
+    // === minibuffer cursor tests ===
+
+    #[test]
+    fn minibuffer_cursor_col_ascii() {
+        assert_eq!(minibuffer_cursor_col("Find file: ", "abc", 3), 14);
+    }
+
+    #[test]
+    fn minibuffer_cursor_col_multibyte_label() {
+        // Confirm-prompt labels embed buffer names, which can be non-ASCII.
+        // "Save buffer 日本語.md? " is 12 + 6 + 3 + 2 = 23 display columns
+        // (34 bytes) — the cursor must go after it, not 34 cells right.
+        assert_eq!(minibuffer_cursor_col("Save buffer 日本語.md? ", "", 0), 23);
+    }
+
+    #[test]
+    fn minibuffer_cursor_col_wide_input_chars() {
+        // Point is a char index; two CJK chars occupy four columns.
+        assert_eq!(minibuffer_cursor_col("I: ", "你好x", 2), 3 + 4);
+    }
+
+    #[test]
+    fn minibuffer_cursor_col_combining_mark_in_input() {
+        // "e" + combining acute renders as one column; point after both
+        // chars is still column 1 past the label.
+        assert_eq!(minibuffer_cursor_col("x", "e\u{301}", 2), 1 + 1);
     }
 
     // === completions_layout tests ===
