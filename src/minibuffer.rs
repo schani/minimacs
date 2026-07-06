@@ -18,8 +18,11 @@ pub enum PromptKind {
     ISearch,
     /// "Buffer X modified; kill anyway? (y/n)"
     KillConfirm { buffer_id: usize },
-    /// "X changed on disk; save anyway? (y/n)"
-    SaveAnywayConfirm { buffer_id: usize },
+    /// "X changed on disk; save anyway? (y/n)" — the external-modification
+    /// guard, asked by every flow that writes a buffer to its own path.
+    /// `resume_quit` marks a save that is part of the quit sequence: "y"
+    /// saves and continues the quit, "n" cancels the whole quit.
+    SaveAnywayConfirm { buffer_id: usize, resume_quit: bool },
     /// "X exists; overwrite? (y/n)" — C-x C-w to an existing file.
     OverwriteConfirm { buffer_id: usize, path: PathBuf },
     /// "Save buffer X? (y/n/q)" — asked once per modified buffer when quitting.

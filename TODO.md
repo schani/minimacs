@@ -73,7 +73,7 @@ ARCHITECTURE.md current.
 
 ## Data loss
 
-- [ ] External-modification guard on every save flow: quitting with `C-x C-c` and answering "y" (`prompts.rs:192`), and `C-x C-w` to the buffer's own path (`prompts.rs:113,249`), call `Buffer::save`/`save_as` without checking `externally_modified()`, silently clobbering changes another program wrote to disk. Only `C-x C-s` checks. Route all flows through the unified safe-save path's guard, prompting "changed on disk; save anyway?" like `C-x C-s` does.
+- [x] External-modification guard on every save flow: quitting with `C-x C-c` and answering "y" (`prompts.rs:192`), and `C-x C-w` to the buffer's own path (`prompts.rs:113,249`), call `Buffer::save`/`save_as` without checking `externally_modified()`, silently clobbering changes another program wrote to disk. Only `C-x C-s` checks. Route all flows through the unified safe-save path's guard, prompting "changed on disk; save anyway?" like `C-x C-s` does. (Done: all own-path save flows now call `Editor::external_modification_guard`; `SaveAnywayConfirm` gained a `resume_quit` flag so the quit flow chains through the guard — "y" saves and resumes the quit, "n" cancels it like a failed quit-time save.)
 - [ ] `normalize_path_string` silently drops leading `..` on relative paths (`minibuffer.rs:83-87`): `ParentDir` pops only when a prior component exists, so `../notes.txt` becomes `notes.txt` and find-file/write-file open or save the wrong file. Preserve leading `..` components for rootless paths (and resolve them against the effective base directory where the result is used).
 
 ## Correctness

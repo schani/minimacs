@@ -182,17 +182,41 @@ impl Editor {
             self.write_file_prompt();
             return;
         }
-        if self.current_buffer().externally_modified() {
-            let buffer_id = self.current_buffer().id;
-            let name = self.current_buffer().name.clone();
-            self.start_minibuffer_prompt(
-                PromptKind::SaveAnywayConfirm { buffer_id },
-                &format!("{name} changed on disk; save anyway? (y/n) "),
-            );
+        let buffer_id = self.current_buffer().id;
+        if self.external_modification_guard(buffer_id, false) {
             return;
         }
-        let buffer_id = self.current_buffer().id;
         self.write_buffer_reporting(buffer_id, WriteTarget::BufferPath);
+    }
+
+    /// The external-modification guard shared by every flow that writes a
+    /// buffer to its own path (`C-x C-s`, `C-x C-w` to the buffer's path,
+    /// quit-time saves): if the file changed on disk since we last loaded
+    /// or saved it, start the "changed on disk; save anyway?" prompt
+    /// instead of writing, and return true. Answering "y" is the one
+    /// bypass — the confirm handler writes via [`Editor::write_buffer`]
+    /// directly. `resume_quit` marks a save that is part of the quit
+    /// sequence, so the confirm handler resumes or cancels the quit.
+    pub(super) fn external_modification_guard(
+        &mut self,
+        buffer_id: usize,
+        resume_quit: bool,
+    ) -> bool {
+        let Some(buf) = self.buffers.iter().find(|b| b.id == buffer_id) else {
+            return false;
+        };
+        if !buf.externally_modified() {
+            return false;
+        }
+        let name = buf.name.clone();
+        self.start_minibuffer_prompt(
+            PromptKind::SaveAnywayConfirm {
+                buffer_id,
+                resume_quit,
+            },
+            &format!("{name} changed on disk; save anyway? (y/n) "),
+        );
+        true
     }
 
     /// The single choke point every file-writing flow goes through:

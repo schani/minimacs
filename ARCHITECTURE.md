@@ -146,9 +146,15 @@ position is per-pane.
 Saving is atomic: `Buffer::save()` writes to a temp file in the target's
 directory, copies the target's permissions, fsyncs, and renames over the
 target, so a crash or full disk mid-write cannot destroy the existing file. Each
-buffer remembers the file's mtime from load/save; `C-x C-s` checks
-`externally_modified()` and asks "changed on disk; save anyway? (y/n)" before
-clobbering changes made by another program.
+buffer remembers the file's mtime from load/save; every flow that writes a
+buffer to its own path (`C-x C-s`, `C-x C-w` to the buffer's path, and
+quit-time saves) goes through `Editor::external_modification_guard`, which
+checks `externally_modified()` and asks "changed on disk; save anyway? (y/n)"
+before clobbering changes made by another program. Answering "y" is the one
+bypass: the `SaveAnywayConfirm` handler writes via `write_buffer` directly.
+The guard does not apply to `C-x C-w` to a *different* existing path — that is
+covered by `OverwriteConfirm` instead (mtime tracking only covers the buffer's
+own file), so no flow double-prompts.
 
 Every flow that writes a buffer to disk — `C-x C-s`, `C-x C-w`, and the
 save-anyway / overwrite / quit-save confirmation handlers — goes through one
@@ -430,8 +436,10 @@ Confirmation prompts identify buffers by id, never by name (names are not
 unique). All of them save through the `Editor::write_buffer` choke point (see
 the Buffer section). `C-x C-w` to an existing file asks `OverwriteConfirm`
 first; the buffer's path, name, and syntax language are only updated after the
-write succeeds, so a failed save never changes buffer identity. `C-x C-s` over a file changed on disk asks
-`SaveAnywayConfirm`. `C-x k` on a modified buffer asks `KillConfirm`; "y" kills the
+write succeeds, so a failed save never changes buffer identity. Any save to
+the buffer's own path over a file changed on disk asks `SaveAnywayConfirm`
+(the external-modification guard, see the Buffer section). `C-x k` on a
+modified buffer asks `KillConfirm`; "y" kills the
 buffer, "n" cancels. `C-x C-c` collects the ids of all modified buffers into
 `Editor::quit_pending` and asks `QuitSaveConfirm` for each in turn: "y" saves
 that buffer and moves on, "n" skips it, "q" cancels the quit, "a" aborts —
@@ -439,7 +447,11 @@ quit immediately, discard all unsaved changes, and exit with status 1 (like
 vim's `:cq`, so git abandons the operation when minimacs is `core.editor`).
 The editor quits only after every pending buffer has been answered. A "y" on
 a buffer with no file path aborts the quit with a message instead of silently
-discarding it.
+discarding it. A "y" on an externally-modified buffer chains into
+`SaveAnywayConfirm { resume_quit: true }` (prompt nesting is fine here — the
+quit prompt finishes before the guard prompt starts): "y" saves and resumes
+the quit sequence with the next pending buffer, "n" cancels the whole quit,
+consistent with how a failed quit-time save cancels it.
 
 All confirmation prompts treat an unrecognized answer the same way: the input
 is cleared and the prompt re-asks (the prompt state stays alive); only a

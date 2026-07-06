@@ -1561,6 +1561,163 @@ fn save_without_external_change_does_not_prompt() {
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "Xoriginal");
 }
 
+/// Simulate another program rewriting `path`: replace the content and bump
+/// the mtime well past the one the buffer recorded at load/save time.
+fn externally_modify(path: &std::path::Path, content: &str) {
+    std::fs::write(path, content).unwrap();
+    let f = std::fs::OpenOptions::new().write(true).open(path).unwrap();
+    f.set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(10))
+        .unwrap();
+}
+
+#[test]
+fn quit_save_over_externally_modified_file_prompts_and_resumes_quit() {
+    let dir = tempfile::tempdir().unwrap();
+    let file1 = dir.path().join("a.txt");
+    let file2 = dir.path().join("b.txt");
+    std::fs::write(&file1, "aaa").unwrap();
+    std::fs::write(&file2, "bbb").unwrap();
+
+    let mut editor = Editor::new();
+    editor.open_file(&file1).unwrap();
+    editor.execute(Command::InsertChar('1'));
+    editor.open_file(&file2).unwrap();
+    editor.execute(Command::InsertChar('2'));
+
+    externally_modify(&file1, "external");
+
+    editor.execute(Command::Quit);
+    let prompt = editor.minibuffer.prompt().unwrap();
+    assert!(matches!(prompt.kind, PromptKind::QuitSaveConfirm { .. }));
+    editor.set_minibuffer_text("y");
+    editor.submit_prompt();
+    // The quit-time save must hit the external-modification guard instead
+    // of clobbering the file.
+    let prompt = editor.minibuffer.prompt().unwrap();
+    assert!(matches!(prompt.kind, PromptKind::SaveAnywayConfirm { .. }));
+    assert_eq!(std::fs::read_to_string(&file1).unwrap(), "external");
+    assert!(!editor.should_quit);
+
+    // Confirming saves the buffer and resumes the quit with the next
+    // pending buffer.
+    editor.set_minibuffer_text("y");
+    editor.submit_prompt();
+    assert_eq!(std::fs::read_to_string(&file1).unwrap(), "1aaa");
+    assert!(!editor.should_quit);
+    let prompt = editor.minibuffer.prompt().unwrap();
+    assert!(matches!(prompt.kind, PromptKind::QuitSaveConfirm { .. }));
+    editor.set_minibuffer_text("y");
+    editor.submit_prompt();
+    assert!(editor.should_quit);
+    assert_eq!(std::fs::read_to_string(&file2).unwrap(), "2bbb");
+}
+
+#[test]
+fn quit_save_anyway_declined_cancels_quit() {
+    let dir = tempfile::tempdir().unwrap();
+    let file1 = dir.path().join("a.txt");
+    let file2 = dir.path().join("b.txt");
+    std::fs::write(&file1, "aaa").unwrap();
+    std::fs::write(&file2, "bbb").unwrap();
+
+    let mut editor = Editor::new();
+    editor.open_file(&file1).unwrap();
+    editor.execute(Command::InsertChar('1'));
+    editor.open_file(&file2).unwrap();
+    editor.execute(Command::InsertChar('2'));
+
+    externally_modify(&file1, "external");
+
+    editor.execute(Command::Quit);
+    editor.set_minibuffer_text("y");
+    editor.submit_prompt();
+    let prompt = editor.minibuffer.prompt().unwrap();
+    assert!(matches!(prompt.kind, PromptKind::SaveAnywayConfirm { .. }));
+
+    // Declining cancels the whole quit, like a failed save does: no
+    // further prompts, nothing written, nothing quit.
+    editor.set_minibuffer_text("n");
+    editor.submit_prompt();
+    assert!(!editor.should_quit);
+    assert!(editor.minibuffer.prompt().is_none());
+    assert_eq!(std::fs::read_to_string(&file1).unwrap(), "external");
+    assert_eq!(std::fs::read_to_string(&file2).unwrap(), "bbb");
+    let buf_a = editor.buffers.iter().find(|b| b.name == "a.txt").unwrap();
+    assert!(buf_a.modified);
+
+    // A fresh quit starts the flow over from the first modified buffer.
+    editor.execute(Command::Quit);
+    let prompt = editor.minibuffer.prompt().unwrap();
+    assert!(matches!(prompt.kind, PromptKind::QuitSaveConfirm { .. }));
+    assert!(!editor.should_quit);
+}
+
+#[test]
+fn write_file_to_own_externally_modified_path_prompts() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("test.txt");
+    std::fs::write(&file, "original").unwrap();
+
+    let mut editor = Editor::new();
+    editor.open_file(&file).unwrap();
+    editor.execute(Command::InsertChar('X'));
+    // Use the buffer's own (canonicalized) path so this is the
+    // save-to-own-path case, not the overwrite-another-file case.
+    let own_path = editor.current_buffer().path.clone().unwrap();
+
+    externally_modify(&file, "external");
+
+    editor.execute(Command::WriteFile);
+    editor.set_minibuffer_text(&own_path.to_string_lossy());
+    editor.submit_prompt();
+    let prompt = editor.minibuffer.prompt().unwrap();
+    assert!(matches!(prompt.kind, PromptKind::SaveAnywayConfirm { .. }));
+
+    // Declining keeps the on-disk content.
+    editor.set_minibuffer_text("n");
+    editor.submit_prompt();
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "external");
+    assert!(editor.current_buffer().modified);
+
+    // Confirming overwrites.
+    editor.execute(Command::WriteFile);
+    editor.set_minibuffer_text(&own_path.to_string_lossy());
+    editor.submit_prompt();
+    editor.set_minibuffer_text("y");
+    editor.submit_prompt();
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "Xoriginal");
+    assert!(!editor.current_buffer().modified);
+}
+
+#[test]
+fn write_file_to_other_path_asks_overwrite_only_despite_external_change() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("a.txt");
+    let other = dir.path().join("b.txt");
+    std::fs::write(&file, "aaa").unwrap();
+    std::fs::write(&other, "bbb").unwrap();
+
+    let mut editor = Editor::new();
+    editor.open_file(&file).unwrap();
+    editor.execute(Command::InsertChar('X'));
+
+    // The buffer's own file changes on disk, but the write goes to a
+    // different path — only the overwrite confirmation applies, no
+    // double-prompting with the external-modification guard.
+    externally_modify(&file, "external");
+
+    editor.execute(Command::WriteFile);
+    editor.set_minibuffer_text(&other.to_string_lossy());
+    editor.submit_prompt();
+    let prompt = editor.minibuffer.prompt().unwrap();
+    assert!(matches!(prompt.kind, PromptKind::OverwriteConfirm { .. }));
+    editor.set_minibuffer_text("y");
+    editor.submit_prompt();
+    assert!(editor.minibuffer.prompt().is_none());
+    assert_eq!(std::fs::read_to_string(&other).unwrap(), "Xaaa");
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "external");
+}
+
 // === Write-file (C-x C-w) flow ===
 
 #[test]

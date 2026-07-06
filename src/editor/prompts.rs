@@ -121,6 +121,12 @@ impl Editor {
                     );
                     return;
                 }
+                // Writing to the buffer's own path is a save — the
+                // external-modification guard applies (mtime tracking only
+                // covers the buffer's own file).
+                if own_path && self.external_modification_guard(buffer_id, false) {
+                    return;
+                }
                 self.write_buffer_reporting(buffer_id, WriteTarget::Path(path));
             }
             PromptKind::GotoLine => {
@@ -162,13 +168,25 @@ impl Editor {
                 }
                 _ => self.reset_minibuffer_input(),
             },
-            PromptKind::SaveAnywayConfirm { buffer_id } => match input.as_str() {
+            PromptKind::SaveAnywayConfirm {
+                buffer_id,
+                resume_quit,
+            } => match input.as_str() {
                 "y" | "Y" => {
                     self.minibuffer.finish();
-                    self.write_buffer_reporting(buffer_id, WriteTarget::BufferPath);
+                    if resume_quit {
+                        self.quit_save_and_continue(buffer_id);
+                    } else {
+                        self.write_buffer_reporting(buffer_id, WriteTarget::BufferPath);
+                    }
                 }
                 "n" | "N" => {
                     self.minibuffer.finish();
+                    if resume_quit {
+                        // Cancel the whole quit, consistent with a failed
+                        // quit-time save.
+                        self.quit_pending.clear();
+                    }
                     self.minibuffer.show_message("Save cancelled".to_string());
                 }
                 _ => self.reset_minibuffer_input(),
@@ -183,18 +201,15 @@ impl Editor {
                             .find(|b| b.id == buffer_id)
                             .map(|b| (b.path.is_some(), b.name.clone()));
                         match buf_state {
-                            Some((true, name)) => {
-                                match self.write_buffer(buffer_id, WriteTarget::BufferPath) {
-                                    Ok(()) => {
-                                        self.quit_pending.retain(|&id| id != buffer_id);
-                                        self.continue_quit();
-                                    }
-                                    Err(e) => {
-                                        self.quit_pending.clear();
-                                        self.minibuffer
-                                            .show_message(format!("Could not save {name}: {e}"));
-                                    }
+                            Some((true, _)) => {
+                                // The quit-time save honors the external-
+                                // modification guard too; the confirm
+                                // handler resumes the quit on "y" and
+                                // cancels it on "n".
+                                if self.external_modification_guard(buffer_id, true) {
+                                    return;
                                 }
+                                self.quit_save_and_continue(buffer_id);
                             }
                             Some((false, name)) => {
                                 self.quit_pending.clear();
@@ -245,6 +260,32 @@ impl Editor {
             .map(|b| b.id)
             .collect();
         self.continue_quit();
+    }
+
+    /// Save a quit-pending buffer to its own path and resume the quit
+    /// sequence: on success drop it from `quit_pending` and continue with
+    /// the next buffer; on failure cancel the whole quit with a message.
+    fn quit_save_and_continue(&mut self, buffer_id: usize) {
+        let name = match self.buffers.iter().find(|b| b.id == buffer_id) {
+            Some(buf) => buf.name.clone(),
+            None => {
+                // Buffer disappeared in the meantime; skip it.
+                self.quit_pending.retain(|&id| id != buffer_id);
+                self.continue_quit();
+                return;
+            }
+        };
+        match self.write_buffer(buffer_id, WriteTarget::BufferPath) {
+            Ok(()) => {
+                self.quit_pending.retain(|&id| id != buffer_id);
+                self.continue_quit();
+            }
+            Err(e) => {
+                self.quit_pending.clear();
+                self.minibuffer
+                    .show_message(format!("Could not save {name}: {e}"));
+            }
+        }
     }
 
     /// Prompt for the next still-modified buffer awaiting a quit-time save
