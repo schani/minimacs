@@ -1475,6 +1475,84 @@ mod tests {
         assert_eq!(app.editor.point(), 0);
     }
 
+    #[test]
+    fn failing_isearch_shows_failing_label() {
+        let mut events = vec![ctrl('s')];
+        events.extend(key_events("zzz"));
+        let (mut app, mut events) = test_app_with_text(40, 10, "hello world", events);
+        app.run_until_idle(&mut events).unwrap();
+        let screen = capture_screen(&app.terminal);
+        assert!(screen.contains("Failing I-search: zzz"), "screen: {screen}");
+    }
+
+    #[test]
+    fn failing_isearch_backward_shows_failing_label() {
+        let mut events = vec![ctrl('r')];
+        events.extend(key_events("zzz"));
+        let (mut app, mut events) = test_app_with_text(40, 10, "hello world", events);
+        app.run_until_idle(&mut events).unwrap();
+        let screen = capture_screen(&app.terminal);
+        assert!(
+            screen.contains("Failing I-search backward: zzz"),
+            "screen: {screen}"
+        );
+    }
+
+    #[test]
+    fn isearch_backspace_to_match_restores_normal_label() {
+        let mut events = vec![ctrl('s')];
+        events.extend(key_events("hez")); // "he" matches, "hez" fails
+        events.push(key(KeyCode::Backspace)); // back to "he"
+        let (mut app, mut events) = test_app_with_text(40, 10, "hello world", events);
+        app.run_until_idle(&mut events).unwrap();
+        let screen = capture_screen(&app.terminal);
+        assert!(screen.contains("I-search: he"), "screen: {screen}");
+        assert!(!screen.contains("Failing"), "screen: {screen}");
+    }
+
+    #[test]
+    fn no_stale_failing_message_after_isearch_accepts() {
+        let mut events = vec![ctrl('s')];
+        events.extend(key_events("z")); // fails
+        events.push(key(KeyCode::Backspace));
+        events.extend(key_events("h")); // matches
+        events.push(key(KeyCode::Enter)); // accept
+        let (mut app, mut events) = test_app_with_text(40, 10, "hello world", events);
+        app.run_until_idle(&mut events).unwrap();
+        assert!(app.editor.isearch.is_none());
+        assert_eq!(app.editor.minibuffer.message, None);
+        let screen = capture_screen(&app.terminal);
+        assert!(!screen.contains("Failing"), "screen: {screen}");
+    }
+
+    #[test]
+    fn mark_set_during_prompt_does_not_reappear_after_finish() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("marked.txt");
+        std::fs::write(&file, "content").unwrap();
+
+        let mut events = vec![ctrl('x'), ctrl('f')]; // find-file prompt
+        events.push(ctrl(' ')); // SetMark queues "Mark set" while prompt is up
+        for _ in 0..200 {
+            events.push(key(KeyCode::Backspace)); // clear the default input
+        }
+        for c in file.to_string_lossy().chars() {
+            events.push(char_key(c));
+        }
+        events.push(key(KeyCode::Enter)); // submit
+
+        let (mut app, mut events) = test_app(40, 10, events);
+        app.run_until_idle(&mut events).unwrap();
+        assert_eq!(app.editor.buffer_text(), "content");
+        // The legit post-finish message shows; the stale "Mark set" doesn't.
+        assert_eq!(
+            app.editor.minibuffer.message,
+            Some("Opened marked.txt".to_string())
+        );
+        let screen = capture_screen(&app.terminal);
+        assert!(!screen.contains("Mark set"), "screen: {screen}");
+    }
+
     // === Minibuffer integration tests ===
 
     #[test]

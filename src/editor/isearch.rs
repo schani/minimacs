@@ -24,6 +24,20 @@ pub struct ISearchState {
     /// Char positions of all matches, recomputed once per query change.
     /// Navigation and rendering read this instead of rescanning the buffer.
     pub matches: Vec<usize>,
+    /// Whether the last search action failed to find a match. Shown in the
+    /// prompt label ("Failing I-search: "), like emacs.
+    pub failing: bool,
+}
+
+/// The isearch prompt label for the given state — the label is live: it
+/// tracks direction changes and failing searches while the prompt is up.
+fn isearch_label(direction: SearchDirection, failing: bool) -> &'static str {
+    match (direction, failing) {
+        (SearchDirection::Forward, false) => "I-search: ",
+        (SearchDirection::Forward, true) => "Failing I-search: ",
+        (SearchDirection::Backward, false) => "I-search backward: ",
+        (SearchDirection::Backward, true) => "Failing I-search backward: ",
+    }
 }
 
 impl Editor {
@@ -42,12 +56,22 @@ impl Editor {
             original_scroll_row_offset: pane.scroll_row_offset,
             current_match: None,
             matches: Vec::new(),
+            failing: false,
         });
-        let label = match direction {
-            SearchDirection::Forward => "I-search: ",
-            SearchDirection::Backward => "I-search backward: ",
+        self.start_minibuffer_prompt(PromptKind::ISearch, isearch_label(direction, false));
+    }
+
+    /// Sync the prompt label with the current search state. Called after
+    /// every state change (query edit, cycling, direction flip) so the
+    /// label always shows the current direction and failing status.
+    fn isearch_sync_label(&mut self) {
+        let Some(isearch) = &self.isearch else {
+            return;
         };
-        self.start_minibuffer_prompt(PromptKind::ISearch, label);
+        let label = isearch_label(isearch.direction, isearch.failing);
+        if let Some(prompt) = self.minibuffer.prompt_mut() {
+            prompt.label = label.to_string();
+        }
     }
 
     /// Find the char positions of all occurrences of `query` in the buffer.
@@ -123,7 +147,9 @@ impl Editor {
             if let Some(ref mut isearch) = self.isearch {
                 isearch.current_match = None;
                 isearch.matches.clear();
+                isearch.failing = false;
             }
+            self.isearch_sync_label();
             return;
         }
 
@@ -141,16 +167,15 @@ impl Editor {
         };
         if let Some(ref mut isearch) = self.isearch {
             isearch.matches = matches;
+            isearch.failing = found.is_none();
         }
 
         if let Some(char_pos) = found {
             self.isearch_goto_match(char_pos);
-        } else {
-            self.minibuffer.show_message("Failing I-search".to_string());
-            if let Some(ref mut isearch) = self.isearch {
-                isearch.current_match = None;
-            }
+        } else if let Some(ref mut isearch) = self.isearch {
+            isearch.current_match = None;
         }
+        self.isearch_sync_label();
     }
 
     /// Append pasted text to the isearch query (emacs `isearch-yank`).
@@ -173,11 +198,11 @@ impl Editor {
 
     /// Cycle to next/previous match during isearch, using the cached matches.
     pub fn isearch_next(&mut self) {
-        let (query, found) = match &self.isearch {
+        let found = match &self.isearch {
             Some(s) if !s.query.is_empty() => {
                 let current_point = self.pane_tree.focused_pane().point;
                 let query_len = s.query.chars().count();
-                let found = match s.direction {
+                match s.direction {
                     SearchDirection::Forward => {
                         s.matches.iter().copied().find(|&p| p > current_point)
                     }
@@ -187,18 +212,24 @@ impl Editor {
                         .copied()
                         .rev()
                         .find(|&p| p + query_len <= current_point),
-                };
-                (s.query.clone(), found)
+                }
             }
-            _ => return,
+            Some(_) => {
+                // Empty query, but C-s/C-r may have just flipped the
+                // direction — keep the label's direction current.
+                self.isearch_sync_label();
+                return;
+            }
+            None => return,
         };
 
+        if let Some(ref mut isearch) = self.isearch {
+            isearch.failing = found.is_none();
+        }
         if let Some(char_pos) = found {
             self.isearch_goto_match(char_pos);
-        } else {
-            self.minibuffer
-                .show_message(format!("Failing I-search: {query}"));
         }
+        self.isearch_sync_label();
     }
 
     /// Accept the current isearch position.

@@ -502,6 +502,13 @@ All confirmation prompts treat an unrecognized answer the same way: the input
 is cleared and the prompt re-asks (the prompt state stays alive); only a
 recognized answer finishes the prompt.
 
+Message lifecycle: `message` is only rendered while the minibuffer is idle —
+a prompt hides it. To keep a message queued during a prompt (e.g. "Mark set"
+from `C-SPC`) from reappearing stale afterwards, every prompt exit clears it:
+`start_prompt()` and `finish()` set `message = None`, and `cancel()` replaces
+it with "Quit". Handlers that want a result message ("Wrote file.txt",
+"Opened file.txt") therefore show it *after* calling `finish()`.
+
 ### Minibuffer as a Real Buffer
 
 The minibuffer uses a real `Buffer` (`minibuffer_buffer`, id=`usize::MAX`) and
@@ -595,6 +602,15 @@ char positions of all matches in `ISearchState::matches`, then jumps to the
 first match from the original position. `C-s`/`C-r` during search cycle to the
 next/previous match by walking the cached list — no rescan. Enter accepts the
 position. `C-g` restores the original position.
+
+The prompt label is live, like emacs: it is recomputed from the search state
+(`isearch_sync_label`) after every query edit, cycle, and direction flip.
+Normally it reads "I-search: " / "I-search backward: "; when the last search
+action found no match (`ISearchState::failing`) it becomes "Failing
+I-search: " / "Failing I-search backward: ". Failure is shown only in the
+label — never as a queued minibuffer message, which would be invisible behind
+the prompt and reappear stale after it ends (see the Minibuffer section's
+message lifecycle).
 
 `isearch_matches()` (used by the renderer every frame) also just reads the
 cache. The only O(buffer) work is the single scan per query change.

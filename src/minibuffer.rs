@@ -322,8 +322,12 @@ impl Minibuffer {
         self.completion_page = 0;
     }
 
+    /// End a prompt. Clears any message queued while the prompt was active
+    /// (it was never rendered and would reappear stale); handlers that want
+    /// a result message show it after calling `finish`.
     pub fn finish(&mut self) {
         self.state = MinibufferState::Idle;
+        self.message = None;
         self.completions = None;
         self.completion_page = 0;
     }
@@ -426,6 +430,25 @@ mod tests {
         assert!(mb.is_active());
         mb.finish();
         assert!(!mb.is_active());
+    }
+
+    #[test]
+    fn finish_clears_stale_message() {
+        // A message queued while a prompt is active (it isn't rendered then)
+        // must not reappear after the prompt finishes.
+        let mut mb = Minibuffer::new();
+        mb.start_prompt(PromptKind::FindFile, "Find file: ");
+        mb.show_message("Mark set".to_string());
+        mb.finish();
+        assert_eq!(mb.message, None);
+    }
+
+    #[test]
+    fn start_prompt_clears_message() {
+        let mut mb = Minibuffer::new();
+        mb.show_message("old".to_string());
+        mb.start_prompt(PromptKind::FindFile, "Find file: ");
+        assert_eq!(mb.message, None);
     }
 
     #[test]

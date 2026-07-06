@@ -2190,9 +2190,12 @@ fn isearch_no_match() {
         isearch.query = "xyz".to_string();
     }
     editor.isearch_update();
+    // A failing search shows in the prompt label, not as a queued message.
+    assert_eq!(editor.minibuffer.message, None);
+    assert!(editor.isearch.as_ref().unwrap().failing);
     assert_eq!(
-        editor.minibuffer.message,
-        Some("Failing I-search".to_string())
+        editor.minibuffer.prompt().unwrap().label,
+        "Failing I-search: "
     );
 }
 
@@ -2204,13 +2207,15 @@ fn isearch_next_no_more_matches() {
         isearch.query = "hello".to_string();
     }
     editor.isearch_update();
+    assert_eq!(editor.minibuffer.prompt().unwrap().label, "I-search: ");
     // Try to cycle — no more matches
     editor.isearch_next();
+    assert!(editor.isearch.as_ref().unwrap().failing);
     assert!(editor
         .minibuffer
-        .message
-        .as_ref()
+        .prompt()
         .unwrap()
+        .label
         .contains("Failing"));
 }
 
