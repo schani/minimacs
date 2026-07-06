@@ -7,7 +7,9 @@ This document describes the internal architecture of minimacs.
 minimacs is a synchronous, single-threaded terminal text editor. There is no
 async runtime. The event loop polls for terminal events with a 100ms timeout;
 when an event arrives it is processed and the UI re-renders. Poll timeouts
-skip the render entirely — an idle minimacs does no drawing work. Per-frame
+and events that cannot have changed state (bare mouse motion, key releases,
+focus changes) skip the render entirely — an idle minimacs does no drawing
+work, even with the mouse waving over it. Per-frame
 work is bounded by the viewport (the syntax style map and cursor-row
 computation don't scale with file size), and ratatui diffs the terminal
 output.
@@ -338,8 +340,17 @@ installed hook so the panic message prints on the normal screen.
 2. Pass the event to `dispatch_event()`, the single dispatcher that routes
    every event kind (key, paste, mouse, resize) to its handler. The
    dispatcher is the one place that decides, per event kind, what happens to
-   the pending input state (see below).
-3. After each event: update viewport dimensions for all panes, then render.
+   the pending input state (see below), and returns whether the event may
+   have changed visible state.
+3. Only if it may have: update viewport dimensions for all panes, then
+   render. Per event kind: key Press/Repeat, paste, left-button mouse down,
+   mouse scroll, and resize render (key presses conservatively so — whether
+   a command actually changed anything is the editor's business); key
+   Release, bare mouse motion, drags, button releases, non-left buttons,
+   and focus gain/loss are discarded without a render. This matters because
+   `EnableMouseCapture` turns on any-motion tracking (mode 1003): bare
+   mouse movement floods `Moved` events, each of which would otherwise be a
+   full redraw (crossterm 0.29 offers no button-motion-only capture mode).
 4. Loop until `editor.should_quit`.
 
 `Poll::Closed` means no further input can ever arrive (e.g. a tty hangup),
@@ -386,11 +397,14 @@ indicator).
 
 ### Other event kinds
 
-Paste and mouse events cancel any pending input first (cancel-then-handle):
-the dispatcher calls `InputState::reset()` before handling them, so a paste
-or click mid-chord cancels the chord (and any pending ESC) and then performs
-the paste/click normally. This only touches the chord/ESC state — isearch is
-not pending input and is unaffected.
+Paste and *acted-on* mouse events — left-button down and scroll — cancel any
+pending input first (cancel-then-handle): the dispatcher calls
+`InputState::reset()` before handling them, so a paste or click mid-chord
+cancels the chord (and any pending ESC) and then performs the paste/click
+normally. This only touches the chord/ESC state — isearch is not pending
+input and is unaffected. Discarded mouse events (bare motion, drags, button
+releases, non-left buttons) touch nothing: under any-motion tracking, merely
+moving the mouse over the terminal must not cancel a chord in progress.
 
 `Event::Paste(text)` inserts the pasted text at point as a single undo group.
 When incremental search is active, the dispatcher instead routes the paste to

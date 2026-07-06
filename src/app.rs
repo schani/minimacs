@@ -16,6 +16,10 @@ pub struct App<B: Backend> {
     pub editor: Editor,
     pub terminal: Terminal<B>,
     input: InputState,
+    /// Number of `render()` calls, so tests can assert that discarded
+    /// events (mouse motion, key releases, focus changes) skip the redraw.
+    #[cfg(test)]
+    renders: usize,
 }
 
 /// All partially-consumed input state, gathered in one place:
@@ -84,6 +88,8 @@ where
             editor,
             terminal,
             input: InputState::new(),
+            #[cfg(test)]
+            renders: 0,
         }
     }
 
@@ -104,30 +110,39 @@ where
                 // restores the terminal on this error path.
                 Poll::Closed => anyhow::bail!("event source closed"),
             };
-            self.dispatch_event(event);
+            let state_changed = self.dispatch_event(event);
             if self.editor.should_quit {
                 break;
             }
 
-            self.update_viewport();
-            self.render()?;
+            // Discarded events (bare mouse motion, key releases, focus
+            // changes) change nothing, so skip the redraw. Any-motion mouse
+            // tracking (mode 1003) floods `Moved` events on bare movement;
+            // rendering each one is a render storm.
+            if state_changed {
+                self.update_viewport();
+                self.render()?;
+            }
         }
         Ok(())
     }
 
-    /// Run until all events are consumed (for tests).
+    /// Run until all events are consumed (for tests). Mirrors `run()`'s
+    /// render gating so tests can assert which events cause a redraw.
     #[cfg(test)]
     pub fn run_until_idle(&mut self, event_source: &mut dyn EventSource) -> Result<()> {
         self.update_viewport();
         self.render()?;
 
         while let Poll::Event(event) = event_source.next_event() {
-            self.dispatch_event(event);
+            let state_changed = self.dispatch_event(event);
             if self.editor.should_quit {
                 break;
             }
-            self.update_viewport();
-            self.render()?;
+            if state_changed {
+                self.update_viewport();
+                self.render()?;
+            }
         }
         Ok(())
     }
@@ -135,20 +150,30 @@ where
     /// Route one input event to its handler. This is the single place that
     /// decides, per event kind, what happens to the pending input state
     /// (`InputState`): key events consume or reset it inside `handle_key`;
-    /// paste and mouse events cancel any pending chord and pending ESC
-    /// before being handled (cancel-then-handle, so a click mid-chord both
-    /// cancels the chord and performs the click); a resize intentionally
-    /// leaves a chord in progress alone.
-    fn dispatch_event(&mut self, event: Event) {
+    /// paste and acted-on mouse events (left click, scroll) cancel any
+    /// pending chord and pending ESC before being handled
+    /// (cancel-then-handle, so a click mid-chord both cancels the chord and
+    /// performs the click); discarded mouse events (bare motion, drags,
+    /// button releases, non-left buttons) touch nothing — merely moving the
+    /// mouse over the terminal must not cancel a chord — and a resize
+    /// intentionally leaves a chord in progress alone.
+    ///
+    /// Returns whether the event may have changed visible state; `run()`
+    /// skips the redraw when it did not. Key presses conservatively report
+    /// true — whether a command actually changed anything is the editor's
+    /// business, and over-rendering a keystroke is cheap.
+    fn dispatch_event(&mut self, event: Event) -> bool {
         match event {
             Event::Key(key_event) => {
                 // Act only on Press and Repeat (a held key must still
                 // repeat). Windows and kitty-protocol terminals also report
                 // Release events; letting those through would execute every
                 // keystroke twice.
-                if key_event.kind != KeyEventKind::Release {
-                    self.handle_key(key_event);
+                if key_event.kind == KeyEventKind::Release {
+                    return false;
                 }
+                self.handle_key(key_event);
+                true
             }
             Event::Paste(text) => {
                 self.input.reset(&mut self.editor);
@@ -159,13 +184,26 @@ where
                 } else {
                     self.handle_paste(&text);
                 }
+                true
             }
-            Event::Mouse(mouse_event) => {
-                self.input.reset(&mut self.editor);
-                self.handle_mouse(mouse_event);
-            }
-            Event::Resize(_, _) => {}
-            _ => {}
+            Event::Mouse(mouse_event) => match mouse_event.kind {
+                MouseEventKind::Down(MouseButton::Left)
+                | MouseEventKind::ScrollUp
+                | MouseEventKind::ScrollDown => {
+                    self.input.reset(&mut self.editor);
+                    self.handle_mouse(mouse_event);
+                    true
+                }
+                // Everything else is discarded without touching any state:
+                // any-motion tracking (mode 1003) reports every bare mouse
+                // movement, so motion must neither cancel a pending chord
+                // nor trigger a render.
+                _ => false,
+            },
+            // ratatui needs a redraw to re-layout after a resize.
+            Event::Resize(_, _) => true,
+            // FocusGained/FocusLost: no handler, nothing changed.
+            _ => false,
         }
     }
 
@@ -558,6 +596,10 @@ where
     }
 
     pub fn render(&mut self) -> Result<()> {
+        #[cfg(test)]
+        {
+            self.renders += 1;
+        }
         let editor = &self.editor;
         self.terminal.draw(|frame| {
             render::render(frame, editor);
@@ -773,6 +815,30 @@ mod tests {
         let result = app.run(&mut source);
         assert!(result.is_err());
         assert_eq!(app.editor.buffer_text(), "a");
+    }
+
+    #[test]
+    fn run_skips_render_for_discarded_events() {
+        // The production loop must not redraw after events that changed
+        // nothing: any-motion mouse tracking (mode 1003) floods Moved
+        // events on bare movement, each of which used to be a full render.
+        let (mut app, _) = test_app(40, 10, vec![]);
+        let mut source = ScriptedEventSource {
+            polls: [
+                Poll::Event(mouse_moved(1, 1)),
+                Poll::Event(mouse_moved(2, 1)),
+                Poll::Event(char_key('a')),
+                Poll::Event(mouse_moved(3, 1)),
+                Poll::Closed,
+            ]
+            .into(),
+        };
+        let _ = app.run(&mut source);
+        assert_eq!(app.editor.buffer_text(), "a");
+        assert_eq!(
+            app.renders, 2,
+            "initial render plus one for the keystroke; none for motion"
+        );
     }
 
     #[test]
@@ -2415,6 +2481,15 @@ mod tests {
         })
     }
 
+    fn mouse_moved(x: u16, y: u16) -> Event {
+        Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: x,
+            row: y,
+            modifiers: KeyModifiers::NONE,
+        })
+    }
+
     fn mouse_scroll_down(x: u16, y: u16) -> Event {
         Event::Mouse(MouseEvent {
             kind: MouseEventKind::ScrollDown,
@@ -3050,5 +3125,99 @@ mod tests {
             6,
             "point at the match for the refined query"
         );
+    }
+
+    // === Render gating tests ===
+    //
+    // `EnableMouseCapture` turns on any-motion tracking (mode 1003), so bare
+    // mouse movement floods `Moved` events. Discarded events must not
+    // trigger a render (or moving the mouse over the terminal becomes a
+    // render storm). The run loop renders once up front; only events that
+    // may have changed state render again.
+
+    #[test]
+    fn mouse_motion_does_not_render() {
+        let events = vec![mouse_moved(1, 1), mouse_moved(2, 1), mouse_moved(3, 2)];
+        let (mut app, mut events) = test_app_with_text(40, 10, "hello", events);
+        app.run_until_idle(&mut events).unwrap();
+        assert_eq!(app.renders, 1, "only the initial render, none per motion");
+    }
+
+    #[test]
+    fn discarded_mouse_kinds_do_not_render() {
+        // Drag, button release, and non-left buttons are discarded by
+        // handle_mouse; none of them may trigger a render.
+        let discarded = [
+            MouseEventKind::Drag(MouseButton::Left),
+            MouseEventKind::Up(MouseButton::Left),
+            MouseEventKind::Down(MouseButton::Right),
+            MouseEventKind::Down(MouseButton::Middle),
+        ];
+        let events = discarded
+            .iter()
+            .map(|&kind| {
+                Event::Mouse(MouseEvent {
+                    kind,
+                    column: 1,
+                    row: 1,
+                    modifiers: KeyModifiers::NONE,
+                })
+            })
+            .collect();
+        let (mut app, mut events) = test_app_with_text(40, 10, "hello", events);
+        app.run_until_idle(&mut events).unwrap();
+        assert_eq!(app.renders, 1, "only the initial render");
+    }
+
+    #[test]
+    fn mouse_click_and_scroll_render() {
+        let events = vec![mouse_click(2, 1), mouse_scroll_down(2, 1)];
+        let (mut app, mut events) = test_app_with_text(40, 10, "hello\nworld", events);
+        app.run_until_idle(&mut events).unwrap();
+        assert_eq!(app.renders, 3, "initial render plus one per acted-on event");
+    }
+
+    #[test]
+    fn key_release_does_not_render() {
+        let events = vec![release(KeyCode::Char('a'), KeyModifiers::NONE)];
+        let (mut app, mut events) = test_app_with_text(40, 10, "hello", events);
+        app.run_until_idle(&mut events).unwrap();
+        assert_eq!(app.renders, 1, "only the initial render");
+    }
+
+    #[test]
+    fn focus_events_do_not_render() {
+        let events = vec![Event::FocusGained, Event::FocusLost];
+        let (mut app, mut events) = test_app_with_text(40, 10, "hello", events);
+        app.run_until_idle(&mut events).unwrap();
+        assert_eq!(app.renders, 1, "only the initial render");
+    }
+
+    #[test]
+    fn key_press_and_resize_render() {
+        let events = vec![char_key('a'), Event::Resize(50, 12)];
+        let (mut app, mut events) = test_app_with_text(40, 10, "hello", events);
+        app.run_until_idle(&mut events).unwrap();
+        assert_eq!(app.renders, 3, "initial render plus one per event");
+    }
+
+    #[test]
+    fn mouse_motion_does_not_cancel_pending_chord() {
+        // Bare mouse motion is discarded, so it must NOT cancel a pending
+        // chord: C-x <motion> 2 still completes C-x 2 (split). Only mouse
+        // events that are acted on (left click, scroll) cancel the chord —
+        // otherwise merely moving the mouse over the terminal would kill
+        // every chord mid-way under any-motion tracking.
+        let events = vec![ctrl('x'), mouse_moved(5, 3), char_key('2')];
+        let (mut app, mut events) = test_app_with_text(40, 10, "hello\nworld", events);
+        app.run_until_idle(&mut events).unwrap();
+
+        let screen = capture_screen(&app.terminal);
+        let mode_line_count = screen.lines().filter(|l| l.contains("--")).count();
+        assert!(
+            mode_line_count >= 2,
+            "C-x 2 across mouse motion should split, screen:\n{screen}"
+        );
+        assert_eq!(app.editor.pending_keys, "", "chord completed");
     }
 }
