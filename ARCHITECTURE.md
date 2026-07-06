@@ -145,6 +145,16 @@ Text is stored in a `ropey::Rope`. Each buffer has an independent undo history
 and optional syntax highlighting state. Buffers have no cursor -- cursor
 position is per-pane.
 
+Line-break stripping follows ropey's own line-break set (its default
+`unicode_lines` feature: LF, CRLF, lone CR, VT, FF, NEL, LS, PS). The single
+authority is `buffer::line_break_len_chars(line)` — the char length (0, 1,
+or 2) of the break terminating a ropey line slice. `Buffer::line_len_chars`,
+the renderer's line extraction (display, wrapping, mouse mapping, syntax
+styling), and kill-line's at-EOL break removal all use it, so movement
+(`C-e`, column clamping), display, and editing agree with where ropey breaks
+lines. This is display/movement only — `LineEnding` (what `RET` inserts and
+paste normalizes to) remains LF-vs-CRLF.
+
 Saving is atomic: `Buffer::save()` writes to a temp file in the target's
 directory, copies the target's permissions, fsyncs, and renames over the
 target, so a crash or full disk mid-write cannot destroy the existing file.

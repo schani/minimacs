@@ -2387,6 +2387,39 @@ mod tests {
     }
 
     #[test]
+    fn mouse_click_beyond_eol_of_form_feed_line_stops_before_break() {
+        // FF is a line break: "one" / "two". Clicking way past EOL of
+        // line 0 must place point before the FF, not on or after it.
+        let text = "one\u{0c}two\n";
+        let events = vec![mouse_click(10, 0)];
+        let (mut app, mut events) = test_app_with_text(20, 6, text, events);
+        app.run_until_idle(&mut events).unwrap();
+        assert_eq!(app.editor.point(), 3, "point must stop before the FF");
+    }
+
+    #[test]
+    fn mouse_click_on_line_after_form_feed_break_maps_to_that_line() {
+        let text = "one\u{0c}two\n";
+        let events = vec![mouse_click(1, 1)];
+        let (mut app, mut events) = test_app_with_text(20, 6, text, events);
+        app.run_until_idle(&mut events).unwrap();
+        assert_eq!(app.editor.point(), 5); // col 1 of "two"
+    }
+
+    #[test]
+    fn lone_cr_line_breaks_render_as_separate_lines() {
+        // Old-Mac style file: the \r breaks must not leak into the
+        // rendered rows.
+        let text = "x\ry\r";
+        let (mut app, mut events) = test_app_with_text(20, 6, text, vec![]);
+        app.run_until_idle(&mut events).unwrap();
+        let screen = capture_screen(&app.terminal);
+        let lines: Vec<&str> = screen.lines().collect();
+        assert_eq!(lines[0], "x");
+        assert_eq!(lines[1], "y");
+    }
+
+    #[test]
     fn mouse_click_after_leading_tab_uses_visual_column() {
         let text = "\tfoo";
         let events = vec![mouse_click(4, 0)]; // visual column 4 is after the tab

@@ -2061,6 +2061,71 @@ fn kill_line_at_eol_removes_whole_crlf() {
     assert_eq!(editor.clipboard, "\r\n");
 }
 
+// === Unicode line breaks (ropey's full break set) ===
+
+#[test]
+fn end_of_line_stops_before_form_feed_break() {
+    // FF is a line break for ropey: line 0 is "a", line 1 is "b".
+    let mut editor = Editor::new_with_text("a\u{0c}b\n");
+    editor.execute(Command::EndOfLine);
+    assert_eq!(editor.point(), 1, "C-e must stop before the FF");
+}
+
+#[test]
+fn kill_line_at_eol_removes_form_feed_break() {
+    let mut editor = Editor::new_with_text("a\u{0c}b\n");
+    editor.pane_tree.focused_pane_mut().point = 1; // EOL of line 0
+    editor.execute(Command::KillLine);
+    assert_eq!(editor.buffer_text(), "ab\n");
+    assert_eq!(editor.clipboard, "\u{0c}");
+}
+
+#[test]
+fn end_of_line_stops_before_lone_cr_breaks() {
+    // Old-Mac style file: lone \r line breaks.
+    let mut editor = Editor::new_with_text("x\ry\r");
+    editor.execute(Command::EndOfLine);
+    assert_eq!(editor.point(), 1);
+    editor.execute(Command::NextLine);
+    editor.execute(Command::EndOfLine);
+    assert_eq!(editor.point(), 3);
+}
+
+#[test]
+fn kill_line_at_eol_removes_lone_cr_break() {
+    let mut editor = Editor::new_with_text("x\ry\r");
+    editor.pane_tree.focused_pane_mut().point = 1; // EOL of line 0
+    editor.execute(Command::KillLine);
+    assert_eq!(editor.buffer_text(), "xy\r");
+    assert_eq!(editor.clipboard, "\r");
+}
+
+#[test]
+fn end_of_line_stops_before_unicode_line_separator() {
+    let mut editor = Editor::new_with_text("ab\u{2028}cd");
+    editor.execute(Command::EndOfLine);
+    assert_eq!(editor.point(), 2);
+}
+
+#[test]
+fn kill_line_at_eol_removes_unicode_line_separator() {
+    let mut editor = Editor::new_with_text("ab\u{2028}cd");
+    editor.pane_tree.focused_pane_mut().point = 2; // EOL of line 0
+    editor.execute(Command::KillLine);
+    assert_eq!(editor.buffer_text(), "abcd");
+    assert_eq!(editor.clipboard, "\u{2028}");
+}
+
+#[test]
+fn next_line_clamps_column_before_form_feed_break() {
+    // Line 0 "hello" col 4; line 1 is "ab" ending in FF — clamping must
+    // stop before the FF, not on or after it.
+    let mut editor = Editor::new_with_text("hello\nab\u{0c}x");
+    editor.pane_tree.focused_pane_mut().point = 4;
+    editor.execute(Command::NextLine);
+    assert_eq!(editor.point(), 8, "col must clamp before the FF");
+}
+
 // === Non-ASCII (char-vs-byte) correctness ===
 
 #[test]

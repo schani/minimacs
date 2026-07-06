@@ -1,5 +1,5 @@
 use anyhow::{bail, Result};
-use ropey::Rope;
+use ropey::{Rope, RopeSlice};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -20,6 +20,36 @@ impl LineEnding {
             LineEnding::Lf => "\n",
             LineEnding::CrLf => "\r\n",
         }
+    }
+}
+
+/// True for chars ropey treats as line breaks (with its default
+/// `unicode_lines` feature): LF, VT, FF, CR, NEL, LS, PS.
+fn is_line_break_char(ch: char) -> bool {
+    matches!(
+        ch,
+        '\n' | '\u{0b}' | '\u{0c}' | '\r' | '\u{85}' | '\u{2028}' | '\u{2029}'
+    )
+}
+
+/// Char length of the line break terminating a ropey line slice: 0 (the
+/// final line, or an empty buffer), 2 for CRLF, 1 for every other break
+/// in ropey's set. Every consumer that strips a line's break — line
+/// lengths, rendering, mouse mapping, kill-line — must use this so it
+/// agrees with where ropey actually breaks lines.
+pub(crate) fn line_break_len_chars(line: RopeSlice) -> usize {
+    let len = line.len_chars();
+    if len == 0 {
+        return 0;
+    }
+    let last = line.char(len - 1);
+    if !is_line_break_char(last) {
+        return 0;
+    }
+    if last == '\n' && len >= 2 && line.char(len - 2) == '\r' {
+        2
+    } else {
+        1
     }
 }
 
@@ -249,24 +279,10 @@ impl Buffer {
         line_start + col.min(line_len)
     }
 
-    /// Length of line in chars, excluding newline.
+    /// Length of line in chars, excluding its terminating line break.
     pub fn line_len_chars(&self, line_idx: usize) -> usize {
         let line = self.text.line(line_idx);
-        let len = line.len_chars();
-        // Subtract trailing newline chars
-        if len == 0 {
-            return 0;
-        }
-        let last = line.char(len - 1);
-        if last == '\n' {
-            if len >= 2 && line.char(len - 2) == '\r' {
-                len - 2
-            } else {
-                len - 1
-            }
-        } else {
-            len
-        }
+        line.len_chars() - line_break_len_chars(line)
     }
 
     /// Insert a string at the given char offset.
@@ -400,6 +416,46 @@ mod tests {
         assert_eq!(buf.line_len_chars(0), 5); // "hello"
         assert_eq!(buf.line_len_chars(1), 5); // "world"
         assert_eq!(buf.line_len_chars(2), 0); // empty last line
+    }
+
+    /// Every line break ropey recognizes (with its default `unicode_lines`
+    /// feature): LF, CRLF, lone CR, VT, FF, NEL, LS, PS.
+    const ROPEY_LINE_BREAKS: [&str; 8] = [
+        "\n", "\r\n", "\r", "\u{0b}", "\u{0c}", "\u{85}", "\u{2028}", "\u{2029}",
+    ];
+
+    #[test]
+    fn line_len_chars_excludes_every_ropey_line_break() {
+        for br in ROPEY_LINE_BREAKS {
+            let buf = Buffer::from_str(0, "test", &format!("ab{br}cd{br}"));
+            assert_eq!(buf.line_count(), 3, "ropey must break on {br:?}");
+            assert_eq!(buf.line_len_chars(0), 2, "line 0 with break {br:?}");
+            assert_eq!(buf.line_len_chars(1), 2, "line 1 with break {br:?}");
+            assert_eq!(buf.line_len_chars(2), 0, "line 2 with break {br:?}");
+        }
+    }
+
+    #[test]
+    fn line_break_len_chars_matches_ropey_breaks() {
+        for br in ROPEY_LINE_BREAKS {
+            let buf = Buffer::from_str(0, "test", &format!("ab{br}cd"));
+            let expected = br.chars().count();
+            assert_eq!(
+                line_break_len_chars(buf.text.line(0)),
+                expected,
+                "break {br:?}"
+            );
+            assert_eq!(line_break_len_chars(buf.text.line(1)), 0, "final line");
+        }
+        let empty = Buffer::from_str(0, "test", "");
+        assert_eq!(line_break_len_chars(empty.text.line(0)), 0);
+    }
+
+    #[test]
+    fn line_col_to_char_clamps_before_line_break() {
+        // Form feed is a line break: col clamps to 1, before the FF.
+        let buf = Buffer::from_str(0, "test", "a\u{0c}b\n");
+        assert_eq!(buf.line_col_to_char(0, 10), 1);
     }
 
     #[test]

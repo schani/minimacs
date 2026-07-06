@@ -203,12 +203,9 @@ pub(crate) fn char_width(ch: char) -> usize {
 }
 
 fn line_chars_without_ending(buf: &Buffer, line_idx: usize) -> Vec<char> {
-    let line_text: String = buf.text.line(line_idx).chars().collect();
-    line_text
-        .trim_end_matches('\n')
-        .trim_end_matches('\r')
-        .chars()
-        .collect()
+    let line = buf.text.line(line_idx);
+    let keep = line.len_chars() - crate::buffer::line_break_len_chars(line);
+    line.chars().take(keep).collect()
 }
 
 fn tab_width_at(visual_col: usize) -> usize {
@@ -632,8 +629,9 @@ fn compute_syntax_char_styles(
 
     for line_idx in first_visible..last_visible {
         let line_byte_start = buf.text.line_to_byte(line_idx) - first_visible_byte;
-        let line_text: String = buf.text.line(line_idx).chars().collect();
-        let line_text = line_text.trim_end_matches('\n').trim_end_matches('\r');
+        let line = buf.text.line(line_idx);
+        let keep = line.len_chars() - crate::buffer::line_break_len_chars(line);
+        let line_text: String = line.chars().take(keep).collect();
 
         let mut byte_offset = line_byte_start;
         for (col, ch) in line_text.chars().enumerate() {
@@ -1028,6 +1026,31 @@ mod tests {
         assert_eq!(buffer_col_for_visual_col(&buf, 0, 1), 1);
         assert_eq!(buffer_col_for_visual_col(&buf, 0, 2), 1);
         assert_eq!(buffer_col_for_visual_col(&buf, 0, 3), 2);
+    }
+
+    #[test]
+    fn line_chars_without_ending_strips_every_ropey_break() {
+        // The full break set ropey recognizes with its default
+        // `unicode_lines` feature.
+        for br in [
+            "\n", "\r\n", "\r", "\u{0b}", "\u{0c}", "\u{85}", "\u{2028}", "\u{2029}",
+        ] {
+            let buf = Buffer::from_str(0, "test", &format!("ab{br}cd"));
+            assert_eq!(
+                line_chars_without_ending(&buf, 0),
+                vec!['a', 'b'],
+                "break {br:?}"
+            );
+            assert_eq!(line_chars_without_ending(&buf, 1), vec!['c', 'd']);
+        }
+    }
+
+    #[test]
+    fn buffer_col_for_visual_col_stops_before_form_feed_break() {
+        // Clicking beyond EOL of an FF-terminated line must land before
+        // the FF, not on or past it.
+        let buf = Buffer::from_str(0, "test", "one\u{0c}two\n");
+        assert_eq!(buffer_col_for_visual_col(&buf, 0, 10), 3);
     }
 
     #[test]

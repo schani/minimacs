@@ -1122,12 +1122,8 @@ impl Editor {
                 }
                 return false;
             }
-            // At EOL, kill the whole line ending (one or two chars for CRLF).
-            if self.inside_crlf(pos + 1) {
-                pos + 2
-            } else {
-                pos + 1
-            }
+            // At EOL, kill the whole line break (one char, or two for CRLF).
+            pos + crate::buffer::line_break_len_chars(buf.text.line(line))
         } else {
             buf.line_col_to_char(line, line_len)
         };
