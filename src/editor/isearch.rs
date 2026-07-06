@@ -140,6 +140,24 @@ impl Editor {
         }
     }
 
+    /// Append pasted text to the isearch query (emacs `isearch-yank`).
+    /// The query is a single line, so line breaks in the pasted text become
+    /// spaces (the standard minibuffer paste normalization); the minibuffer
+    /// display is synced to the query and the search re-runs.
+    pub fn isearch_yank(&mut self, text: &str) {
+        if self.isearch.is_none() {
+            return;
+        }
+        let text = self.normalized_paste(text);
+        if let Some(ref mut isearch) = self.isearch {
+            isearch.query.push_str(&text);
+            let query = isearch.query.clone();
+            self.minibuffer_buffer.text = ropey::Rope::from_str(&query);
+            self.minibuffer_pane.point = query.chars().count();
+        }
+        self.isearch_update();
+    }
+
     /// Cycle to next/previous match during isearch, using the cached matches.
     pub fn isearch_next(&mut self) {
         let (query, found) = match &self.isearch {

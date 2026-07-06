@@ -128,18 +128,23 @@ where
     /// (`InputState`): key events consume or reset it inside `handle_key`;
     /// a resize intentionally leaves a chord in progress alone.
     ///
-    /// KNOWN BUGS, characterized in tests and fixed by later TODO items:
+    /// KNOWN BUG, characterized in tests and fixed by a later TODO item:
     /// the paste and mouse arms do NOT reset the pending chord / pending
     /// ESC (stale-prefix item: `C-x` <paste> `C-s` completes the chord, a
-    /// click mid-chord leaves it pending), and paste bypasses the isearch
-    /// query (isearch-paste item).
+    /// click mid-chord leaves it pending).
     fn dispatch_event(&mut self, event: Event) {
         match event {
             Event::Key(key_event) => {
                 self.handle_key(key_event);
             }
             Event::Paste(text) => {
-                self.handle_paste(&text);
+                // Paste during isearch extends the query (isearch-yank)
+                // instead of inserting into a buffer.
+                if self.editor.isearch.is_some() {
+                    self.editor.isearch_yank(&text);
+                } else {
+                    self.handle_paste(&text);
+                }
             }
             Event::Mouse(mouse_event) => {
                 self.handle_mouse(mouse_event);
@@ -2408,10 +2413,9 @@ mod tests {
     }
 
     #[test]
-    fn paste_during_isearch_desyncs_query() {
-        // Characterizes current behavior; fixed by the isearch-paste TODO
-        // item. A paste during isearch lands in the minibuffer text but is
-        // not appended to the search query, desyncing the two.
+    fn paste_during_isearch_extends_query() {
+        // Paste during isearch appends to the query (emacs isearch-yank),
+        // keeps the minibuffer display in sync, and re-runs the search.
         let events = vec![
             ctrl('s'),
             char_key('w'),
@@ -2422,7 +2426,51 @@ mod tests {
         let (mut app, mut events) = test_app_with_text(40, 10, "hello world", events);
         app.run_until_idle(&mut events).unwrap();
         let isearch = app.editor.isearch.as_ref().expect("isearch still active");
-        assert_eq!(isearch.query, "wor");
+        assert_eq!(isearch.query, "world");
         assert_eq!(app.editor.minibuffer_text(), "world");
+        assert_eq!(
+            app.editor.point(),
+            6,
+            "point at the match for the full query"
+        );
+    }
+
+    #[test]
+    fn multiline_paste_during_isearch_normalizes_breaks_to_spaces() {
+        // The isearch query is a single line: pasted line breaks (any of
+        // \r\n, \r, \n) become spaces, like any minibuffer paste.
+        let events = vec![ctrl('s'), Event::Paste("héllo\r\nwörld\nnow".to_string())];
+        let (mut app, mut events) = test_app_with_text(40, 10, "say héllo wörld now", events);
+        app.run_until_idle(&mut events).unwrap();
+        let isearch = app.editor.isearch.as_ref().expect("isearch still active");
+        assert_eq!(isearch.query, "héllo wörld now");
+        assert_eq!(app.editor.minibuffer_text(), "héllo wörld now");
+        assert_eq!(
+            app.editor.point(),
+            4,
+            "point at the match for the pasted query"
+        );
+    }
+
+    #[test]
+    fn backspace_after_isearch_paste_keeps_query_and_display_in_sync() {
+        // Backspace pops one char of the query, including chars that
+        // arrived via paste; the minibuffer display follows.
+        let events = vec![
+            ctrl('s'),
+            char_key('w'),
+            Event::Paste("orld".to_string()),
+            key(KeyCode::Backspace),
+        ];
+        let (mut app, mut events) = test_app_with_text(40, 10, "hello world", events);
+        app.run_until_idle(&mut events).unwrap();
+        let isearch = app.editor.isearch.as_ref().expect("isearch still active");
+        assert_eq!(isearch.query, "worl");
+        assert_eq!(app.editor.minibuffer_text(), "worl");
+        assert_eq!(
+            app.editor.point(),
+            6,
+            "point at the match for the refined query"
+        );
     }
 }

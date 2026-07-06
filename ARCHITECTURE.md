@@ -328,6 +328,8 @@ indicator).
 ### Other event kinds
 
 `Event::Paste(text)` inserts the pasted text at point as a single undo group.
+When incremental search is active, the dispatcher instead routes the paste to
+`Editor::isearch_yank` (see the Incremental Search section).
 `Event::Mouse` handles left-button clicks. When the minibuffer is not active,
 a click determines which pane was clicked (using `calculate_rects()`), focuses
 that pane, and places the cursor at the clicked position. The position
@@ -339,11 +341,10 @@ cursor by 3 lines without changing which pane is focused.
 `Event::Resize` is handled implicitly by the viewport update; it deliberately
 does not cancel a chord in progress.
 
-Known bugs, characterized in `app::tests` and fixed by later TODO items: the
+Known bug, characterized in `app::tests` and fixed by a later TODO item: the
 paste and mouse arms of `dispatch_event` do not reset the pending chord /
 pending ESC (so `C-x` followed by a paste and `C-s` completes `C-x C-s`, and
-a click mid-chord leaves the chord pending), and paste during isearch lands
-in the minibuffer text without updating the search query.
+a click mid-chord leaves the chord pending).
 
 ## Rendering
 
@@ -553,6 +554,13 @@ position. `C-g` restores the original position.
 
 `isearch_matches()` (used by the renderer every frame) also just reads the
 cache. The only O(buffer) work is the single scan per query change.
+
+Pasting while isearch is active extends the query instead of inserting into a
+buffer (emacs `isearch-yank` semantics): `Editor::isearch_yank` normalizes the
+pasted text with `normalized_paste` (the query is a single line, so every line
+break becomes a space, like any minibuffer paste), appends it to the query,
+syncs the minibuffer display, and re-runs `isearch_update`. Backspace after a
+paste pops one query char at a time, same as after typed input.
 
 The current match is highlighted with an olive background; other matches in
 light orange.
