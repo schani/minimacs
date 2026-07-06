@@ -1,9 +1,24 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+use anyhow::bail;
 
 use crate::buffer::Buffer;
 use crate::minibuffer::PromptKind;
 
 use super::Editor;
+
+/// The physical write target of a buffer save. Kept separate from the
+/// buffer's logical `path` so a write can be redirected (e.g. resolving
+/// symlinks at write time) without changing buffer identity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum WriteTarget {
+    /// Write to the buffer's own path (`C-x C-s` and quit-time saves).
+    BufferPath,
+    /// Write to an explicit path (`C-x C-w`); the buffer adopts it as its
+    /// new identity (path, uniquified name, re-detected syntax) only after
+    /// the write succeeds.
+    Path(PathBuf),
+}
 
 impl Editor {
     pub fn open_file(&mut self, path: &Path) -> anyhow::Result<()> {
@@ -176,9 +191,56 @@ impl Editor {
             );
             return;
         }
-        match self.current_buffer_mut().save() {
+        let buffer_id = self.current_buffer().id;
+        self.write_buffer_reporting(buffer_id, WriteTarget::BufferPath);
+    }
+
+    /// The single choke point every file-writing flow goes through:
+    /// `C-x C-s`, `C-x C-w`, and the save-anyway / overwrite / quit-save
+    /// confirmation handlers. Cross-cutting save concerns (e.g. the
+    /// external-modification guard) belong here, in exactly one place.
+    ///
+    /// On a successful write to an explicit target, the buffer adopts the
+    /// target as its identity: path, uniquified name, re-detected syntax.
+    /// A failed save never changes buffer identity.
+    pub(super) fn write_buffer(
+        &mut self,
+        buffer_id: usize,
+        target: WriteTarget,
+    ) -> anyhow::Result<()> {
+        let path = match target {
+            WriteTarget::BufferPath => {
+                let Some(buf) = self.buffers.iter_mut().find(|b| b.id == buffer_id) else {
+                    bail!("no buffer with id {buffer_id}");
+                };
+                return buf.save();
+            }
+            WriteTarget::Path(path) => path,
+        };
+        {
+            let Some(buf) = self.buffers.iter_mut().find(|b| b.id == buffer_id) else {
+                bail!("no buffer with id {buffer_id}");
+            };
+            buf.save_as(&path)?;
+            buf.redetect_syntax();
+        }
+        let base = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.display().to_string());
+        let name = self.unique_buffer_name_excluding(&base, Some(&path), Some(buffer_id));
+        if let Some(buf) = self.buffers.iter_mut().find(|b| b.id == buffer_id) {
+            buf.name = name;
+        }
+        Ok(())
+    }
+
+    /// Write a buffer via [`Editor::write_buffer`] and report the outcome
+    /// in the minibuffer ("Wrote {name}" / "Error saving: {e}").
+    pub(super) fn write_buffer_reporting(&mut self, buffer_id: usize, target: WriteTarget) {
+        match self.write_buffer(buffer_id, target) {
             Ok(()) => {
-                let name = self.current_buffer().name.clone();
+                let name = self.buffer_by_id(buffer_id).name.clone();
                 self.minibuffer.show_message(format!("Wrote {name}"));
             }
             Err(e) => {

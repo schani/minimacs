@@ -39,7 +39,8 @@ src/
   editor.rs         Editor -- struct, apply_edit, movement/editing, dispatch
   editor/isearch.rs   Incremental search state and commands
   editor/prompts.rs   Prompt starters, submit_prompt, confirm/quit flows
-  editor/fileops.rs   open_file, save, kill-buffer, buffer-name uniquification
+  editor/fileops.rs   open_file, the write_buffer save choke point, kill-buffer,
+                      buffer-name uniquification
   editor/tests.rs     Editor unit tests
   buffer.rs         Buffer -- Rope text storage, file I/O, metadata
   pane.rs           PaneTree/PaneNode/Pane -- window layout tree
@@ -148,6 +149,19 @@ target, so a crash or full disk mid-write cannot destroy the existing file. Each
 buffer remembers the file's mtime from load/save; `C-x C-s` checks
 `externally_modified()` and asks "changed on disk; save anyway? (y/n)" before
 clobbering changes made by another program.
+
+Every flow that writes a buffer to disk — `C-x C-s`, `C-x C-w`, and the
+save-anyway / overwrite / quit-save confirmation handlers — goes through one
+choke point, `Editor::write_buffer(buffer_id, WriteTarget)` in
+`editor/fileops.rs`, so cross-cutting save concerns live in exactly one place.
+`WriteTarget` separates the buffer's logical path from the physical write
+target: `BufferPath` saves to the buffer's own path; `Path(p)` (the `C-x C-w`
+flow) writes to an explicit path, and only after the write succeeds does the
+buffer adopt it as its identity (path, uniquified name, re-detected syntax).
+The `write_buffer_reporting` wrapper adds the standard "Wrote {name}" /
+"Error saving: {e}" minibuffer messages; the quit flow calls `write_buffer`
+directly because it continues quitting on success and aborts the quit with its
+own message on failure.
 
 Buffer names are the file basename, uniquified emacs-style on collision by
 appending trailing path components (`mod.rs<lib>`), falling back to a numeric
@@ -378,10 +392,10 @@ The minibuffer has two states:
   `KillConfirm { buffer_id }`, `QuitSaveConfirm { buffer_id }`.
 
 Confirmation prompts identify buffers by id, never by name (names are not
-unique). `C-x C-w` to an existing file asks `OverwriteConfirm` first; the
-buffer's path, name, and syntax language are only updated after the write
-succeeds (`Buffer::save_as` + `redetect_syntax`), so a failed save never
-changes buffer identity. `C-x C-s` over a file changed on disk asks
+unique). All of them save through the `Editor::write_buffer` choke point (see
+the Buffer section). `C-x C-w` to an existing file asks `OverwriteConfirm`
+first; the buffer's path, name, and syntax language are only updated after the
+write succeeds, so a failed save never changes buffer identity. `C-x C-s` over a file changed on disk asks
 `SaveAnywayConfirm`. `C-x k` on a modified buffer asks `KillConfirm`; "y" kills the
 buffer, "n" cancels. `C-x C-c` collects the ids of all modified buffers into
 `Editor::quit_pending` and asks `QuitSaveConfirm` for each in turn: "y" saves

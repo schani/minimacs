@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use crate::minibuffer::{normalize_path_string, PromptKind};
 
+use super::fileops::WriteTarget;
 use super::Editor;
 
 impl Editor {
@@ -120,7 +121,7 @@ impl Editor {
                     );
                     return;
                 }
-                self.write_buffer_to_path(buffer_id, path);
+                self.write_buffer_reporting(buffer_id, WriteTarget::Path(path));
             }
             PromptKind::GotoLine => {
                 self.minibuffer.finish();
@@ -153,7 +154,7 @@ impl Editor {
             PromptKind::OverwriteConfirm { buffer_id, path } => match input.as_str() {
                 "y" | "Y" => {
                     self.minibuffer.finish();
-                    self.write_buffer_to_path(buffer_id, path);
+                    self.write_buffer_reporting(buffer_id, WriteTarget::Path(path));
                 }
                 "n" | "N" => {
                     self.minibuffer.finish();
@@ -164,18 +165,7 @@ impl Editor {
             PromptKind::SaveAnywayConfirm { buffer_id } => match input.as_str() {
                 "y" | "Y" => {
                     self.minibuffer.finish();
-                    if let Some(buf) = self.buffers.iter_mut().find(|b| b.id == buffer_id) {
-                        let name = buf.name.clone();
-                        match buf.save() {
-                            Ok(()) => {
-                                self.minibuffer.show_message(format!("Wrote {name}"));
-                            }
-                            Err(e) => {
-                                self.minibuffer
-                                    .show_message(format!("Error saving: {e}"));
-                            }
-                        }
-                    }
+                    self.write_buffer_reporting(buffer_id, WriteTarget::BufferPath);
                 }
                 "n" | "N" => {
                     self.minibuffer.finish();
@@ -186,34 +176,39 @@ impl Editor {
             PromptKind::QuitSaveConfirm { buffer_id } => {
                 self.minibuffer.finish();
                 match input.as_str() {
-                    "y" | "Y" => match self.buffers.iter_mut().find(|b| b.id == buffer_id) {
-                        Some(buf) if buf.path.is_some() => {
-                            let name = buf.name.clone();
-                            match buf.save() {
-                                Ok(()) => {
-                                    self.quit_pending.retain(|&id| id != buffer_id);
-                                    self.continue_quit();
-                                }
-                                Err(e) => {
-                                    self.quit_pending.clear();
-                                    self.minibuffer
-                                        .show_message(format!("Could not save {name}: {e}"));
+                    "y" | "Y" => {
+                        let buf_state = self
+                            .buffers
+                            .iter()
+                            .find(|b| b.id == buffer_id)
+                            .map(|b| (b.path.is_some(), b.name.clone()));
+                        match buf_state {
+                            Some((true, name)) => {
+                                match self.write_buffer(buffer_id, WriteTarget::BufferPath) {
+                                    Ok(()) => {
+                                        self.quit_pending.retain(|&id| id != buffer_id);
+                                        self.continue_quit();
+                                    }
+                                    Err(e) => {
+                                        self.quit_pending.clear();
+                                        self.minibuffer
+                                            .show_message(format!("Could not save {name}: {e}"));
+                                    }
                                 }
                             }
+                            Some((false, name)) => {
+                                self.quit_pending.clear();
+                                self.minibuffer.show_message(format!(
+                                    "Buffer {name} has no file; save it with C-x C-w first"
+                                ));
+                            }
+                            None => {
+                                // Buffer disappeared in the meantime; skip it.
+                                self.quit_pending.retain(|&id| id != buffer_id);
+                                self.continue_quit();
+                            }
                         }
-                        Some(buf) => {
-                            let name = buf.name.clone();
-                            self.quit_pending.clear();
-                            self.minibuffer.show_message(format!(
-                                "Buffer {name} has no file; save it with C-x C-w first"
-                            ));
-                        }
-                        None => {
-                            // Buffer disappeared in the meantime; skip it.
-                            self.quit_pending.retain(|&id| id != buffer_id);
-                            self.continue_quit();
-                        }
-                    },
+                    }
                     "n" | "N" => {
                         self.quit_pending.retain(|&id| id != buffer_id);
                         self.continue_quit();
@@ -235,33 +230,6 @@ impl Editor {
                         self.continue_quit();
                     }
                 }
-            }
-        }
-    }
-
-    /// Write a buffer to `path` (the C-x C-w flow). Buffer identity (path,
-    /// name, syntax) is only updated after the save succeeds.
-    fn write_buffer_to_path(&mut self, buffer_id: usize, path: PathBuf) {
-        let result = {
-            let Some(buf) = self.buffers.iter_mut().find(|b| b.id == buffer_id) else {
-                return;
-            };
-            buf.save_as(&path).map(|()| buf.redetect_syntax())
-        };
-        match result {
-            Ok(()) => {
-                let base = path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| path.display().to_string());
-                let name = self.unique_buffer_name_excluding(&base, Some(&path), Some(buffer_id));
-                if let Some(buf) = self.buffers.iter_mut().find(|b| b.id == buffer_id) {
-                    buf.name = name.clone();
-                }
-                self.minibuffer.show_message(format!("Wrote {name}"));
-            }
-            Err(e) => {
-                self.minibuffer.show_message(format!("Error saving: {e}"));
             }
         }
     }
