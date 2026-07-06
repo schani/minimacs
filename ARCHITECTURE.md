@@ -279,19 +279,47 @@ installed hook so the panic message prints on the normal screen.
 `App::run()` is the main loop:
 
 1. Poll `EventSource::next_event()`.
-2. Route the event:
-   - `C-g` always cancels (hard-coded, bypasses keymap).
-   - If incremental search is active, `handle_isearch_key()` processes the key.
-   - If a minibuffer prompt is active, Enter (submit) and Tab (complete) are
-     intercepted inline in `handle_key()`; all other keys fall through to the
-     keymap.
-   - Otherwise, `KeymapState::process_key()` walks the trie.
-   - If the keymap returns `NotFound` and the key is a printable character with
-     no modifiers, it falls through to `InsertChar` — unless the key ended a
-     pending chord (e.g. `C-x j`), in which case a "C-x j is undefined"
-     message is shown instead of self-inserting.
+2. Pass the event to `dispatch_event()`, the single dispatcher that routes
+   every event kind (key, paste, mouse, resize) to its handler. The
+   dispatcher is the one place that decides, per event kind, what happens to
+   the pending input state (see below).
 3. After each event: update viewport dimensions for all panes, then render.
 4. Loop until `editor.should_quit`.
+
+### Input State
+
+All partially-consumed input lives in one struct, `InputState`, owned by
+`App`:
+
+- `keymap`: the `KeymapState` chord-in-progress walk of the keymap trie
+  (`C-x ...`).
+- `esc_pending`: a bare ESC was seen; the next key gets the ALT modifier
+  (ESC-as-Meta).
+
+`Editor::pending_keys` — the mode-line display of the pending input — is a
+mirror of this state (it lives on `Editor` because rendering only sees
+`&Editor`). Every mutation goes through `InputState` methods so the mirror
+stays in sync, and `InputState::reset()` is the single point that clears
+everything at once (a chord in progress, a pending ESC, and the mode-line
+indicator).
+
+### Key routing (`handle_key`)
+
+- `C-g` always cancels (hard-coded, bypasses keymap): resets all pending
+  input state, then runs `Cancel`.
+- A bare ESC calls `set_esc_pending()`; the next key is re-tagged with ALT.
+- If incremental search is active, `handle_isearch_key()` processes the key.
+- If a minibuffer prompt is active, Enter (submit) and Tab (complete) are
+  intercepted inline in `handle_key()`; all other keys fall through to the
+  keymap.
+- Otherwise, `InputState::process_key()` walks the trie, keeping the
+  mode-line prefix display in sync with the result.
+- If the keymap returns `NotFound` and the key is a printable character with
+  no modifiers, it falls through to `InsertChar` — unless the key ended a
+  pending chord (e.g. `C-x j`), in which case a "C-x j is undefined"
+  message is shown instead of self-inserting.
+
+### Other event kinds
 
 `Event::Paste(text)` inserts the pasted text at point as a single undo group.
 `Event::Mouse` handles left-button clicks. When the minibuffer is not active,
@@ -302,7 +330,14 @@ expansion while still mapping back to buffer character indices.
 Clicks below all content place the cursor at the end of the buffer.
 Mouse scroll events (`ScrollUp`/`ScrollDown`) scroll the pane under the mouse
 cursor by 3 lines without changing which pane is focused.
-`Event::Resize` is handled implicitly by the viewport update.
+`Event::Resize` is handled implicitly by the viewport update; it deliberately
+does not cancel a chord in progress.
+
+Known bugs, characterized in `app::tests` and fixed by later TODO items: the
+paste and mouse arms of `dispatch_event` do not reset the pending chord /
+pending ESC (so `C-x` followed by a paste and `C-s` completes `C-x C-s`, and
+a click mid-chord leaves the chord pending), and paste during isearch lands
+in the minibuffer text without updating the search query.
 
 ## Rendering
 

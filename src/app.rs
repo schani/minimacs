@@ -13,8 +13,64 @@ use crate::render;
 pub struct App<B: Backend> {
     pub editor: Editor,
     pub terminal: Terminal<B>,
-    keymap_state: KeymapState,
+    input: InputState,
+}
+
+/// All partially-consumed input state, gathered in one place:
+///
+/// - `keymap`: the chord-in-progress walk of the keymap trie (`C-x ...`).
+/// - `esc_pending`: a bare ESC was seen; the next key gets the ALT modifier.
+///
+/// `Editor::pending_keys` — the mode-line display of the pending input — is
+/// a mirror of this state (it lives on `Editor` because rendering only sees
+/// `&Editor`). Every mutation goes through these methods so the mirror stays
+/// in sync, and `reset` is the single point that clears everything at once.
+struct InputState {
+    keymap: KeymapState,
     esc_pending: bool,
+}
+
+impl InputState {
+    fn new() -> Self {
+        Self {
+            keymap: KeymapState::new(default_keymap()),
+            esc_pending: false,
+        }
+    }
+
+    /// The single reset point for all pending input state: cancels any chord
+    /// in progress, any pending ESC, and the mode-line indicator.
+    fn reset(&mut self, editor: &mut Editor) {
+        self.keymap.clear();
+        self.esc_pending = false;
+        editor.pending_keys.clear();
+    }
+
+    /// Record a bare ESC: the next key will be treated as Meta-modified.
+    fn set_esc_pending(&mut self, editor: &mut Editor) {
+        self.esc_pending = true;
+        editor.pending_keys = format!("{}ESC ", self.keymap.pending_display());
+    }
+
+    /// Consume the pending-ESC flag, returning whether it was set.
+    fn take_esc_pending(&mut self) -> bool {
+        std::mem::take(&mut self.esc_pending)
+    }
+
+    fn pending_display(&self) -> String {
+        self.keymap.pending_display()
+    }
+
+    /// Feed a key to the chord trie, keeping the mode-line display in sync:
+    /// `Pending` shows the accumulated prefix, anything else clears it.
+    fn process_key(&mut self, editor: &mut Editor, key: KeyEvent) -> KeymapResult {
+        let result = self.keymap.process_key(key);
+        editor.pending_keys = match result {
+            KeymapResult::Pending => self.keymap.pending_display(),
+            _ => String::new(),
+        };
+        result
+    }
 }
 
 impl<B: Backend> App<B>
@@ -25,8 +81,7 @@ where
         Self {
             editor,
             terminal,
-            keymap_state: KeymapState::new(default_keymap()),
-            esc_pending: false,
+            input: InputState::new(),
         }
     }
 
@@ -40,29 +95,13 @@ where
             let Some(event) = event_source.next_event() else {
                 continue;
             };
-            match event {
-                Event::Key(key_event) => {
-                    self.handle_key(key_event);
-                    if self.editor.should_quit {
-                        break;
-                    }
-                }
-                Event::Paste(text) => {
-                    self.handle_paste(&text);
-                }
-                Event::Mouse(mouse_event) => {
-                    self.handle_mouse(mouse_event);
-                }
-                Event::Resize(_, _) => {}
-                _ => {}
+            self.dispatch_event(event);
+            if self.editor.should_quit {
+                break;
             }
 
             self.update_viewport();
             self.render()?;
-
-            if self.editor.should_quit {
-                break;
-            }
         }
         Ok(())
     }
@@ -74,21 +113,9 @@ where
         self.render()?;
 
         while let Some(event) = event_source.next_event() {
-            match event {
-                Event::Key(key_event) => {
-                    self.handle_key(key_event);
-                    if self.editor.should_quit {
-                        break;
-                    }
-                }
-                Event::Paste(text) => {
-                    self.handle_paste(&text);
-                }
-                Event::Mouse(mouse_event) => {
-                    self.handle_mouse(mouse_event);
-                }
-                Event::Resize(_, _) => {}
-                _ => {}
+            self.dispatch_event(event);
+            if self.editor.should_quit {
+                break;
             }
             self.update_viewport();
             self.render()?;
@@ -96,12 +123,36 @@ where
         Ok(())
     }
 
+    /// Route one input event to its handler. This is the single place that
+    /// decides, per event kind, what happens to the pending input state
+    /// (`InputState`): key events consume or reset it inside `handle_key`;
+    /// a resize intentionally leaves a chord in progress alone.
+    ///
+    /// KNOWN BUGS, characterized in tests and fixed by later TODO items:
+    /// the paste and mouse arms do NOT reset the pending chord / pending
+    /// ESC (stale-prefix item: `C-x` <paste> `C-s` completes the chord, a
+    /// click mid-chord leaves it pending), and paste bypasses the isearch
+    /// query (isearch-paste item).
+    fn dispatch_event(&mut self, event: Event) {
+        match event {
+            Event::Key(key_event) => {
+                self.handle_key(key_event);
+            }
+            Event::Paste(text) => {
+                self.handle_paste(&text);
+            }
+            Event::Mouse(mouse_event) => {
+                self.handle_mouse(mouse_event);
+            }
+            Event::Resize(_, _) => {}
+            _ => {}
+        }
+    }
+
     fn handle_key(&mut self, key: KeyEvent) {
-        // C-g always cancels
+        // C-g always cancels: reset all pending input state, then Cancel.
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('g') {
-            self.esc_pending = false;
-            self.keymap_state.clear();
-            self.editor.pending_keys.clear();
+            self.input.reset(&mut self.editor);
             self.editor.execute(Command::Cancel);
             return;
         }
@@ -111,15 +162,12 @@ where
             && !key.modifiers.contains(KeyModifiers::CONTROL)
             && !key.modifiers.contains(KeyModifiers::ALT)
         {
-            self.esc_pending = true;
-            self.editor.pending_keys =
-                format!("{}ESC ", self.keymap_state.pending_display());
+            self.input.set_esc_pending(&mut self.editor);
             return;
         }
 
         // If Esc was pending, add ALT modifier to this key
-        let key = if self.esc_pending {
-            self.esc_pending = false;
+        let key = if self.input.take_esc_pending() {
             KeyEvent::new(key.code, key.modifiers | KeyModifiers::ALT)
         } else {
             key
@@ -150,17 +198,13 @@ where
             }
         }
 
-        let pending_before = self.keymap_state.pending_display();
-        match self.keymap_state.process_key(key) {
+        let pending_before = self.input.pending_display();
+        match self.input.process_key(&mut self.editor, key) {
             KeymapResult::Matched(cmd) => {
-                self.editor.pending_keys.clear();
                 self.editor.execute(cmd);
             }
-            KeymapResult::Pending => {
-                self.editor.pending_keys = self.keymap_state.pending_display();
-            }
+            KeymapResult::Pending => {}
             KeymapResult::NotFound => {
-                self.editor.pending_keys.clear();
                 if !pending_before.is_empty() {
                     // A dead-end chord (e.g. C-x j) must not self-insert.
                     let chord = format!("{pending_before}{}", Key::from_event(key).display());
@@ -2188,5 +2232,145 @@ mod tests {
 
         let expected = format!("{}/", app.editor.cwd.display());
         assert_eq!(app.editor.minibuffer_text(), expected);
+    }
+
+    // === Input-state characterization tests ===
+    //
+    // These pin down how the pending-chord (`C-x ...`) and pending-ESC state
+    // interact with the other event kinds. Some of them characterize known
+    // bugs (marked below) so that the input-state refactor stays
+    // behavior-preserving; the bug-fix TODO items will flip those tests.
+
+    #[test]
+    fn cg_cancelled_chord_key_self_inserts() {
+        // After C-g cancels a pending C-x chord, the next key must go through
+        // the keymap from the root: 's' self-inserts instead of completing
+        // C-x C-s.
+        let events = vec![ctrl('x'), ctrl('g'), char_key('s')];
+        let (mut app, mut events) = test_app(40, 10, events);
+        app.run_until_idle(&mut events).unwrap();
+        assert_eq!(app.editor.buffer_text(), "s");
+        assert_eq!(app.editor.pending_keys, "");
+    }
+
+    #[test]
+    fn cg_cancels_pending_esc() {
+        // C-g clears a pending ESC prefix: the following 'f' self-inserts
+        // instead of running M-f.
+        let events = vec![key(KeyCode::Esc), ctrl('g'), char_key('f')];
+        let (mut app, mut events) = test_app_with_text(40, 10, "hello world", events);
+        app.run_until_idle(&mut events).unwrap();
+        assert_eq!(app.editor.buffer_text(), "fhello world");
+        assert_eq!(app.editor.pending_keys, "");
+    }
+
+    #[test]
+    fn pending_chord_survives_resize() {
+        // A resize must not cancel a chord in progress: C-x <resize> 2 still
+        // splits the window.
+        let events = vec![ctrl('x'), Event::Resize(40, 10), char_key('2')];
+        let (mut app, mut events) = test_app_with_text(40, 12, "hello", events);
+        app.run_until_idle(&mut events).unwrap();
+        let screen = capture_screen(&app.terminal);
+        let mode_line_count = screen.lines().filter(|l| l.contains("--")).count();
+        assert!(
+            mode_line_count >= 2,
+            "C-x 2 across a resize should split, screen:\n{screen}"
+        );
+    }
+
+    #[test]
+    fn pending_chord_survives_paste_and_completes() {
+        // Characterizes current behavior; fixed by the stale-prefix TODO item.
+        // A paste event does not cancel a pending chord, so C-x <paste> C-s
+        // completes C-x C-s and saves the file (with the pasted text in it).
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.txt");
+        std::fs::write(&file, "original").unwrap();
+
+        let mut editor = Editor::new();
+        editor.open_file(&file).unwrap();
+
+        let events = vec![ctrl('x'), Event::Paste("Y".to_string()), ctrl('s')];
+        let backend = TestBackend::new(40, 10);
+        let terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new(terminal, editor);
+        let mut event_source = TestEventSource::new(events);
+        app.run_until_idle(&mut event_source).unwrap();
+
+        let content = std::fs::read_to_string(&file).unwrap();
+        assert_eq!(content, "Yoriginal");
+    }
+
+    #[test]
+    fn pending_chord_survives_mouse_click() {
+        // Characterizes current behavior; fixed by the stale-prefix TODO item.
+        // A mouse click mid-chord leaves the chord pending (stale mode-line
+        // indicator included), and the next key still completes it.
+        let events = vec![ctrl('x'), mouse_click(0, 0)];
+        let (mut app, mut events) = test_app_with_text(40, 12, "hello", events);
+        app.run_until_idle(&mut events).unwrap();
+        assert_eq!(app.editor.pending_keys, "C-x ");
+
+        // The chord is still live: '2' completes C-x 2 and splits the window.
+        let mut more = TestEventSource::new(vec![char_key('2')]);
+        app.run_until_idle(&mut more).unwrap();
+        let screen = capture_screen(&app.terminal);
+        let mode_line_count = screen.lines().filter(|l| l.contains("--")).count();
+        assert!(
+            mode_line_count >= 2,
+            "chord completed across a click, screen:\n{screen}"
+        );
+    }
+
+    #[test]
+    fn pending_esc_survives_mouse_click() {
+        // Characterizes current behavior; fixed by the stale-prefix TODO item.
+        // ESC, then a mouse click, then 'f' still runs M-f (forward-word)
+        // instead of self-inserting 'f'.
+        let events = vec![key(KeyCode::Esc), mouse_click(0, 0), char_key('f')];
+        let (mut app, mut events) = test_app_with_text(40, 10, "hello world", events);
+        app.run_until_idle(&mut events).unwrap();
+        assert_eq!(app.editor.buffer_text(), "hello world");
+        assert_eq!(app.editor.point(), 5, "M-f from the clicked position 0");
+    }
+
+    #[test]
+    fn pending_esc_survives_paste() {
+        // Characterizes current behavior; fixed by the stale-prefix TODO item.
+        // ESC, then a paste, then 'f' still runs M-f instead of
+        // self-inserting 'f' after the pasted text.
+        let events = vec![
+            key(KeyCode::Esc),
+            Event::Paste("xy".to_string()),
+            char_key('f'),
+        ];
+        let (mut app, mut events) = test_app_with_text(40, 10, "hello world", events);
+        app.run_until_idle(&mut events).unwrap();
+        assert_eq!(app.editor.buffer_text(), "xyhello world");
+        assert_eq!(
+            app.editor.point(),
+            7,
+            "M-f from inside 'xyhello' goes to its end"
+        );
+    }
+
+    #[test]
+    fn paste_during_isearch_desyncs_query() {
+        // Characterizes current behavior; fixed by the isearch-paste TODO
+        // item. A paste during isearch lands in the minibuffer text but is
+        // not appended to the search query, desyncing the two.
+        let events = vec![
+            ctrl('s'),
+            char_key('w'),
+            char_key('o'),
+            char_key('r'),
+            Event::Paste("ld".to_string()),
+        ];
+        let (mut app, mut events) = test_app_with_text(40, 10, "hello world", events);
+        app.run_until_idle(&mut events).unwrap();
+        let isearch = app.editor.isearch.as_ref().expect("isearch still active");
+        assert_eq!(isearch.query, "wor");
+        assert_eq!(app.editor.minibuffer_text(), "world");
     }
 }
