@@ -23,6 +23,12 @@ pub(super) enum WriteTarget {
 
 impl Editor {
     pub fn open_file(&mut self, path: &Path) -> anyhow::Result<()> {
+        // Prompt submission already validates, but paths also arrive from
+        // CLI arguments — an empty one would create a phantom, unsaveable
+        // buffer with an empty name.
+        if path.as_os_str().is_empty() {
+            bail!("empty file path");
+        }
         let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
 
         // Check if file is already open
@@ -242,6 +248,11 @@ impl Editor {
             }
             WriteTarget::Path(path) => path,
         };
+        // Prompt submission already validates; this guards any future
+        // caller that constructs a `WriteTarget::Path` directly.
+        if path.as_os_str().is_empty() {
+            bail!("empty file path");
+        }
         {
             let Some(buf) = self.buffers.iter_mut().find(|b| b.id == buffer_id) else {
                 bail!("no buffer with id {buffer_id}");

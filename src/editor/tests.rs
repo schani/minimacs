@@ -635,6 +635,103 @@ fn find_file_submit_normalizes_dotdot() {
 }
 
 #[test]
+fn find_file_empty_input_reasks() {
+    let mut editor = Editor::new();
+    let buffer_count = editor.buffers.len();
+    editor.execute(Command::FindFile);
+    editor.set_minibuffer_text("");
+    editor.submit_prompt();
+
+    // No phantom buffer; the prompt re-asks with the requirement flagged in
+    // the label and the default directory prefill restored.
+    assert_eq!(editor.buffers.len(), buffer_count);
+    assert!(editor.minibuffer.is_active());
+    let prompt = editor.minibuffer.prompt().unwrap();
+    assert_eq!(prompt.kind, PromptKind::FindFile);
+    assert_eq!(prompt.label, "Find file (path required): ");
+    assert_eq!(
+        editor.minibuffer_text(),
+        format!("{}/", editor.cwd.display())
+    );
+
+    // The re-asked prompt still works: submitting a real path opens it.
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("test.txt");
+    std::fs::write(&file, "hello").unwrap();
+    editor.set_minibuffer_text(&file.to_string_lossy());
+    editor.submit_prompt();
+    assert!(!editor.minibuffer.is_active());
+    assert_eq!(editor.buffer_text(), "hello");
+}
+
+#[test]
+fn find_file_whitespace_input_reasks() {
+    let mut editor = Editor::new();
+    let buffer_count = editor.buffers.len();
+    editor.execute(Command::FindFile);
+    editor.set_minibuffer_text("   ");
+    editor.submit_prompt();
+
+    assert_eq!(editor.buffers.len(), buffer_count);
+    assert!(editor.minibuffer.is_active());
+}
+
+#[test]
+fn find_file_input_normalizing_to_empty_reasks() {
+    // "." normalizes to the empty string, so it must re-ask like empty input
+    // instead of opening a phantom buffer.
+    let mut editor = Editor::new();
+    let buffer_count = editor.buffers.len();
+    editor.execute(Command::FindFile);
+    editor.set_minibuffer_text(".");
+    editor.submit_prompt();
+
+    assert_eq!(editor.buffers.len(), buffer_count);
+    assert!(editor.minibuffer.is_active());
+}
+
+#[test]
+fn write_file_empty_input_reasks() {
+    let mut editor = Editor::new_with_text("content");
+    editor.execute(Command::WriteFile);
+    editor.set_minibuffer_text("");
+    editor.submit_prompt();
+
+    // No write, no identity change; the prompt re-asks with the requirement
+    // flagged in the label and the default directory prefill restored.
+    assert!(editor.current_buffer().path.is_none());
+    assert!(editor.minibuffer.is_active());
+    let prompt = editor.minibuffer.prompt().unwrap();
+    assert_eq!(prompt.kind, PromptKind::WriteFile);
+    assert_eq!(prompt.label, "Write file (path required): ");
+    assert_eq!(
+        editor.minibuffer_text(),
+        format!("{}/", editor.cwd.display())
+    );
+}
+
+#[test]
+fn write_file_whitespace_input_reasks() {
+    let mut editor = Editor::new_with_text("content");
+    editor.execute(Command::WriteFile);
+    editor.set_minibuffer_text("  ");
+    editor.submit_prompt();
+
+    assert!(editor.current_buffer().path.is_none());
+    assert!(editor.minibuffer.is_active());
+}
+
+#[test]
+fn open_file_empty_path_errors() {
+    // Defense in depth: `open_file` itself rejects an empty path (e.g. from
+    // a CLI argument) instead of creating a phantom, unsaveable buffer.
+    let mut editor = Editor::new();
+    let buffer_count = editor.buffers.len();
+    assert!(editor.open_file(std::path::Path::new("")).is_err());
+    assert_eq!(editor.buffers.len(), buffer_count);
+}
+
+#[test]
 fn switch_buffer_submit() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("test.txt");

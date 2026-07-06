@@ -21,10 +21,16 @@ impl Editor {
     /// prompt untouched — used both when a prompt starts and to re-ask a
     /// confirmation after an unrecognized answer.
     fn reset_minibuffer_input(&mut self) {
-        self.minibuffer_buffer.text = ropey::Rope::new();
+        self.set_minibuffer_input("");
+    }
+
+    /// Replace the minibuffer input and reset its edit state (history, mark,
+    /// scroll), leaving any active prompt untouched.
+    fn set_minibuffer_input(&mut self, input: &str) {
+        self.minibuffer_buffer.text = ropey::Rope::from_str(input);
         self.minibuffer_buffer.modified = false;
         self.minibuffer_buffer.history = crate::history::History::new();
-        self.minibuffer_pane.point = 0;
+        self.minibuffer_pane.point = input.chars().count();
         self.minibuffer_pane.mark = None;
         self.minibuffer_pane.scroll_top = 0;
         self.minibuffer_pane.preferred_column = None;
@@ -36,13 +42,7 @@ impl Editor {
             return;
         }
         self.minibuffer.start_prompt(kind, label);
-        self.minibuffer_buffer.text = ropey::Rope::from_str(input);
-        self.minibuffer_buffer.modified = false;
-        self.minibuffer_buffer.history = crate::history::History::new();
-        self.minibuffer_pane.point = input.chars().count();
-        self.minibuffer_pane.mark = None;
-        self.minibuffer_pane.scroll_top = 0;
-        self.minibuffer_pane.preferred_column = None;
+        self.set_minibuffer_input(input);
     }
 
     /// Read the current minibuffer text.
@@ -66,14 +66,47 @@ impl Editor {
         )))
     }
 
-    pub(super) fn find_file_prompt(&mut self) {
+    /// The shared "non-empty normalized path" validation both path prompts
+    /// (find-file, write-file) go through on submit: `None` when the input
+    /// is blank or normalizes to the empty path (`.`, `a/..`) — the caller
+    /// re-asks via [`Editor::reask_path_prompt`].
+    fn validated_path_from_input(&self, input: &str) -> Option<PathBuf> {
+        if input.trim().is_empty() {
+            return None;
+        }
+        let path = self.path_from_input(input);
+        if path.as_os_str().is_empty() {
+            return None;
+        }
+        Some(path)
+    }
+
+    /// The initial input of a path prompt: the current buffer's directory
+    /// (or the editor's `cwd`), with a trailing `/`.
+    fn default_path_prompt_input(&self) -> String {
         let dir = self
             .current_buffer()
             .path
             .as_ref()
             .and_then(|p| p.parent())
             .unwrap_or(&self.cwd);
-        let initial = format!("{}/", dir.display());
+        format!("{}/", dir.display())
+    }
+
+    /// Re-ask an active path prompt whose input didn't validate: flag the
+    /// requirement in the live prompt label (like failing isearch — queued
+    /// messages are invisible while a prompt is active) and restore the
+    /// default directory prefill.
+    fn reask_path_prompt(&mut self, label: &str) {
+        if let Some(prompt) = self.minibuffer.prompt_mut() {
+            prompt.label = label.to_string();
+        }
+        let input = self.default_path_prompt_input();
+        self.set_minibuffer_input(&input);
+    }
+
+    pub(super) fn find_file_prompt(&mut self) {
+        let initial = self.default_path_prompt_input();
         self.start_minibuffer_prompt_with_input(PromptKind::FindFile, "Find file: ", &initial);
     }
 
@@ -82,13 +115,7 @@ impl Editor {
     }
 
     pub(super) fn write_file_prompt(&mut self) {
-        let dir = self
-            .current_buffer()
-            .path
-            .as_ref()
-            .and_then(|p| p.parent())
-            .unwrap_or(&self.cwd);
-        let initial = format!("{}/", dir.display());
+        let initial = self.default_path_prompt_input();
         self.start_minibuffer_prompt_with_input(PromptKind::WriteFile, "Write file: ", &initial);
     }
 
@@ -118,8 +145,11 @@ impl Editor {
 
         match kind {
             PromptKind::FindFile => {
+                let Some(path) = self.validated_path_from_input(&input) else {
+                    self.reask_path_prompt("Find file (path required): ");
+                    return;
+                };
                 self.minibuffer.finish();
-                let path = self.path_from_input(&input);
                 if let Err(e) = self.open_file(&path) {
                     self.minibuffer.show_message(format!("{e}"));
                 }
@@ -129,8 +159,11 @@ impl Editor {
                 self.switch_to_buffer(&input);
             }
             PromptKind::WriteFile => {
+                let Some(path) = self.validated_path_from_input(&input) else {
+                    self.reask_path_prompt("Write file (path required): ");
+                    return;
+                };
                 self.minibuffer.finish();
-                let path = self.path_from_input(&input);
                 let buffer_id = self.current_buffer().id;
                 let own_path = self.current_buffer().path.as_deref() == Some(path.as_path());
                 if path.exists() && !own_path {
