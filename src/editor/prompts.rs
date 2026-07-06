@@ -97,6 +97,12 @@ impl Editor {
     }
 
     pub fn submit_prompt(&mut self) {
+        // Enter is intercepted before the keymap, so it never reaches
+        // `execute()` and `last_command` would survive the prompt — a C-k
+        // in the prompt followed by a C-k in the buffer must not append.
+        // C-g cancellation needs no reset here: it runs `Command::Cancel`
+        // through `execute()`, which updates `last_command` itself.
+        self.clear_last_command();
         self.dispatch_prompt();
         // Prompt handlers may move point in the focused pane (e.g. goto-line)
         // without going through `execute()`, so scroll it into view here.

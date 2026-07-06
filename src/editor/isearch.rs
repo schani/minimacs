@@ -236,6 +236,10 @@ impl Editor {
     pub fn isearch_accept(&mut self) {
         self.isearch = None;
         self.minibuffer.finish();
+        // Isearch keys bypass `execute()`, so a stale `last_command` from
+        // before the search would survive it — a kill before C-s must not
+        // chain with a kill right after accepting.
+        self.clear_last_command();
     }
 
     /// All match positions for rendering (char offset, query char length).

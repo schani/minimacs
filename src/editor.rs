@@ -30,6 +30,10 @@ pub enum RecenterPosition {
 pub(crate) struct OsClipboard {
     #[cfg(all(feature = "clipboard", not(test)))]
     inner: Option<arboard::Clipboard>,
+    /// Test-only recorder: the last text passed to `set_text`, so tests can
+    /// assert whether (and with what) the OS clipboard would be written.
+    #[cfg(test)]
+    pub(crate) last_set_text: Option<String>,
 }
 
 impl OsClipboard {
@@ -37,6 +41,8 @@ impl OsClipboard {
         Self {
             #[cfg(all(feature = "clipboard", not(test)))]
             inner: None,
+            #[cfg(test)]
+            last_set_text: None,
         }
     }
 
@@ -51,6 +57,10 @@ impl OsClipboard {
     }
 
     pub(crate) fn set_text(&mut self, _text: &str) {
+        #[cfg(test)]
+        {
+            self.last_set_text = Some(_text.to_string());
+        }
         #[cfg(all(feature = "clipboard", not(test)))]
         if let Some(clip) = self.connect() {
             if clip.set_text(_text.to_string()).is_err() {
@@ -293,7 +303,7 @@ impl Editor {
             }
         }
 
-        let cmd_clone = cmd.clone();
+        let mut this_command = Some(cmd.clone());
 
         match cmd {
             Command::ForwardChar => self.forward_char(),
@@ -316,7 +326,13 @@ impl Editor {
             Command::DeleteBackward => self.delete_backward(),
             Command::DeleteForward => self.delete_forward(),
             Command::DeleteWordBackward => self.delete_word_backward(),
-            Command::KillLine => self.kill_line(),
+            Command::KillLine => {
+                // A C-k that killed nothing doesn't start or extend a kill
+                // chain: the next C-k must not append to the previous kill.
+                if !self.kill_line() {
+                    this_command = None;
+                }
+            }
             Command::Undo => self.undo(),
             Command::Redo => self.redo(),
             Command::Save => self.save(),
@@ -341,7 +357,7 @@ impl Editor {
             Command::Quit => self.quit(),
         }
 
-        self.last_command = Some(cmd_clone);
+        self.last_command = this_command;
 
         self.ensure_cursor_visible();
     }
@@ -1086,37 +1102,45 @@ impl Editor {
         }
     }
 
-    fn kill_line(&mut self) {
+    /// Kill to end of line. Returns whether any text was killed: `C-k` at
+    /// the very end of the buffer kills nothing, and must leave both the
+    /// internal and the OS clipboard untouched (overwriting the OS clipboard
+    /// with the stale previous kill would clobber whatever another program
+    /// put there).
+    fn kill_line(&mut self) -> bool {
         let append = self.last_command == Some(Command::KillLine);
         let buf = self.active_buffer();
         let pos = self.active_pane().point;
         let (line, col) = buf.char_to_line_col(pos);
         let line_len = buf.line_len_chars(line);
 
-        if col == line_len {
-            let total = buf.char_count();
-            if pos < total {
-                // At EOL, kill the whole line ending (one or two chars for CRLF).
-                let end = if self.inside_crlf(pos + 1) { pos + 2 } else { pos + 1 };
-                let deleted = self.apply_edit(pos, end, "", EditRecord::Delete);
-                if append {
-                    self.clipboard.push_str(&deleted);
-                } else {
-                    self.clipboard = deleted;
+        let end = if col == line_len {
+            if pos == buf.char_count() {
+                // Nothing to kill.
+                if !self.minibuffer.is_active() {
+                    self.minibuffer.show_message("End of buffer".to_string());
                 }
+                return false;
+            }
+            // At EOL, kill the whole line ending (one or two chars for CRLF).
+            if self.inside_crlf(pos + 1) {
+                pos + 2
+            } else {
+                pos + 1
             }
         } else {
-            let end = buf.line_col_to_char(line, line_len);
-            let deleted = self.apply_edit(pos, end, "", EditRecord::Delete);
-            if append {
-                self.clipboard.push_str(&deleted);
-            } else {
-                self.clipboard = deleted;
-            }
+            buf.line_col_to_char(line, line_len)
+        };
+        let deleted = self.apply_edit(pos, end, "", EditRecord::Delete);
+        if append {
+            self.clipboard.push_str(&deleted);
+        } else {
+            self.clipboard = deleted;
         }
         self.active_buffer_mut().history.commit();
         self.set_os_clipboard(&self.clipboard.clone());
         self.active_pane_mut().preferred_column = None;
+        true
     }
 
     // === Undo/Redo ===

@@ -2511,6 +2511,92 @@ fn kill_line_accumulate_then_paste() {
     assert_eq!(editor.buffer_text(), "aaa\nbbb\nccc");
 }
 
+#[test]
+fn noop_kill_line_touches_neither_clipboard() {
+    let mut editor = Editor::new_with_text("hello");
+    editor.execute(Command::KillLine);
+    assert_eq!(editor.clipboard, "hello");
+    assert_eq!(editor.os_clipboard.last_set_text.as_deref(), Some("hello"));
+
+    // C-k at end of buffer kills nothing: neither the internal clipboard
+    // nor the OS clipboard (which another program may own by now) may be
+    // written.
+    editor.os_clipboard.last_set_text = None;
+    editor.execute(Command::KillLine);
+    assert_eq!(editor.clipboard, "hello");
+    assert_eq!(editor.os_clipboard.last_set_text, None);
+}
+
+#[test]
+fn noop_kill_line_does_not_count_as_a_kill_for_appending() {
+    let mut editor = Editor::new_with_text("hello");
+    editor.execute(Command::KillLine);
+    // A C-k that killed nothing must not keep the kill chain armed
+    // (a real kill chain is otherwise broken only by another command).
+    editor.execute(Command::KillLine);
+    assert_eq!(editor.last_command, None);
+    assert_eq!(editor.clipboard, "hello");
+}
+
+#[test]
+fn kill_chain_does_not_survive_prompt_submit() {
+    // The review repro: C-k in a find-file prompt, Enter, C-k in the opened
+    // buffer must not append the buffer line to the killed prompt text.
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("test.txt");
+    std::fs::write(&file, "file line\nrest").unwrap();
+
+    let mut editor = Editor::new();
+    editor.execute(Command::FindFile);
+    editor.set_minibuffer_text("junk-path");
+    editor.execute(Command::BeginningOfLine);
+    editor.execute(Command::KillLine);
+    assert_eq!(editor.clipboard, "junk-path");
+
+    editor.set_minibuffer_text(&file.to_string_lossy());
+    editor.submit_prompt();
+    assert!(!editor.minibuffer.is_active());
+
+    editor.execute(Command::KillLine);
+    assert_eq!(editor.clipboard, "file line");
+}
+
+#[test]
+fn kill_chain_does_not_survive_isearch_accept() {
+    let mut editor = Editor::new_with_text("hello there\nworld line");
+    editor.execute(Command::KillLine);
+    assert_eq!(editor.clipboard, "hello there");
+
+    editor.execute(Command::ISearchForward);
+    if let Some(ref mut isearch) = editor.isearch {
+        isearch.query = "world".to_string();
+    }
+    editor.isearch_update();
+    editor.isearch_accept();
+    assert_eq!(editor.last_command, None);
+
+    // Point is at the start of the match; C-k kills the rest of that line
+    // and must not append it to the pre-search kill.
+    editor.execute(Command::KillLine);
+    assert_eq!(editor.clipboard, "world line");
+}
+
+#[test]
+fn kill_chain_does_not_survive_prompt_cancel() {
+    let mut editor = Editor::new_with_text("hello\nworld");
+    editor.execute(Command::GotoLine);
+    editor.set_minibuffer_text("abc");
+    editor.execute(Command::BeginningOfLine);
+    editor.execute(Command::KillLine);
+    assert_eq!(editor.clipboard, "abc");
+
+    // C-g: cancel the prompt, then C-k in the buffer must not append.
+    editor.execute(Command::Cancel);
+    assert!(!editor.minibuffer.is_active());
+    editor.execute(Command::KillLine);
+    assert_eq!(editor.clipboard, "hello");
+}
+
 // === Save-flow characterization (all flows must behave identically
 // === before and after routing through the single write choke point) ===
 

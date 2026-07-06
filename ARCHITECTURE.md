@@ -521,6 +521,13 @@ paste) work automatically in the minibuffer without duplicating logic.
 The minibuffer buffer is never in `self.buffers` and never appears in buffer
 lists. Its `History` is reset each time a prompt starts. The shared clipboard
 means kill/yank in the minibuffer uses the same clipboard as the main editor.
+Kill chains don't cross prompt boundaries, though: `submit_prompt()` and
+`isearch_accept()` reset `last_command` (Enter bypasses `execute()`, which
+would otherwise update it), so a `C-k` in a prompt followed by a `C-k` in the
+buffer replaces the kill instead of appending. C-g needs no explicit reset —
+it runs `Command::Cancel` through `execute()`. A `C-k` that kills nothing
+(point at end of buffer) touches neither the internal nor the OS clipboard
+and doesn't start or extend a kill chain.
 
 Key routing: Enter submits the prompt, Tab triggers completion (both intercepted
 before the keymap). All other keys go through the normal keymap. `InsertNewline`,
