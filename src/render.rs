@@ -123,12 +123,13 @@ pub fn render(frame: &mut Frame, editor: &Editor) {
         if is_focused && !editor.minibuffer.is_active() {
             let (cursor_line, cursor_col) = buf.char_to_line_col(pane.point);
             let text_width = text_area.width as usize;
+            let row_offset = clamped_row_offset(pane, buf, text_width);
 
-            // Compute visual row from scroll_top, accounting for wrapping and
-            // display-only tab expansion.
+            // Compute visual row from the top of the scroll_top line,
+            // accounting for wrapping and display-only tab expansion.
             // Only place cursor if it's within the visible viewport.
             let mut visual_row: usize = 0;
-            let max_rows = text_area.height as usize;
+            let max_rows = text_area.height as usize + row_offset;
             for lidx in pane.scroll_top..cursor_line {
                 let line_visual_width = line_visual_width(buf, lidx);
                 visual_row += visual_lines_for_length(line_visual_width, text_width);
@@ -139,32 +140,26 @@ pub fn render(frame: &mut Frame, editor: &Editor) {
                 }
             }
 
-            // Add offset within cursor's line if it wraps. The last wrap
-            // segment has no continuation marker and holds a full text_width
-            // chars, so clamp the row to the line's actual row count.
-            let cursor_line_chars = line_chars_without_ending(buf, cursor_line);
-            let cursor_visual_col = visual_col_for_buffer_col(&cursor_line_chars, cursor_col);
-            let line_visual_width = visual_width_for_chars(&cursor_line_chars);
-            let (row_in_line, col_in_segment) = if text_width > 1 && line_visual_width > text_width {
-                let cps = text_width - 1;
-                let last_row = visual_lines_for_length(line_visual_width, text_width) - 1;
-                let row = (cursor_visual_col / cps).min(last_row);
-                (row, cursor_visual_col - row * cps)
-            } else {
-                (0, cursor_visual_col)
-            };
+            // Add the cursor's row within its own line if it wraps.
+            let (row_in_line, col_in_segment) =
+                visual_row_col_in_line(buf, cursor_line, cursor_col, text_width);
             visual_row += row_in_line;
 
-            let screen_line = visual_row as u16;
             let screen_col = col_in_segment as u16;
 
-            // Both coordinates are pane-relative; compare against the pane's
+            // The first row_offset visual rows of the top line are scrolled
+            // off; a cursor row before them is above the viewport. Both
+            // coordinates are pane-relative; compare against the pane's
             // dimensions, not its absolute right edge.
-            if cursor_line >= pane.scroll_top
-                && screen_col < text_area.width
-                && screen_line < text_area.height
-            {
-                frame.set_cursor_position((text_area.x + screen_col, text_area.y + screen_line));
+            if cursor_line >= pane.scroll_top {
+                if let Some(screen_line) = visual_row.checked_sub(row_offset) {
+                    if screen_col < text_area.width && screen_line < text_area.height as usize {
+                        frame.set_cursor_position((
+                            text_area.x + screen_col,
+                            text_area.y + screen_line as u16,
+                        ));
+                    }
+                }
             }
         }
     }
@@ -236,6 +231,41 @@ pub(crate) fn line_visual_width(buf: &Buffer, line_idx: usize) -> usize {
 
 fn visual_col_for_buffer_col(line_chars: &[char], buffer_col: usize) -> usize {
     visual_width_for_chars(&line_chars[..buffer_col.min(line_chars.len())])
+}
+
+/// Visual (row, column) of a buffer position within its own line's wrap
+/// segments, using tab-expanded display widths. The last wrap segment has no
+/// continuation marker and holds a full `text_width` columns, so the row is
+/// clamped to the line's actual row count.
+pub(crate) fn visual_row_col_in_line(
+    buf: &Buffer,
+    line_idx: usize,
+    buffer_col: usize,
+    text_width: usize,
+) -> (usize, usize) {
+    let line_chars = line_chars_without_ending(buf, line_idx);
+    let visual_col = visual_col_for_buffer_col(&line_chars, buffer_col);
+    let line_visual_width = visual_width_for_chars(&line_chars);
+    if text_width > 1 && line_visual_width > text_width {
+        let cps = text_width - 1;
+        let last_row = visual_lines_for_length(line_visual_width, text_width) - 1;
+        let row = (visual_col / cps).min(last_row);
+        (row, visual_col - row * cps)
+    } else {
+        (0, visual_col)
+    }
+}
+
+/// A pane's `scroll_row_offset` clamped to the top line's actual visual
+/// height. The stored offset can go stale when a resize or an edit changes
+/// how the `scroll_top` line wraps; every consumer (renderer, cursor
+/// placement, mouse mapping) clamps through this so they agree.
+pub(crate) fn clamped_row_offset(pane: &Pane, buf: &Buffer, text_width: usize) -> usize {
+    if pane.scroll_row_offset == 0 || pane.scroll_top >= buf.line_count() {
+        return 0;
+    }
+    let top_rows = visual_lines_for_length(line_visual_width(buf, pane.scroll_top), text_width);
+    pane.scroll_row_offset.min(top_rows - 1)
 }
 
 pub(crate) fn buffer_col_for_visual_col(buf: &Buffer, line_idx: usize, target_visual_col: usize) -> usize {
@@ -333,6 +363,9 @@ fn render_pane_text(
     let max_visual_rows = area.height as usize;
     let total_lines = buf.line_count();
     let text_width = area.width as usize;
+    // Visual rows of the top line scrolled off above the viewport (nonzero
+    // only when that line wraps taller than the space above the cursor).
+    let row_offset = clamped_row_offset(pane, buf, text_width);
 
     // Compute per-character syntax styles for visible buffer lines
     let syntax_styles = compute_syntax_char_styles(buf, scroll_top, max_visual_rows);
@@ -371,9 +404,15 @@ fn render_pane_text(
 
             output_lines.push(Line::from(spans));
         } else {
-            // Line needs wrapping
+            // Line needs wrapping. For the top line, skip the wrap segments
+            // scrolled off above the viewport.
             let chars_per_segment = (text_width - 1).max(1);
-            let mut offset = 0;
+            let skip_rows = if line_idx == scroll_top {
+                row_offset
+            } else {
+                0
+            };
+            let mut offset = skip_rows * chars_per_segment;
 
             while offset < visual_cells.len() && output_lines.len() < max_visual_rows {
                 let remaining = visual_cells.len() - offset;

@@ -18,38 +18,121 @@ pub fn visual_lines_for_length(line_char_len: usize, text_width: usize) -> usize
     1 + excess.div_ceil(chars_per_segment)
 }
 
-/// Compute the `scroll_top` needed so that `cursor_line` is visible within a
-/// viewport of `viewport_height` visual rows and `viewport_width` columns,
-/// accounting for line wrapping.
-pub fn compute_scroll_top(
+/// Compute the scroll position — `(scroll_top, scroll_row_offset)`, where the
+/// offset is the number of visual rows of the `scroll_top` line scrolled off
+/// above the viewport — needed so that the cursor's visual row is visible
+/// within a viewport of `viewport_height` visual rows and `viewport_width`
+/// columns, accounting for line wrapping. `cursor_row_in_line` is the visual
+/// row of the cursor within its own (possibly wrapped) line, so the cursor
+/// can be brought into view even inside a single line taller than the
+/// viewport.
+pub fn compute_scroll_position(
     scroll_top: usize,
+    scroll_row_offset: usize,
     cursor_line: usize,
+    cursor_row_in_line: usize,
     viewport_height: usize,
     viewport_width: usize,
     line_len: impl Fn(usize) -> usize,
-) -> usize {
-    if cursor_line < scroll_top {
-        return cursor_line;
+) -> (usize, usize) {
+    // Cursor above the first visible visual row: make its row the top.
+    if cursor_line < scroll_top
+        || (cursor_line == scroll_top && cursor_row_in_line < scroll_row_offset)
+    {
+        return (cursor_line, cursor_row_in_line);
     }
 
-    // Count visual rows from scroll_top through cursor_line (inclusive).
-    let mut visual_rows: usize = 0;
-    for line in scroll_top..=cursor_line {
+    // Clamp a stale offset (e.g. after a resize or edit changed how the top
+    // line wraps) to the top line's actual visual height.
+    let top_rows = visual_lines_for_length(line_len(scroll_top), viewport_width);
+    let scroll_row_offset = scroll_row_offset.min(top_rows - 1);
+
+    let viewport_height = viewport_height.max(1);
+
+    // Count visual rows from the first visible row through the cursor's
+    // visual row (inclusive).
+    let mut visual_rows: usize = cursor_row_in_line + 1;
+    for line in scroll_top..cursor_line {
         visual_rows += visual_lines_for_length(line_len(line), viewport_width);
     }
+    visual_rows -= scroll_row_offset;
 
-    // If the cursor line fits in the viewport, nothing to do.
+    // If the cursor's row is within the viewport, nothing to do.
     if visual_rows <= viewport_height {
-        return scroll_top;
+        return (scroll_top, scroll_row_offset);
     }
 
-    // Advance scroll_top until the cursor line fits.
+    // Scroll down by the excess so the cursor's visual row becomes the last
+    // viewport row.
+    let excess = visual_rows - viewport_height;
     let mut new_top = scroll_top;
-    while visual_rows > viewport_height && new_top < cursor_line {
-        visual_rows -= visual_lines_for_length(line_len(new_top), viewport_width);
+    let mut new_offset = scroll_row_offset + excess;
+    while new_top < cursor_line {
+        let rows = visual_lines_for_length(line_len(new_top), viewport_width);
+        if new_offset < rows {
+            break;
+        }
+        new_offset -= rows;
         new_top += 1;
     }
-    new_top
+    if new_top == cursor_line {
+        new_offset = new_offset.min(cursor_row_in_line);
+    }
+    (new_top, new_offset)
+}
+
+/// Advance a `(scroll_top, scroll_row_offset)` scroll position down by `n`
+/// visual rows, stopping at the last visual row of the last buffer line.
+/// A stale offset is clamped to the top line's actual visual height first.
+pub fn scroll_down_visual_rows(
+    scroll_top: usize,
+    scroll_row_offset: usize,
+    n: usize,
+    total_lines: usize,
+    viewport_width: usize,
+    line_len: impl Fn(usize) -> usize,
+) -> (usize, usize) {
+    let mut top = scroll_top.min(total_lines.saturating_sub(1));
+    let mut rows = visual_lines_for_length(line_len(top), viewport_width);
+    let mut offset = scroll_row_offset.min(rows - 1);
+    for _ in 0..n {
+        if offset + 1 < rows {
+            offset += 1;
+        } else if top + 1 < total_lines {
+            top += 1;
+            offset = 0;
+            rows = visual_lines_for_length(line_len(top), viewport_width);
+        } else {
+            break;
+        }
+    }
+    (top, offset)
+}
+
+/// Move a `(scroll_top, scroll_row_offset)` scroll position up by `n` visual
+/// rows, stopping at the first visual row of the first buffer line.
+pub fn scroll_up_visual_rows(
+    scroll_top: usize,
+    scroll_row_offset: usize,
+    n: usize,
+    total_lines: usize,
+    viewport_width: usize,
+    line_len: impl Fn(usize) -> usize,
+) -> (usize, usize) {
+    let mut top = scroll_top.min(total_lines.saturating_sub(1));
+    let mut offset =
+        scroll_row_offset.min(visual_lines_for_length(line_len(top), viewport_width) - 1);
+    for _ in 0..n {
+        if offset > 0 {
+            offset -= 1;
+        } else if top > 0 {
+            top -= 1;
+            offset = visual_lines_for_length(line_len(top), viewport_width) - 1;
+        } else {
+            break;
+        }
+    }
+    (top, offset)
 }
 
 /// Map a position through an edit that replaced `removed` units at `start`
@@ -107,6 +190,7 @@ struct BufferViewState {
     mark: Option<usize>,
     preferred_column: Option<usize>,
     scroll_top: usize,
+    scroll_row_offset: usize,
 }
 
 /// A single pane (window) viewing a buffer.
@@ -116,6 +200,11 @@ pub struct Pane {
     pub mark: Option<usize>,
     pub preferred_column: Option<usize>,
     pub scroll_top: usize,
+    /// Visual rows of the `scroll_top` line scrolled off above the viewport;
+    /// nonzero only when the top line wraps taller than the space above the
+    /// cursor. Consumers clamp it to the top line's current visual height
+    /// (it can go stale when a resize or edit changes how that line wraps).
+    pub scroll_row_offset: usize,
     pub viewport_height: usize,
     pub viewport_width: usize,
     pub last_buffer_id: Option<BufferId>,
@@ -130,6 +219,7 @@ impl Pane {
             mark: None,
             preferred_column: None,
             scroll_top: 0,
+            scroll_row_offset: 0,
             viewport_height: 24,
             viewport_width: 80,
             last_buffer_id: None,
@@ -143,6 +233,7 @@ impl Pane {
             mark: self.mark,
             preferred_column: self.preferred_column,
             scroll_top: self.scroll_top,
+            scroll_row_offset: self.scroll_row_offset,
         }
     }
 
@@ -173,12 +264,16 @@ impl Pane {
         self.mark = state.mark.map(|mark| mark.min(buffer_len));
         self.preferred_column = state.preferred_column;
         self.scroll_top = state.scroll_top;
+        self.scroll_row_offset = state.scroll_row_offset;
     }
 
     /// Adjust point, mark, scroll position, and saved view state for an edit
     /// to `buffer_id`. Keeps positions in other panes valid when a shared
     /// buffer is edited; `scroll_top` shifts with the edit's line delta so
-    /// the pane keeps showing the same content.
+    /// the pane keeps showing the same content. `scroll_row_offset` is left
+    /// as-is — a pane has no access to line lengths, so an edit that changes
+    /// how the top line wraps can leave it stale; every consumer clamps it
+    /// to the top line's current visual height before use.
     pub fn adjust_for_edit(&mut self, buffer_id: BufferId, delta: EditDelta) {
         let EditDelta {
             start,
@@ -218,18 +313,28 @@ impl Pane {
         }
     }
 
-    /// Adjust `scroll_top` so that `cursor_line` is visible within the viewport,
-    /// accounting for line wrapping. `line_len` returns the character count for
-    /// a given buffer line index.
+    /// Adjust the scroll position so that visual row `cursor_row_in_line` of
+    /// `cursor_line` is visible within the viewport, accounting for line
+    /// wrapping. `line_len` returns the character count for a given buffer
+    /// line index.
     #[cfg(test)]
-    pub fn ensure_visible(&mut self, cursor_line: usize, line_len: impl Fn(usize) -> usize) {
-        self.scroll_top = compute_scroll_top(
+    pub fn ensure_visible(
+        &mut self,
+        cursor_line: usize,
+        cursor_row_in_line: usize,
+        line_len: impl Fn(usize) -> usize,
+    ) {
+        let (top, offset) = compute_scroll_position(
             self.scroll_top,
+            self.scroll_row_offset,
             cursor_line,
+            cursor_row_in_line,
             self.viewport_height,
             self.viewport_width,
             line_len,
         );
+        self.scroll_top = top;
+        self.scroll_row_offset = offset;
     }
 }
 
@@ -382,6 +487,7 @@ impl PaneTree {
                 pane.point,
                 pane.mark,
                 pane.scroll_top,
+                pane.scroll_row_offset,
                 pane.preferred_column,
                 pane.last_buffer_id,
                 pane.buffer_states.clone(),
@@ -392,9 +498,10 @@ impl PaneTree {
         new_pane.point = pane_data.1;
         new_pane.mark = pane_data.2;
         new_pane.scroll_top = pane_data.3;
-        new_pane.preferred_column = pane_data.4;
-        new_pane.last_buffer_id = pane_data.5;
-        new_pane.buffer_states = pane_data.6;
+        new_pane.scroll_row_offset = pane_data.4;
+        new_pane.preferred_column = pane_data.5;
+        new_pane.last_buffer_id = pane_data.6;
+        new_pane.buffer_states = pane_data.7;
 
         self.root = PaneNode::Leaf(new_pane);
         self.focus_path = vec![];
@@ -851,7 +958,7 @@ mod tests {
         let mut pane = Pane::new(0);
         pane.viewport_height = 10;
         pane.scroll_top = 0;
-        pane.ensure_visible(15, short_line);
+        pane.ensure_visible(15, 0, short_line);
         assert_eq!(pane.scroll_top, 6);
     }
 
@@ -860,7 +967,7 @@ mod tests {
         let mut pane = Pane::new(0);
         pane.viewport_height = 10;
         pane.scroll_top = 10;
-        pane.ensure_visible(5, short_line);
+        pane.ensure_visible(5, 0, short_line);
         assert_eq!(pane.scroll_top, 5);
     }
 
@@ -869,7 +976,7 @@ mod tests {
         let mut pane = Pane::new(0);
         pane.viewport_height = 10;
         pane.scroll_top = 5;
-        pane.ensure_visible(7, short_line);
+        pane.ensure_visible(7, 0, short_line);
         assert_eq!(pane.scroll_top, 5);
     }
 
@@ -884,11 +991,14 @@ mod tests {
         // Visual rows: line0=2, line1=1, line2=1 = 4 rows fills viewport.
         // Moving to line 3 should scroll.
         let line_len = |l: usize| if l == 0 { 26 } else { 5 };
-        pane.ensure_visible(3, line_len);
+        pane.ensure_visible(3, 0, line_len);
+        // Scrolling is visual-row granular: one row of the wrapped line 0
+        // moves off the top, which is enough to bring line 3 into view.
         assert!(
-            pane.scroll_top > 0,
-            "should have scrolled, scroll_top={}",
-            pane.scroll_top
+            pane.scroll_top > 0 || pane.scroll_row_offset > 0,
+            "should have scrolled, scroll_top={} scroll_row_offset={}",
+            pane.scroll_top,
+            pane.scroll_row_offset
         );
     }
 
@@ -901,8 +1011,98 @@ mod tests {
         // Line 0 wraps to 2 visual rows, line 1 takes 1 row = 3 rows total.
         // viewport_height=4, so cursor on line 1 should NOT scroll.
         let line_len = |l: usize| if l == 0 { 26 } else { 5 };
-        pane.ensure_visible(1, line_len);
+        pane.ensure_visible(1, 0, line_len);
         assert_eq!(pane.scroll_top, 0);
+    }
+
+    // === Sub-line scrolling within lines taller than the viewport ===
+
+    // One giant line: 200 chars at width 20 => 11 visual rows (19 chars per
+    // wrapped segment).
+    fn giant_line(_line: usize) -> usize {
+        200
+    }
+
+    #[test]
+    fn compute_scroll_position_scrolls_down_within_giant_line() {
+        let (top, offset) = compute_scroll_position(0, 0, 0, 10, 4, 20, giant_line);
+        assert_eq!((top, offset), (0, 7)); // rows 7..=10 visible
+    }
+
+    #[test]
+    fn compute_scroll_position_scrolls_up_within_giant_line() {
+        let (top, offset) = compute_scroll_position(0, 7, 0, 2, 4, 20, giant_line);
+        assert_eq!((top, offset), (0, 2));
+    }
+
+    #[test]
+    fn compute_scroll_position_no_change_when_row_visible() {
+        let (top, offset) = compute_scroll_position(0, 7, 0, 8, 4, 20, giant_line);
+        assert_eq!((top, offset), (0, 7));
+    }
+
+    #[test]
+    fn compute_scroll_position_enters_giant_line_from_short_lines() {
+        // Lines 0-2 short (1 row each), line 3 giant (11 rows). Cursor on
+        // the giant line's last row must land it on the bottom viewport row.
+        let line_len = |l: usize| if l == 3 { 200 } else { 5 };
+        let (top, offset) = compute_scroll_position(0, 0, 3, 10, 4, 20, line_len);
+        assert_eq!((top, offset), (3, 7));
+    }
+
+    #[test]
+    fn compute_scroll_position_clamps_stale_offset() {
+        // Offset 50 is beyond the top line's 11 rows; after clamping to the
+        // last row (10), the cursor's row 10 is visible.
+        let (top, offset) = compute_scroll_position(0, 50, 0, 10, 4, 20, giant_line);
+        assert_eq!((top, offset), (0, 10));
+    }
+
+    #[test]
+    fn scroll_down_visual_rows_moves_within_giant_line_and_stops_at_last_row() {
+        let (top, offset) = scroll_down_visual_rows(0, 0, 3, 1, 20, giant_line);
+        assert_eq!((top, offset), (0, 3));
+        let (top, offset) = scroll_down_visual_rows(top, offset, 100, 1, 20, giant_line);
+        assert_eq!((top, offset), (0, 10)); // clamped at the last visual row
+    }
+
+    #[test]
+    fn scroll_down_visual_rows_crosses_into_next_line() {
+        // Line 0 wraps to 2 rows (26 chars at width 20), lines 1+ short.
+        // Scrolling 3 rows: (0,0) -> (0,1) -> (1,0) -> (2,0).
+        let line_len = |l: usize| if l == 0 { 26 } else { 5 };
+        let (top, offset) = scroll_down_visual_rows(0, 0, 3, 5, 20, line_len);
+        assert_eq!((top, offset), (2, 0));
+    }
+
+    #[test]
+    fn scroll_up_visual_rows_enters_wrapped_line_at_its_last_row() {
+        let line_len = |l: usize| if l == 0 { 200 } else { 5 };
+        let (top, offset) = scroll_up_visual_rows(1, 0, 1, 2, 20, line_len);
+        assert_eq!((top, offset), (0, 10));
+        let (top, offset) = scroll_up_visual_rows(top, offset, 100, 2, 20, line_len);
+        assert_eq!((top, offset), (0, 0));
+    }
+
+    #[test]
+    fn ensure_visible_scrolls_within_one_giant_line_and_back() {
+        let mut pane = Pane::new(0);
+        pane.viewport_height = 4;
+        pane.viewport_width = 20;
+        pane.ensure_visible(0, 10, giant_line);
+        assert_eq!((pane.scroll_top, pane.scroll_row_offset), (0, 7));
+        pane.ensure_visible(0, 0, giant_line);
+        assert_eq!((pane.scroll_top, pane.scroll_row_offset), (0, 0));
+    }
+
+    #[test]
+    fn buffer_state_saves_and_restores_scroll_row_offset() {
+        let mut pane = Pane::new(1);
+        pane.scroll_row_offset = 7;
+        pane.switch_buffer(2, 100);
+        assert_eq!(pane.scroll_row_offset, 0);
+        pane.restore_buffer_state(1, 200);
+        assert_eq!(pane.scroll_row_offset, 7);
     }
 
     #[test]

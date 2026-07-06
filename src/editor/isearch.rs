@@ -18,6 +18,7 @@ pub struct ISearchState {
     /// Position before search started (to restore on C-g).
     pub original_point: usize,
     pub original_scroll_top: usize,
+    pub original_scroll_row_offset: usize,
     /// Current match position (char offset of match start).
     pub current_match: Option<usize>,
     /// Char positions of all matches, recomputed once per query change.
@@ -38,6 +39,7 @@ impl Editor {
             direction,
             original_point: pane.point,
             original_scroll_top: pane.scroll_top,
+            original_scroll_row_offset: pane.scroll_row_offset,
             current_match: None,
             matches: Vec::new(),
         });
@@ -80,14 +82,24 @@ impl Editor {
         self.pane_tree.focused_pane_mut().point = char_pos;
         let pane = self.pane_tree.focused_pane();
         let scroll_top = pane.scroll_top;
+        let scroll_row_offset = pane.scroll_row_offset;
         let vh = pane.viewport_height;
         let vw = pane.viewport_width;
         let buf = self.current_buffer();
-        let (line, _) = buf.char_to_line_col(char_pos);
-        let new_top = crate::pane::compute_scroll_top(scroll_top, line, vh, vw, |l| {
-            crate::render::line_visual_width(buf, l)
-        });
-        self.pane_tree.focused_pane_mut().scroll_top = new_top;
+        let (line, col) = buf.char_to_line_col(char_pos);
+        let (cursor_row, _) = crate::render::visual_row_col_in_line(buf, line, col, vw);
+        let (new_top, new_offset) = crate::pane::compute_scroll_position(
+            scroll_top,
+            scroll_row_offset,
+            line,
+            cursor_row,
+            vh,
+            vw,
+            |l| crate::render::line_visual_width(buf, l),
+        );
+        let pane = self.pane_tree.focused_pane_mut();
+        pane.scroll_top = new_top;
+        pane.scroll_row_offset = new_offset;
         if let Some(ref mut isearch) = self.isearch {
             isearch.current_match = Some(char_pos);
         }
@@ -106,6 +118,7 @@ impl Editor {
                 let pane = self.pane_tree.focused_pane_mut();
                 pane.point = isearch.original_point;
                 pane.scroll_top = isearch.original_scroll_top;
+                pane.scroll_row_offset = isearch.original_scroll_row_offset;
             }
             if let Some(ref mut isearch) = self.isearch {
                 isearch.current_match = None;

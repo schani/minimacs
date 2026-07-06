@@ -123,7 +123,9 @@ lengths (`String::len()`) must never be mixed in. `apply_edit`:
    length delta. `scroll_top` is adjusted the same way in line units (an
    `EditDelta` carries the edit's char span plus its line-level effect), so
    a pane keeps showing the same content when another pane edits above its
-   viewport.
+   viewport. The pane's sub-line `scroll_row_offset` is left untouched (the
+   pane can't see line lengths); consumers clamp it before use (see the
+   PaneTree section).
 
 Commands then set the active pane's point explicitly (in char units) when they
 want something other than marker semantics, e.g. point after inserted text.
@@ -201,7 +203,8 @@ struct Pane {
     point: usize,
     mark: Option<usize>,
     preferred_column: Option<usize>,
-    scroll_top: usize,
+    scroll_top: usize,        // first (partially) visible buffer line
+    scroll_row_offset: usize, // visual rows of that line scrolled off above
     viewport_height: usize,
     viewport_width: usize,
     last_buffer_id: Option<BufferId>,
@@ -219,11 +222,28 @@ struct PaneTree {
 }
 ```
 
+The scroll position is sub-line granular: `scroll_top` is the first buffer
+line with any visible content, and `scroll_row_offset` is how many visual rows
+of that line (when it wraps) are scrolled off above the viewport. The offset
+is only ever nonzero for a wrapping top line, which is what lets the cursor's
+visual row be brought into view even inside a single line taller than the
+viewport (e.g. `M->` in a one-line minified file). `compute_scroll_position`
+in pane.rs computes the `(scroll_top, scroll_row_offset)` pair that makes the
+cursor's visual row visible; `scroll_down_visual_rows` /
+`scroll_up_visual_rows` move the pair by whole visual rows (mouse wheel).
+Everything that doesn't care about wrapping (edit adjustment, view-state
+save/restore) treats `scroll_top` as a plain line index. An edit or resize
+can change how the top line wraps, leaving the stored offset stale;
+`Pane::adjust_for_edit` cannot see line lengths, so every consumer (renderer,
+cursor placement, mouse mapping, scroll computation) clamps the offset to the
+top line's current visual height before use.
+
 When a pane switches away from a buffer, it saves that buffer's point, mark,
-preferred column, and scroll position into `buffer_states`. Switching back to a
-buffer in the same pane restores that saved view state. `last_buffer_id` tracks
-the alternate buffer for that pane, so `C-x b RET` toggles to the most recently
-visited buffer in that window.
+preferred column, and scroll position (including the sub-line row offset)
+into `buffer_states`. Switching back to a buffer in the same pane restores
+that saved view state. `last_buffer_id` tracks the alternate buffer for that
+pane, so `C-x b RET` toggles to the most recently visited buffer in that
+window.
 
 The focus path is a sequence of child indices that navigate from the root to the
 currently focused pane. Operations like `focused_pane()` walk this path.
@@ -339,11 +359,16 @@ When incremental search is active, the dispatcher instead routes the paste to
 `Event::Mouse` handles left-button clicks. When the minibuffer is not active,
 a click determines which pane was clicked (using `calculate_rects()`), focuses
 that pane, and places the cursor at the clicked position. The position
-calculation accounts for line wrapping, scroll position, and display-only tab
+calculation accounts for line wrapping, scroll position — including the
+pane's `scroll_row_offset`, added to the clicked screen row so wrap segments
+of a partially scrolled-off top line map correctly — and display-only tab
 expansion while still mapping back to buffer character indices.
 Clicks below all content place the cursor at the end of the buffer.
 Mouse scroll events (`ScrollUp`/`ScrollDown`) scroll the pane under the mouse
-cursor by 3 lines without changing which pane is focused.
+cursor by 3 **visual rows** (`scroll_down_visual_rows` /
+`scroll_up_visual_rows` in pane.rs) without changing which pane is focused,
+so the wheel moves smoothly through wrapped lines and can scroll within a
+single line taller than the viewport.
 `Event::Resize` is handled implicitly by the viewport update; it deliberately
 does not cancel a chord in progress.
 
@@ -368,7 +393,9 @@ does not cancel a chord in progress.
      limitation: a double-width char that straddles a wrap boundary may render
      one column off on that row.
    - Long lines are wrapped with a `\` continuation marker in the last column,
-     using the expanded visual width.
+     using the expanded visual width. The first `scroll_row_offset` wrap
+     segments of the top (`scroll_top`) line are skipped — they are scrolled
+     off above the viewport.
    - Overlays region highlighting (light blue background between mark and
      point).
    - Overlays search match highlighting (olive background for the current
@@ -383,7 +410,14 @@ does not cancel a chord in progress.
 5. Sets the terminal cursor position. If the minibuffer is active, the cursor
    goes to the minibuffer input. Otherwise it is placed at the focused pane's
    point, accounting for line wrapping and display-only tab expansion when
-   computing the visual position.
+   computing the visual position, and subtracting the pane's
+   `scroll_row_offset` (a cursor row among the scrolled-off wrap segments of
+   the top line is above the viewport and left unset). After every command,
+   `Editor::ensure_cursor_visible` recomputes `(scroll_top,
+   scroll_row_offset)` via `compute_scroll_position` so the cursor's visual
+   row is always on screen — even inside one line that wraps taller than the
+   viewport. Recentering (`C-l`) is line-granular: it resets the offset to 0
+   and lets `ensure_cursor_visible` re-apply one if needed.
 
 ## Syntax Highlighting
 

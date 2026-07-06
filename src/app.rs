@@ -399,7 +399,11 @@ where
                 let text_width = text_area.width as usize;
 
                 let rel_x = (click_x - text_area.x) as usize;
-                let rel_y = (click_y - text_area.y) as usize;
+                // The clicked screen row plus any visual rows of the top
+                // line scrolled off above the viewport gives the visual row
+                // counted from the top of the scroll_top line.
+                let rel_y = (click_y - text_area.y) as usize
+                    + render::clamped_row_offset(pane, buf, text_width);
 
                 let col_in_text = rel_x;
 
@@ -464,7 +468,9 @@ where
         };
 
         let (pane_rects, _separators) = self.editor.pane_tree.calculate_rects(pane_area);
-        let scroll_lines: usize = 3;
+        // One wheel notch scrolls 3 visual rows, so wrapped lines — even a
+        // single line taller than the viewport — scroll through smoothly.
+        let scroll_rows: usize = 3;
 
         for (path, rect) in &pane_rects {
             if scroll_x >= rect.x
@@ -472,22 +478,37 @@ where
                 && scroll_y >= rect.y
                 && scroll_y < rect.y + rect.height
             {
-                let buffer_id = self.editor.pane_tree.pane_at_focus_path(path).buffer_id;
-                let total_lines = self.editor.buffer_by_id(buffer_id).line_count();
-                let pane = self.editor.pane_tree.pane_at_path_pub_mut(path);
+                let pane = self.editor.pane_tree.pane_at_focus_path(path);
+                let buf = self.editor.buffer_by_id(pane.buffer_id);
+                let scroll_top = pane.scroll_top;
+                let scroll_row_offset = pane.scroll_row_offset;
+                let text_width = rect.width as usize;
+                let total_lines = buf.line_count();
+                let line_len = |l: usize| render::line_visual_width(buf, l);
 
-                match mouse.kind {
-                    MouseEventKind::ScrollDown => {
-                        pane.scroll_top = pane
-                            .scroll_top
-                            .saturating_add(scroll_lines)
-                            .min(total_lines.saturating_sub(1));
-                    }
-                    MouseEventKind::ScrollUp => {
-                        pane.scroll_top = pane.scroll_top.saturating_sub(scroll_lines);
-                    }
-                    _ => {}
-                }
+                let (new_top, new_offset) = match mouse.kind {
+                    MouseEventKind::ScrollDown => crate::pane::scroll_down_visual_rows(
+                        scroll_top,
+                        scroll_row_offset,
+                        scroll_rows,
+                        total_lines,
+                        text_width,
+                        line_len,
+                    ),
+                    MouseEventKind::ScrollUp => crate::pane::scroll_up_visual_rows(
+                        scroll_top,
+                        scroll_row_offset,
+                        scroll_rows,
+                        total_lines,
+                        text_width,
+                        line_len,
+                    ),
+                    _ => return,
+                };
+
+                let pane = self.editor.pane_tree.pane_at_path_pub_mut(path);
+                pane.scroll_top = new_top;
+                pane.scroll_row_offset = new_offset;
                 return;
             }
         }
@@ -1001,9 +1022,17 @@ mod tests {
             .current_buffer()
             .char_to_line_col(app.editor.point());
         assert_eq!(line, 2);
+        // Scrolling is visual-row granular: sub-line scrolling within the
+        // wrapped first line counts, as long as the cursor's line shows.
+        let pane = app.editor.pane_tree.focused_pane();
         assert!(
-            app.editor.pane_tree.focused_pane().scroll_top > 0,
+            pane.scroll_top > 0 || pane.scroll_row_offset > 0,
             "viewport must scroll when wrapped tab lines push the cursor below it"
+        );
+        let screen = capture_screen(&app.terminal);
+        assert!(
+            screen.contains("ccc"),
+            "cursor's line must be visible: {screen}"
         );
     }
 
@@ -1074,6 +1103,202 @@ mod tests {
             "line4 should be visible after scrolling down: {}",
             screen
         );
+    }
+
+    // === Sub-line scrolling tests (lines that wrap taller than the viewport) ===
+    //
+    // Terminal 20x6 => 4 text rows, wrap width 20 (19 chars per wrapped
+    // segment + '\'). A 200-char line occupies 11 visual rows.
+
+    /// A line of repeating digits: the char at index i is i % 10, so any
+    /// off-by-one in cursor/scroll mapping shows up as a digit mismatch.
+    fn digit_line(len: usize) -> String {
+        "0123456789".chars().cycle().take(len).collect()
+    }
+
+    /// The character under the terminal cursor.
+    fn char_under_cursor(app: &mut App<TestBackend>) -> String {
+        let pos = app.terminal.get_cursor_position().unwrap();
+        app.terminal.backend().buffer()[(pos.x, pos.y)]
+            .symbol()
+            .to_string()
+    }
+
+    #[test]
+    fn meta_end_in_one_line_buffer_scrolls_cursor_into_view() {
+        let text = digit_line(200);
+        let events = vec![alt(KeyCode::Char('>'))];
+        let (mut app, mut events) = test_app_with_text(20, 6, &text, events);
+        app.run_until_idle(&mut events).unwrap();
+        assert_eq!(app.editor.point(), 200);
+
+        // Point is on the line's last visual row (chars 190..200, so col 10);
+        // that row must be scrolled into view as the bottom text row.
+        let pos = app.terminal.get_cursor_position().unwrap();
+        assert_eq!(
+            (pos.x, pos.y),
+            (10, 3),
+            "cursor must be visible on the last text row"
+        );
+        let screen = capture_screen(&app.terminal);
+        let lines: Vec<&str> = screen.lines().collect();
+        assert_eq!(
+            lines[3], "0123456789",
+            "bottom row must show the line's tail"
+        );
+    }
+
+    #[test]
+    fn meta_beginning_recovers_from_sub_line_scroll() {
+        let text = digit_line(200);
+        let events = vec![alt(KeyCode::Char('>')), alt(KeyCode::Char('<'))];
+        let (mut app, mut events) = test_app_with_text(20, 6, &text, events);
+        app.run_until_idle(&mut events).unwrap();
+        assert_eq!(app.editor.point(), 0);
+
+        let pos = app.terminal.get_cursor_position().unwrap();
+        assert_eq!((pos.x, pos.y), (0, 0));
+        let screen = capture_screen(&app.terminal);
+        let first_row: String = text.chars().take(19).collect();
+        assert_eq!(
+            screen.lines().next().unwrap(),
+            format!("{first_row}\\"),
+            "view must be back at the top of the line"
+        );
+    }
+
+    #[test]
+    fn ctrl_f_steps_through_giant_wrapped_line_keeping_cursor_visible() {
+        // 100 chars wrap to 6 visual rows — taller than the 4-row viewport.
+        let len = 100;
+        let text = digit_line(len);
+        let (mut app, mut events) = test_app_with_text(20, 6, &text, vec![]);
+        app.run_until_idle(&mut events).unwrap();
+
+        for step in 1..=len {
+            let mut es = TestEventSource::new(vec![ctrl('f')]);
+            app.run_until_idle(&mut es).unwrap();
+            assert_eq!(app.editor.point(), step);
+            let pos = app.terminal.get_cursor_position().unwrap();
+            assert!(pos.y < 4, "cursor row {} off-screen at point {step}", pos.y);
+            if step < len {
+                assert_eq!(
+                    char_under_cursor(&mut app),
+                    (step % 10).to_string(),
+                    "cursor not over the char at point {step}"
+                );
+            }
+        }
+
+        // And back again: every C-b step must keep the cursor visible too.
+        for step in (0..len).rev() {
+            let mut es = TestEventSource::new(vec![ctrl('b')]);
+            app.run_until_idle(&mut es).unwrap();
+            assert_eq!(app.editor.point(), step);
+            let pos = app.terminal.get_cursor_position().unwrap();
+            assert!(
+                pos.y < 4,
+                "cursor row {} off-screen at point {step} going back",
+                pos.y
+            );
+            assert_eq!(
+                char_under_cursor(&mut app),
+                (step % 10).to_string(),
+                "cursor not over the char at point {step} going back"
+            );
+        }
+    }
+
+    #[test]
+    fn mouse_wheel_scrolls_within_one_line_buffer() {
+        let text = digit_line(200);
+        let events = vec![mouse_scroll_down(5, 2)];
+        let (mut app, mut events) = test_app_with_text(20, 6, &text, events);
+        app.run_until_idle(&mut events).unwrap();
+
+        // One notch scrolls 3 visual rows into the line: the top text row
+        // now shows chars 57..76.
+        let screen = capture_screen(&app.terminal);
+        let scrolled_row: String = text.chars().skip(57).take(19).collect();
+        assert_eq!(
+            screen.lines().next().unwrap(),
+            format!("{scrolled_row}\\"),
+            "wheel must scroll within the single wrapped line"
+        );
+
+        // Wheel-up recovers to the top of the line.
+        let mut es = TestEventSource::new(vec![mouse_scroll_up(5, 2)]);
+        app.run_until_idle(&mut es).unwrap();
+        let screen = capture_screen(&app.terminal);
+        let first_row: String = text.chars().take(19).collect();
+        assert_eq!(screen.lines().next().unwrap(), format!("{first_row}\\"));
+    }
+
+    #[test]
+    fn mouse_click_on_wrapped_row_accounts_for_sub_line_scroll() {
+        let text = digit_line(200);
+        // One wheel notch scrolls 3 visual rows into the line, so a click on
+        // text row 1, column 2 lands on visual row 4 of the line.
+        let events = vec![mouse_scroll_down(5, 2), mouse_click(2, 1)];
+        let (mut app, mut events) = test_app_with_text(20, 6, &text, events);
+        app.run_until_idle(&mut events).unwrap();
+        assert_eq!(app.editor.point(), 4 * 19 + 2);
+    }
+
+    #[test]
+    fn giant_line_after_normal_lines_scrolls_down_and_back() {
+        let text = format!("one\ntwo\nthree\n{}", digit_line(200));
+        let events = vec![alt(KeyCode::Char('>'))];
+        let (mut app, mut events) = test_app_with_text(20, 6, &text, events);
+        app.run_until_idle(&mut events).unwrap();
+
+        // Cursor at the end of the giant line: its last visual row must be
+        // the bottom text row.
+        let pos = app.terminal.get_cursor_position().unwrap();
+        assert_eq!((pos.x, pos.y), (10, 3));
+        let screen = capture_screen(&app.terminal);
+        assert_eq!(screen.lines().nth(3).unwrap(), "0123456789");
+
+        // M-< brings the view all the way back up.
+        let mut es = TestEventSource::new(vec![alt(KeyCode::Char('<'))]);
+        app.run_until_idle(&mut es).unwrap();
+        let pos = app.terminal.get_cursor_position().unwrap();
+        assert_eq!((pos.x, pos.y), (0, 0));
+        let screen = capture_screen(&app.terminal);
+        assert_eq!(screen.lines().next().unwrap(), "one");
+
+        // Two wheel notches scroll 6 visual rows: past the three short lines
+        // and 3 rows into the giant line.
+        let mut es = TestEventSource::new(vec![mouse_scroll_down(5, 2), mouse_scroll_down(5, 2)]);
+        app.run_until_idle(&mut es).unwrap();
+        let screen = capture_screen(&app.terminal);
+        let giant = digit_line(200);
+        let scrolled_row: String = giant.chars().skip(57).take(19).collect();
+        assert_eq!(screen.lines().next().unwrap(), format!("{scrolled_row}\\"));
+
+        // And two notches back up restore the top of the file.
+        let mut es = TestEventSource::new(vec![mouse_scroll_up(5, 2), mouse_scroll_up(5, 2)]);
+        app.run_until_idle(&mut es).unwrap();
+        let screen = capture_screen(&app.terminal);
+        assert_eq!(screen.lines().next().unwrap(), "one");
+    }
+
+    #[test]
+    fn recenter_keeps_cursor_visible_in_giant_wrapped_line() {
+        let text = digit_line(200);
+        let events = vec![alt(KeyCode::Char('>')), ctrl('l')];
+        let (mut app, mut events) = test_app_with_text(20, 6, &text, events);
+        app.run_until_idle(&mut events).unwrap();
+
+        // After C-l the cursor's visual row (the line's tail, rendered as a
+        // bare "0123456789" row) must still be on screen, with the cursor on
+        // it at column 10.
+        let screen = capture_screen(&app.terminal);
+        let lines: Vec<&str> = screen.lines().collect();
+        let tail_row = lines.iter().take(4).position(|l| *l == "0123456789");
+        let tail_row = tail_row.expect("the cursor's visual row must remain visible after C-l");
+        let pos = app.terminal.get_cursor_position().unwrap();
+        assert_eq!((pos.x, pos.y as usize), (10, tail_row));
     }
 
     // === Recenter integration tests ===

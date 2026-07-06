@@ -357,15 +357,27 @@ impl Editor {
         let pane = self.pane_tree.focused_pane();
         let point = pane.point;
         let scroll_top = pane.scroll_top;
+        let scroll_row_offset = pane.scroll_row_offset;
         let vh = pane.viewport_height;
         let vw = pane.viewport_width;
         let buf = self.current_buffer();
-        let (line, _) = buf.char_to_line_col(point);
-        // Wrap by tab-expanded visual width, matching the renderer.
-        let new_top = crate::pane::compute_scroll_top(scroll_top, line, vh, vw, |l| {
-            crate::render::line_visual_width(buf, l)
-        });
-        self.pane_tree.focused_pane_mut().scroll_top = new_top;
+        let (line, col) = buf.char_to_line_col(point);
+        // Wrap by tab-expanded visual width, matching the renderer. The
+        // cursor's visual row within its own line lets sub-line scrolling
+        // bring it into view even when that line is taller than the viewport.
+        let (cursor_row, _) = crate::render::visual_row_col_in_line(buf, line, col, vw);
+        let (new_top, new_offset) = crate::pane::compute_scroll_position(
+            scroll_top,
+            scroll_row_offset,
+            line,
+            cursor_row,
+            vh,
+            vw,
+            |l| crate::render::line_visual_width(buf, l),
+        );
+        let pane = self.pane_tree.focused_pane_mut();
+        pane.scroll_top = new_top;
+        pane.scroll_row_offset = new_offset;
     }
 
     // === Pane split commands ===
@@ -680,7 +692,13 @@ impl Editor {
             RecenterPosition::Bottom => cursor_line.saturating_sub(height.saturating_sub(1)),
         };
 
-        self.active_pane_mut().scroll_top = new_scroll_top;
+        // Recentering is line-granular; reset any sub-line offset so the
+        // chosen line starts at the top of its slot. `ensure_cursor_visible`
+        // (run after every command) re-applies an offset if the cursor's
+        // visual row would otherwise fall below a taller-than-viewport line.
+        let pane = self.active_pane_mut();
+        pane.scroll_top = new_scroll_top;
+        pane.scroll_row_offset = 0;
         self.last_recenter_position = Some(position);
     }
 
@@ -1257,6 +1275,7 @@ impl Editor {
             let pane = self.pane_tree.focused_pane_mut();
             pane.point = isearch.original_point;
             pane.scroll_top = isearch.original_scroll_top;
+            pane.scroll_row_offset = isearch.original_scroll_row_offset;
             self.minibuffer.finish();
             self.minibuffer.show_message("Quit".to_string());
         } else if self.minibuffer.is_active() {
