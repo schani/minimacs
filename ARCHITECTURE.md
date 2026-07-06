@@ -39,6 +39,8 @@ src/
   main.rs           CLI parsing (parse_args), terminal setup/teardown (Drop
                     guard + panic hook), runs the event loop
   app.rs            App<B: Backend> -- event loop and key routing
+  app/tests.rs        Integration tests: the full event loop driven through
+                      TestBackend/TestEventSource, incl. screen snapshots
   editor.rs         Editor -- struct, apply_edit, movement/editing, dispatch
   editor/isearch.rs   Incremental search state and commands
   editor/prompts.rs   Prompt starters, submit_prompt, confirm/quit flows
@@ -764,5 +766,9 @@ queue is drained, which is how `run_until_idle` terminates in tests.
    chords, file I/O, paste handling.
 
 3. **Snapshot tests**: use `insta::assert_snapshot!` to capture rendered screen
-   output from `TestBackend` and compare against stored snapshots.
+   output from `TestBackend` and compare against stored snapshots. The stored
+   snapshots live in `src/app/snapshots/` (insta derives the snapshot
+   directory from the source file's directory, and the snapshot names from
+   the module path `app::tests` — so these tests must stay directly in that
+   module).
 
