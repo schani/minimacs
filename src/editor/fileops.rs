@@ -7,9 +7,10 @@ use crate::minibuffer::PromptKind;
 
 use super::Editor;
 
-/// The physical write target of a buffer save. Kept separate from the
-/// buffer's logical `path` so a write can be redirected (e.g. resolving
-/// symlinks at write time) without changing buffer identity.
+/// The logical write target of a buffer save. Kept separate from the
+/// buffer's `path` so a failed save never changes buffer identity; the
+/// physical file behind the target (symlinks resolved) is determined at
+/// write time by `Buffer::save_as`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum WriteTarget {
     /// Write to the buffer's own path (`C-x C-s` and quit-time saves).

@@ -147,7 +147,20 @@ position is per-pane.
 
 Saving is atomic: `Buffer::save()` writes to a temp file in the target's
 directory, copies the target's permissions, fsyncs, and renames over the
-target, so a crash or full disk mid-write cannot destroy the existing file. Each
+target, so a crash or full disk mid-write cannot destroy the existing file.
+The bytes land on the *physical* file behind the buffer's *logical* path:
+`save_as` resolves symlink chains at write time (`resolve_write_target`,
+including dangling links — writing through `foo -> missing` creates
+`missing`, like emacs), so the rename rewrites the link's target instead of
+replacing the link with a regular file, and the buffer keeps the logical
+path as its identity (`C-x C-w` through a symlink does not silently rename
+the buffer; mtime is captured from the physical file). One exception to the
+rename: when the resolved target has other hard links (nlink > 1), a rename
+would replace the inode and make the other names diverge, so the save falls
+back to an in-place truncate-write + fsync. That keeps the inode shared but
+trades away crash-atomicity for exactly that case (a crash mid-write can
+leave the file truncated) — the same tradeoff emacs makes with
+backup-by-copying. Each
 buffer remembers the file's mtime from load/save; every flow that writes a
 buffer to its own path (`C-x C-s`, `C-x C-w` to the buffer's path, and
 quit-time saves) goes through `Editor::external_modification_guard`, which

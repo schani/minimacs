@@ -148,26 +148,50 @@ impl Buffer {
     /// Save to `path` (atomically, like [`save`]). The buffer's path and
     /// clean state are only updated after the write succeeds, so a failed
     /// save never changes the buffer's identity.
+    ///
+    /// `path` is the buffer's *logical* identity; the bytes land on the
+    /// *physical* file behind any symlinks (see [`resolve_write_target`]),
+    /// so saving through a symlink rewrites the target instead of replacing
+    /// the link, without renaming the buffer to the resolved path.
     pub fn save_as(&mut self, path: &Path) -> Result<()> {
         use std::io::Write;
 
         let content: String = self.text.to_string();
+        let physical = resolve_write_target(path)?;
 
-        let dir = match path.parent() {
-            Some(d) if !d.as_os_str().is_empty() => d.to_path_buf(),
-            _ => PathBuf::from("."),
-        };
-        let mut tmp = tempfile::NamedTempFile::new_in(&dir)?;
-        tmp.write_all(content.as_bytes())?;
-        // Keep the target's permissions; a fresh temp file defaults to 0600.
-        if let Ok(meta) = fs::metadata(path) {
-            tmp.as_file().set_permissions(meta.permissions())?;
+        if has_other_hard_links(&physical) {
+            // The target has other hard links; the rename below would
+            // replace the inode and make the other names diverge. Write
+            // in place to keep the inode, trading away crash-atomicity
+            // for this case (a crash mid-write can leave the file
+            // truncated) — preserving the hard links is the point, the
+            // same tradeoff emacs makes with backup-by-copying.
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .truncate(true)
+                .open(&physical)?;
+            file.write_all(content.as_bytes())?;
+            file.sync_all()?;
+        } else {
+            let dir = match physical.parent() {
+                Some(d) if !d.as_os_str().is_empty() => d.to_path_buf(),
+                _ => PathBuf::from("."),
+            };
+            let mut tmp = tempfile::NamedTempFile::new_in(&dir)?;
+            tmp.write_all(content.as_bytes())?;
+            // Keep the target's permissions; a fresh temp file defaults to 0600.
+            if let Ok(meta) = fs::metadata(&physical) {
+                tmp.as_file().set_permissions(meta.permissions())?;
+            }
+            tmp.as_file().sync_all()?;
+            tmp.persist(&physical)?;
         }
-        tmp.as_file().sync_all()?;
-        tmp.persist(path)?;
 
         self.path = Some(path.to_path_buf());
-        self.disk_mtime = fs::metadata(path).and_then(|m| m.modified()).ok();
+        // Stat the file that was actually written. (Statting the logical
+        // path would also work — fs::metadata follows symlinks — but be
+        // explicit.)
+        self.disk_mtime = fs::metadata(&physical).and_then(|m| m.modified()).ok();
         self.history.mark_clean();
         self.modified = false;
         Ok(())
@@ -265,6 +289,66 @@ impl Buffer {
     pub fn update_modified(&mut self) {
         self.modified = !self.history.is_clean();
     }
+}
+
+/// Resolve the physical file a write to `path` should land on, following
+/// any chain of symlinks — including dangling ones. Saving through a
+/// symlink must rewrite the link's target, not replace the link with a
+/// regular file (emacs behavior); for a dangling link `foo -> missing`
+/// the result is `missing`, which the write then creates.
+fn resolve_write_target(path: &Path) -> Result<PathBuf> {
+    // Easy case: the file exists — canonicalize resolves the whole
+    // symlink chain (and `..` / directory symlinks along the way).
+    if let Ok(resolved) = fs::canonicalize(path) {
+        return Ok(resolved);
+    }
+    // The file doesn't exist yet, or the path is a dangling symlink:
+    // follow links manually. A relative link target is relative to the
+    // link's directory (`join` on an absolute target replaces the base).
+    let mut current = path.to_path_buf();
+    for _ in 0..40 {
+        match fs::read_link(&current) {
+            Ok(target) => {
+                current = match current.parent() {
+                    Some(dir) if !dir.as_os_str().is_empty() => dir.join(&target),
+                    _ => target,
+                };
+            }
+            Err(_) => {
+                // Not a symlink: this is the write target. Canonicalize
+                // its parent (the file itself doesn't exist) so `..` and
+                // directory symlinks resolve; if even the parent doesn't
+                // exist, return as-is and let the write report the error.
+                if let (Some(parent), Some(name)) = (current.parent(), current.file_name()) {
+                    let parent = if parent.as_os_str().is_empty() {
+                        Path::new(".")
+                    } else {
+                        parent
+                    };
+                    if let Ok(parent) = fs::canonicalize(parent) {
+                        return Ok(parent.join(name));
+                    }
+                }
+                return Ok(current);
+            }
+        }
+    }
+    bail!("too many levels of symbolic links: {}", path.display());
+}
+
+/// True if `path` names a file with other hard links (nlink > 1); the
+/// atomic rename-based save would split those apart.
+#[cfg(unix)]
+fn has_other_hard_links(path: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    fs::metadata(path).is_ok_and(|m| m.nlink() > 1)
+}
+
+/// Non-unix platforms have no visible link count; always use the atomic
+/// rename-based save there.
+#[cfg(not(unix))]
+fn has_other_hard_links(_path: &Path) -> bool {
+    false
 }
 
 #[cfg(test)]
@@ -430,6 +514,135 @@ mod tests {
 
         let mode = fs::metadata(&file).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o755, "save must not clobber file permissions");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_through_symlink_writes_target_and_keeps_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let real_dir = dir.path().join("real");
+        fs::create_dir(&real_dir).unwrap();
+        let target = real_dir.join("file.txt");
+        fs::write(&target, "old").unwrap();
+        let link = dir.path().join("link.txt");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        let mut buf = Buffer::from_file(0, &link).unwrap();
+        buf.insert(0, "new ");
+        buf.save().unwrap();
+
+        assert!(
+            fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "saving through a symlink must not replace the link"
+        );
+        assert_eq!(fs::read_to_string(&target).unwrap(), "new old");
+        assert_eq!(
+            buf.path.as_deref(),
+            Some(link.as_path()),
+            "the buffer's logical path must stay the link, not the resolved target"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_through_dangling_symlink_creates_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let link = dir.path().join("link.txt");
+        // Relative link target: must resolve against the link's directory.
+        std::os::unix::fs::symlink("missing.txt", &link).unwrap();
+
+        let mut buf = Buffer::new_for_path(0, &link);
+        buf.insert(0, "hello");
+        buf.save().unwrap();
+
+        assert!(
+            fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "saving through a dangling symlink must not replace the link"
+        );
+        let target = dir.path().join("missing.txt");
+        assert_eq!(fs::read_to_string(&target).unwrap(), "hello");
+        assert_eq!(fs::read_to_string(&link).unwrap(), "hello");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_through_symlink_loop_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.txt");
+        let b = dir.path().join("b.txt");
+        std::os::unix::fs::symlink("b.txt", &a).unwrap();
+        std::os::unix::fs::symlink("a.txt", &b).unwrap();
+
+        let mut buf = Buffer::new_for_path(0, &a);
+        buf.insert(0, "x");
+        assert!(buf.save().is_err(), "a symlink loop must fail the save");
+        assert!(
+            fs::symlink_metadata(&a).unwrap().file_type().is_symlink(),
+            "a failed save must leave the links alone"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_keeps_hard_links_on_same_inode() {
+        use std::os::unix::fs::MetadataExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.txt");
+        let b = dir.path().join("b.txt");
+        fs::write(&a, "old").unwrap();
+        fs::hard_link(&a, &b).unwrap();
+
+        let mut buf = Buffer::from_file(0, &a).unwrap();
+        buf.insert(0, "new ");
+        buf.save().unwrap();
+
+        assert_eq!(
+            fs::read_to_string(&b).unwrap(),
+            "new old",
+            "the hard link must see the new content"
+        );
+        assert_eq!(
+            fs::metadata(&a).unwrap().ino(),
+            fs::metadata(&b).unwrap().ino(),
+            "save must not split the inode of hard-linked files"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn externally_modified_detected_through_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("target.txt");
+        fs::write(&target, "old").unwrap();
+        let link = dir.path().join("link.txt");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        let mut buf = Buffer::from_file(0, &link).unwrap();
+        assert!(!buf.externally_modified());
+
+        // Another program rewrites the *target* (force a distinct mtime).
+        fs::write(&target, "changed elsewhere").unwrap();
+        let f = fs::OpenOptions::new().write(true).open(&target).unwrap();
+        f.set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(10))
+            .unwrap();
+        drop(f);
+        assert!(
+            buf.externally_modified(),
+            "external change of the symlink target must be detected"
+        );
+
+        // Saving through the link recaptures the mtime of the file
+        // actually written.
+        buf.insert(0, "x");
+        buf.save().unwrap();
+        assert!(!buf.externally_modified());
     }
 
     #[test]

@@ -1799,6 +1799,79 @@ fn write_file_to_own_path_does_not_prompt() {
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "Xoriginal");
 }
 
+#[cfg(unix)]
+#[test]
+fn write_file_to_symlink_keeps_link_and_buffer_identity() {
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("target.txt");
+    std::fs::write(&target, "old").unwrap();
+    let link = dir.path().join("link.txt");
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+
+    let mut editor = Editor::new_with_text("new content");
+    editor.execute(Command::WriteFile);
+    editor.set_minibuffer_text(&link.to_string_lossy());
+    editor.submit_prompt();
+    // The link path exists, so the overwrite confirmation applies.
+    editor.set_minibuffer_text("y");
+    editor.submit_prompt();
+
+    assert!(
+        std::fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "C-x C-w through a symlink must write the target, not replace the link"
+    );
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), "new content");
+    // The buffer's identity is the logical path the user typed, not the
+    // resolved target.
+    assert_eq!(
+        editor.current_buffer().path.as_deref(),
+        Some(link.as_path())
+    );
+    assert_eq!(editor.current_buffer().name, "link.txt");
+}
+
+#[cfg(unix)]
+#[test]
+fn save_through_symlink_detects_external_target_modification() {
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("target.txt");
+    std::fs::write(&target, "old").unwrap();
+    let link = dir.path().join("link.txt");
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+
+    // Adopt the symlink as the buffer's path via C-x C-w.
+    let mut editor = Editor::new_with_text("mine");
+    editor.execute(Command::WriteFile);
+    editor.set_minibuffer_text(&link.to_string_lossy());
+    editor.submit_prompt();
+    editor.set_minibuffer_text("y");
+    editor.submit_prompt();
+    assert!(!editor.current_buffer().modified);
+
+    editor.execute(Command::InsertChar('X'));
+    externally_modify(&target, "external");
+
+    editor.execute(Command::Save);
+    let prompt = editor.minibuffer.prompt().unwrap();
+    assert!(
+        matches!(prompt.kind, PromptKind::SaveAnywayConfirm { .. }),
+        "external modification of the symlink target must be detected"
+    );
+    editor.set_minibuffer_text("y");
+    editor.submit_prompt();
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), "Xmine");
+    assert!(
+        std::fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "saving through the link must keep it a link"
+    );
+}
+
 // === Buffer name uniquification ===
 
 #[test]
