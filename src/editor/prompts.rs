@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::minibuffer::{normalize_path_string, PromptKind};
 
@@ -50,6 +50,22 @@ impl Editor {
         self.minibuffer_buffer.text.to_string()
     }
 
+    /// Turn path-prompt input into the path to act on: normalize it (tilde
+    /// expansion, `.`/`..` resolution — leading `..` is preserved), then
+    /// resolve a relative result against the editor's `cwd`, so which file
+    /// is opened or written never depends on the process working directory.
+    /// Empty input stays empty (rejecting it is the caller's concern).
+    fn path_from_input(&self, input: &str) -> PathBuf {
+        let normalized = normalize_path_string(input);
+        if normalized.is_empty() || Path::new(&normalized).is_absolute() {
+            return PathBuf::from(normalized);
+        }
+        PathBuf::from(normalize_path_string(&format!(
+            "{}/{normalized}",
+            self.cwd.display()
+        )))
+    }
+
     pub(super) fn find_file_prompt(&mut self) {
         let dir = self
             .current_buffer()
@@ -97,7 +113,7 @@ impl Editor {
         match kind {
             PromptKind::FindFile => {
                 self.minibuffer.finish();
-                let path = PathBuf::from(normalize_path_string(&input));
+                let path = self.path_from_input(&input);
                 if let Err(e) = self.open_file(&path) {
                     self.minibuffer.show_message(format!("{e}"));
                 }
@@ -108,7 +124,7 @@ impl Editor {
             }
             PromptKind::WriteFile => {
                 self.minibuffer.finish();
-                let path = PathBuf::from(normalize_path_string(&input));
+                let path = self.path_from_input(&input);
                 let buffer_id = self.current_buffer().id;
                 let own_path = self.current_buffer().path.as_deref() == Some(path.as_path());
                 if path.exists() && !own_path {

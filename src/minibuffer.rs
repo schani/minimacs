@@ -64,7 +64,10 @@ fn expand_tilde_with(input: &str, home: Option<&str>) -> String {
 }
 
 /// Normalize a path string: expand a leading `~`, remove `.` components, and
-/// resolve `..` components. Preserves trailing `/` if present.
+/// resolve `..` components lexically. On a rootless (relative) path, `..`
+/// components that climb above the starting point are preserved (`a/../../b`
+/// becomes `../b`) so the caller can resolve them against a base directory;
+/// on a rooted path `..` clamps at `/`. Preserves trailing `/` if present.
 pub fn normalize_path_string(input: &str) -> String {
     use std::path::Component;
 
@@ -74,6 +77,7 @@ pub fn normalize_path_string(input: &str) -> String {
     let has_trailing_slash = input.ends_with('/');
     let path = Path::new(input);
     let mut components: Vec<&std::ffi::OsStr> = Vec::new();
+    let mut leading_parents = 0usize;
     let mut has_root = false;
 
     for component in path.components() {
@@ -85,9 +89,12 @@ pub fn normalize_path_string(input: &str) -> String {
                 // Skip `.`
             }
             Component::ParentDir => {
-                // Pop last component if possible
                 if !components.is_empty() {
                     components.pop();
+                } else if !has_root {
+                    // A rootless path climbing above its starting point:
+                    // keep the `..` (rooted paths clamp at `/` instead).
+                    leading_parents += 1;
                 }
             }
             Component::Normal(name) => {
@@ -97,22 +104,20 @@ pub fn normalize_path_string(input: &str) -> String {
         }
     }
 
-    let result = if has_root {
-        let mut p = PathBuf::from("/");
-        for c in &components {
-            p.push(c);
-        }
-        p
+    let mut result = if has_root {
+        PathBuf::from("/")
     } else {
-        let mut p = PathBuf::new();
-        for c in &components {
-            p.push(c);
-        }
-        p
+        PathBuf::new()
     };
+    for _ in 0..leading_parents {
+        result.push("..");
+    }
+    for c in &components {
+        result.push(c);
+    }
 
     let mut s = result.to_string_lossy().into_owned();
-    if has_trailing_slash && !s.ends_with('/') {
+    if has_trailing_slash && !s.is_empty() && !s.ends_with('/') {
         s.push('/');
     }
     s
@@ -123,7 +128,12 @@ pub fn normalize_path_string(input: &str) -> String {
 /// The first element is the completed prefix (same as `complete_path`).
 /// The second element is a list of display candidates (basenames, with trailing `/` for dirs).
 /// Empty if there is a unique match or no match.
-pub fn complete_path_with_candidates(input: &str) -> (String, Vec<String>) {
+///
+/// Relative input (including a leading `..`) is looked up on disk against
+/// `base` — the editor's cwd, the same base prompt submission resolves
+/// against — but the returned strings stay in the form the user typed
+/// (relative stays relative).
+pub fn complete_path_with_candidates(input: &str, base: &Path) -> (String, Vec<String>) {
     let normalized = if input.is_empty() {
         input.to_string()
     } else {
@@ -137,7 +147,15 @@ pub fn complete_path_with_candidates(input: &str) -> (String, Vec<String>) {
         PathBuf::from(input)
     };
 
-    let (dir, prefix) = if path.is_dir() {
+    let resolve = |p: &Path| -> PathBuf {
+        if p.is_absolute() {
+            p.to_path_buf()
+        } else {
+            base.join(p)
+        }
+    };
+
+    let (dir, prefix) = if resolve(&path).is_dir() {
         (path, String::new())
     } else {
         let dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
@@ -148,24 +166,27 @@ pub fn complete_path_with_candidates(input: &str) -> (String, Vec<String>) {
         (dir, prefix)
     };
 
-    let Ok(entries) = std::fs::read_dir(&dir) else {
+    let Ok(entries) = std::fs::read_dir(resolve(&dir)) else {
         return (input.to_string(), Vec::new());
     };
 
-    let mut matches: Vec<PathBuf> = entries
+    // (display path, is_dir) — display paths stay relative for relative
+    // input; is_dir is checked on the resolved path.
+    let mut matches: Vec<(PathBuf, bool)> = entries
         .filter_map(|e| e.ok())
         .filter(|e| {
             e.file_name()
                 .to_string_lossy()
                 .starts_with(&prefix)
         })
-        .map(|e| e.path())
+        .map(|e| (dir.join(e.file_name()), e.path().is_dir()))
         .collect();
     matches.sort();
 
     if matches.len() == 1 {
-        let mut completed = matches[0].to_string_lossy().into_owned();
-        if matches[0].is_dir() {
+        let (p, is_dir) = &matches[0];
+        let mut completed = p.to_string_lossy().into_owned();
+        if *is_dir {
             completed.push('/');
         }
         (completed, Vec::new())
@@ -173,18 +194,18 @@ pub fn complete_path_with_candidates(input: &str) -> (String, Vec<String>) {
         // Full paths for prefix computation
         let full_names: Vec<String> = matches
             .iter()
-            .map(|p| p.to_string_lossy().into_owned())
+            .map(|(p, _)| p.to_string_lossy().into_owned())
             .collect();
         let completed = common_prefix(&full_names).unwrap_or_else(|| input.to_string());
 
         // Basenames for display
         let candidates: Vec<String> = matches
             .iter()
-            .map(|p| {
+            .map(|(p, is_dir)| {
                 let mut name = p.file_name()
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_default();
-                if p.is_dir() {
+                if *is_dir {
                     name.push('/');
                 }
                 name
@@ -200,7 +221,7 @@ pub fn complete_path_with_candidates(input: &str) -> (String, Vec<String>) {
 /// Tab completion for file paths. Returns the completed path string.
 #[cfg(test)]
 pub fn complete_path(input: &str) -> String {
-    complete_path_with_candidates(input).0
+    complete_path_with_candidates(input, Path::new(".")).0
 }
 
 /// Tab completion for buffer names. Returns the completed name string and sorted display candidates.
@@ -449,7 +470,7 @@ mod tests {
         std::fs::write(dir.path().join("foobaz.txt"), "").unwrap();
 
         let input = format!("{}/foo", dir.path().display());
-        let (completed, candidates) = complete_path_with_candidates(&input);
+        let (completed, candidates) = complete_path_with_candidates(&input, Path::new("."));
         assert!(completed.contains("foob"));
         assert_eq!(candidates.len(), 2);
         assert!(candidates.contains(&"foobar.txt".to_string()));
@@ -462,7 +483,7 @@ mod tests {
         std::fs::write(dir.path().join("unique.txt"), "").unwrap();
 
         let input = format!("{}/uni", dir.path().display());
-        let (completed, candidates) = complete_path_with_candidates(&input);
+        let (completed, candidates) = complete_path_with_candidates(&input, Path::new("."));
         assert!(completed.ends_with("unique.txt"));
         assert!(candidates.is_empty());
     }
@@ -473,7 +494,7 @@ mod tests {
         std::fs::write(dir.path().join("alpha.txt"), "").unwrap();
 
         let input = format!("{}/zzz", dir.path().display());
-        let (completed, candidates) = complete_path_with_candidates(&input);
+        let (completed, candidates) = complete_path_with_candidates(&input, Path::new("."));
         assert_eq!(completed, input);
         assert!(candidates.is_empty());
     }
@@ -485,7 +506,7 @@ mod tests {
         std::fs::write(dir.path().join("subfile.txt"), "").unwrap();
 
         let input = format!("{}/sub", dir.path().display());
-        let (_, candidates) = complete_path_with_candidates(&input);
+        let (_, candidates) = complete_path_with_candidates(&input, Path::new("."));
         assert_eq!(candidates.len(), 2);
         // Dir candidate should have trailing /
         assert!(candidates.iter().any(|c| c == "subdir/"));
@@ -582,6 +603,22 @@ mod tests {
     }
 
     #[test]
+    fn normalize_preserves_leading_dotdot_on_relative_path() {
+        assert_eq!(normalize_path_string("../foo"), "../foo");
+        assert_eq!(normalize_path_string("../../a/b"), "../../a/b");
+    }
+
+    #[test]
+    fn normalize_dotdot_escaping_relative_path_stays() {
+        assert_eq!(normalize_path_string("a/../../b"), "../b");
+    }
+
+    #[test]
+    fn normalize_preserves_trailing_slash_on_leading_dotdot() {
+        assert_eq!(normalize_path_string("../"), "../");
+    }
+
+    #[test]
     fn normalize_multiple_dots() {
         assert_eq!(
             normalize_path_string("/a/b/./c/../d"),
@@ -604,6 +641,35 @@ mod tests {
         let result = complete_path(&input);
         assert!(result.ends_with("alpha.txt"));
         assert!(!result.contains("/./"), "Result should not contain /./: {}", result);
+    }
+
+    #[test]
+    fn path_completion_leading_dotdot_completes_from_parent_of_base() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        std::fs::write(dir.path().join("alpha.txt"), "").unwrap();
+
+        // Relative input with a leading `..` is looked up against the base
+        // directory's parent, and the completion stays relative.
+        let (completed, candidates) = complete_path_with_candidates("../al", &sub);
+        assert_eq!(completed, "../alpha.txt");
+        assert!(candidates.is_empty());
+    }
+
+    #[test]
+    fn path_completion_leading_dotdot_lists_parent_candidates() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        std::fs::write(dir.path().join("foobar.txt"), "").unwrap();
+        std::fs::write(dir.path().join("foobaz.txt"), "").unwrap();
+
+        let (completed, candidates) = complete_path_with_candidates("../foo", &sub);
+        assert_eq!(completed, "../fooba");
+        assert_eq!(candidates.len(), 2);
+        assert!(candidates.contains(&"foobar.txt".to_string()));
+        assert!(candidates.contains(&"foobaz.txt".to_string()));
     }
 
     #[test]

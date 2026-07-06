@@ -490,13 +490,20 @@ are ignored in key routing), so prompts that resolve their target at submit
 time — e.g. `C-x C-w` writes the focused pane's buffer — cannot be retargeted
 mid-prompt.
 
-Path input expands a leading `~`/`~/...` to `$HOME` inside
-`normalize_path_string()`, which both prompt submission and tab completion go
-through.
+Path input goes through `normalize_path_string()` (both prompt submission and
+tab completion): a leading `~`/`~/...` expands to `$HOME`, `.` components are
+dropped, and `..` components are resolved lexically — on a relative path,
+leading `..` components are preserved (`a/../../b` → `../b`) rather than
+silently dropped, while on an absolute path `..` clamps at `/`. At submission
+time the find-file and write-file prompts resolve a relative result against
+`Editor::cwd` (captured at startup) via `Editor::path_from_input()`, so which
+file is opened or written never depends on the process working directory.
 
 Tab completion is implemented as free functions `complete_path_with_candidates()`
 and `complete_buffer_with_candidates()` in `minibuffer.rs`. Each returns
-`(completed_prefix, display_candidates)`. Path candidates use basenames with
+`(completed_prefix, display_candidates)`. Relative path input is looked up on
+disk against `Editor::cwd` (the same base submission resolves against) but the
+completed string stays relative. Path candidates use basenames with
 trailing `/` for directories; buffer candidates are sorted alphabetically.
 Completion replaces the buffer contents as a single undo group using
 `record_replace()`, making it undoable.

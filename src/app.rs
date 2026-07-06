@@ -291,7 +291,7 @@ where
         let input = self.editor.minibuffer_text();
         let (completed, candidates) = match kind {
             Some(PromptKind::FindFile) | Some(PromptKind::WriteFile) => {
-                complete_path_with_candidates(&input)
+                complete_path_with_candidates(&input, &self.editor.cwd)
             }
             Some(PromptKind::SwitchBuffer) => {
                 let names = self.editor.buffer_names();
@@ -2221,6 +2221,58 @@ mod tests {
         let canonical_sub = std::fs::canonicalize(&sub).unwrap();
         let expected = format!("{}/", canonical_sub.display());
         assert_eq!(app.editor.minibuffer_text(), expected);
+    }
+
+    #[test]
+    fn find_file_relative_dotdot_resolves_against_editor_cwd() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        // Two files with the same name: `../notes.txt` typed while the
+        // editor's cwd is `sub` must open the parent directory's copy.
+        std::fs::write(dir.path().join("notes.txt"), "parent copy").unwrap();
+        std::fs::write(sub.join("notes.txt"), "sub copy").unwrap();
+
+        let mut events = vec![ctrl('x'), ctrl('f')];
+        // Clear the pre-filled directory
+        for _ in 0..300 {
+            events.push(key(KeyCode::Backspace));
+        }
+        for c in "../notes.txt".chars() {
+            events.push(char_key(c));
+        }
+        events.push(key(KeyCode::Enter));
+
+        let (mut app, mut events) = test_app(60, 10, events);
+        app.editor.cwd = sub.clone();
+        app.run_until_idle(&mut events).unwrap();
+        assert_eq!(app.editor.buffer_text(), "parent copy");
+    }
+
+    #[test]
+    fn write_file_relative_dotdot_resolves_against_editor_cwd() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("sub");
+        std::fs::create_dir(&sub).unwrap();
+
+        let mut events = vec![ctrl('x'), ctrl('w')];
+        // Clear the pre-filled directory
+        for _ in 0..300 {
+            events.push(key(KeyCode::Backspace));
+        }
+        for c in "../saved.txt".chars() {
+            events.push(char_key(c));
+        }
+        events.push(key(KeyCode::Enter));
+
+        let (mut app, mut events) = test_app_with_text(60, 10, "the text", events);
+        app.editor.cwd = sub.clone();
+        app.run_until_idle(&mut events).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("saved.txt")).unwrap(),
+            "the text"
+        );
+        assert!(!sub.join("saved.txt").exists());
     }
 
     #[test]
