@@ -135,9 +135,14 @@ other panes' points are adjusted there too.
 `C-f`/`C-b` and Backspace/`C-d` move and delete by **grapheme cluster**
 (`unicode-segmentation`): combining sequences and emoji ZWJ sequences are one
 step, and CRLF pairs are likewise atomic (`next_grapheme_boundary` /
-`prev_grapheme_boundary`). Point can still be set mid-cluster by line
-movement's column clamping; that is benign, since rendering resolves any
-position to a valid column.
+`prev_grapheme_boundary`). Positions computed by column arithmetic — line
+movement's column clamping (`C-n`/`C-p`, page up/down) and mouse-click
+mapping — are snapped to the nearest cluster boundary at or before the raw
+column (`Buffer::snap_to_grapheme_boundary`), so point never rests
+mid-cluster, where a Backspace would orphan a combining mark and typing
+would split the cluster. Only the landing point is snapped; the remembered
+goal column (`preferred_column`) keeps the unsnapped value, so moving
+through a cluster-bearing line and back restores the original column.
 
 ### Buffer
 

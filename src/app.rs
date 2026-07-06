@@ -452,7 +452,12 @@ where
                     self.editor.pane_tree.focused_pane_mut().point = char_count;
                 } else {
                     let target_col = render::buffer_col_for_visual_col(buf, target_line, target_visual_col);
-                    let char_pos = buf.line_col_to_char(target_line, target_col);
+                    // buffer_col_for_visual_col skips zero-width chars, so
+                    // it never lands on a combining mark, but it can land
+                    // between a ZWJ and the next emoji of one cluster; snap
+                    // out of the cluster.
+                    let char_pos = buf
+                        .snap_to_grapheme_boundary(buf.line_col_to_char(target_line, target_col));
                     self.editor.pane_tree.focused_pane_mut().point = char_pos;
                 }
 
@@ -2461,6 +2466,19 @@ mod tests {
         let (mut app, mut events) = test_app_with_text(20, 6, text, events);
         app.run_until_idle(&mut events).unwrap();
         assert_eq!(app.editor.point(), 5); // col 1 of "two"
+    }
+
+    #[test]
+    fn mouse_click_inside_zwj_sequence_snaps_to_cluster_start() {
+        // "x" then family emoji (man ZWJ woman ZWJ girl, chars 1..6, one
+        // cluster) then "z". Visual col 3 is the first cell of the woman
+        // emoji; raw mapping would land at char 3 (between ZWJ and woman),
+        // mid-cluster. Point must snap to the cluster start instead.
+        let text = "x\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}z";
+        let events = vec![mouse_click(3, 0)];
+        let (mut app, mut events) = test_app_with_text(40, 10, text, events);
+        app.run_until_idle(&mut events).unwrap();
+        assert_eq!(app.editor.point(), 1, "point must not rest mid-cluster");
     }
 
     #[test]

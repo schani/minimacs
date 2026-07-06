@@ -2009,6 +2009,99 @@ fn forward_char_moves_over_emoji_zwj_sequence() {
     assert_eq!(editor.point(), 0);
 }
 
+// === Vertical movement snaps to grapheme boundaries ===
+
+// "ab\nxe\u{301}z": a(0) b(1) \n(2) x(3) e(4) combining-acute(5) z(6).
+// Column 2 on line 1 falls between e and the combining acute — mid-cluster.
+
+#[test]
+fn next_line_snaps_point_to_cluster_start() {
+    let mut editor = Editor::new_with_text("ab\nxe\u{301}z");
+    editor.pane_tree.focused_pane_mut().point = 2; // line 0, col 2
+    editor.execute(Command::NextLine);
+    assert_eq!(
+        editor.point(),
+        4,
+        "point must snap to the cluster start, not rest mid-cluster at 5"
+    );
+    // Delete-forward at the snapped point removes the whole cluster.
+    editor.execute(Command::DeleteForward);
+    assert_eq!(editor.buffer_text(), "ab\nxz");
+}
+
+#[test]
+fn next_line_snap_keeps_backspace_cluster_safe() {
+    let mut editor = Editor::new_with_text("ab\nxe\u{301}z");
+    editor.pane_tree.focused_pane_mut().point = 2;
+    editor.execute(Command::NextLine);
+    // Backspace at the snapped point deletes the whole preceding grapheme;
+    // unsnapped (point 5) it would delete just "e" and orphan the mark.
+    editor.execute(Command::DeleteBackward);
+    assert_eq!(editor.buffer_text(), "ab\ne\u{301}z");
+    assert_eq!(editor.point(), 3);
+}
+
+#[test]
+fn previous_line_snaps_point_to_cluster_start() {
+    // "xe\u{301}z\nab": x(0) e(1) acute(2) z(3) \n(4) a(5) b(6)
+    let mut editor = Editor::new_with_text("xe\u{301}z\nab");
+    editor.pane_tree.focused_pane_mut().point = 7; // line 1, col 2
+    editor.execute(Command::PreviousLine);
+    assert_eq!(editor.point(), 1, "point must snap to the cluster start");
+}
+
+#[test]
+fn page_down_snaps_point_to_cluster_start() {
+    let mut editor = Editor::new_with_text("ab\nxe\u{301}z");
+    editor.pane_tree.focused_pane_mut().point = 2;
+    editor.execute(Command::PageDown);
+    assert_eq!(editor.point(), 4);
+}
+
+#[test]
+fn page_up_snaps_point_to_cluster_start() {
+    let mut editor = Editor::new_with_text("xe\u{301}z\nab");
+    editor.pane_tree.focused_pane_mut().point = 7;
+    editor.execute(Command::PageUp);
+    assert_eq!(editor.point(), 1);
+}
+
+#[test]
+fn next_line_snaps_out_of_emoji_zwj_sequence() {
+    // Line 1: x(0) man(1) ZWJ(2) woman(3) ZWJ(4) girl(5) z(6); the family
+    // emoji is one cluster spanning chars 1..6 of the line.
+    let text = "ab\nx\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}z";
+    let mut editor = Editor::new_with_text(text);
+    editor.pane_tree.focused_pane_mut().point = 2; // line 0, col 2
+    editor.execute(Command::NextLine);
+    assert_eq!(
+        editor.point(),
+        4,
+        "col 2 of line 1 is inside the ZWJ sequence; snap to its start"
+    );
+}
+
+#[test]
+fn snap_does_not_corrupt_preferred_column() {
+    // "ab\nxe\u{301}z\nabcd": moving up from "abcd" col 2 lands mid-cluster
+    // on the middle line (snapped to col 1); moving on and back down must
+    // restore the ORIGINAL column 2, not the snapped one.
+    let mut editor = Editor::new_with_text("ab\nxe\u{301}z\nabcd");
+    editor.pane_tree.focused_pane_mut().point = 10; // line 2, col 2
+    editor.execute(Command::PreviousLine);
+    assert_eq!(editor.point(), 4, "snapped to cluster start on line 1");
+    editor.execute(Command::PreviousLine);
+    assert_eq!(editor.point(), 2); // line 0, col 2
+    editor.execute(Command::NextLine);
+    assert_eq!(editor.point(), 4);
+    editor.execute(Command::NextLine);
+    assert_eq!(
+        editor.point(),
+        10,
+        "preferred column must be the original 2, not the snapped 1"
+    );
+}
+
 // === CRLF atomicity ===
 
 fn crlf_editor() -> Editor {

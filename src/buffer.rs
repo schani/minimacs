@@ -279,6 +279,40 @@ impl Buffer {
         line_start + col.min(line_len)
     }
 
+    /// Snap a char position to the nearest grapheme-cluster boundary at or
+    /// before it (emacs behavior). Identity for positions already on a
+    /// boundary; positions inside a line break (mid-CRLF) snap back to the
+    /// end of the line's text. Positions computed by column arithmetic
+    /// (line movement's column clamping, mouse-click mapping) must be
+    /// snapped so point never rests mid-cluster, where a backspace or
+    /// insert would split the cluster.
+    pub fn snap_to_grapheme_boundary(&self, pos: usize) -> usize {
+        use unicode_segmentation::UnicodeSegmentation;
+        let pos = pos.min(self.char_count());
+        let (line, col) = self.char_to_line_col(pos);
+        let line_len = self.line_len_chars(line);
+        let line_start = self.line_col_to_char(line, 0);
+        if col >= line_len {
+            // At the line's end (a boundary) or inside its line break
+            // (mid-CRLF): both resolve to the end of the line's text.
+            return line_start + line_len;
+        }
+        let line_text: String = self
+            .text
+            .slice(line_start..line_start + line_len)
+            .chars()
+            .collect();
+        let mut start = 0;
+        for g in line_text.graphemes(true) {
+            let g_len = g.chars().count();
+            if col < start + g_len {
+                return line_start + start;
+            }
+            start += g_len;
+        }
+        line_start + line_len
+    }
+
     /// Length of line in chars, excluding its terminating line break.
     pub fn line_len_chars(&self, line_idx: usize) -> usize {
         let line = self.text.line(line_idx);
@@ -456,6 +490,42 @@ mod tests {
         // Form feed is a line break: col clamps to 1, before the FF.
         let buf = Buffer::from_str(0, "test", "a\u{0c}b\n");
         assert_eq!(buf.line_col_to_char(0, 10), 1);
+    }
+
+    #[test]
+    fn snap_to_grapheme_boundary_is_identity_on_boundaries() {
+        // "ae\u{301}b": clusters are a(0..1), e+acute(1..3), b(3..4).
+        let buf = Buffer::from_str(0, "test", "ae\u{301}b\ncd");
+        for pos in [0, 1, 3, 4, 5, 6, 7] {
+            assert_eq!(buf.snap_to_grapheme_boundary(pos), pos, "pos {pos}");
+        }
+    }
+
+    #[test]
+    fn snap_to_grapheme_boundary_snaps_mid_cluster_to_start() {
+        let buf = Buffer::from_str(0, "test", "ae\u{301}b");
+        assert_eq!(buf.snap_to_grapheme_boundary(2), 1);
+        // Family emoji: man ZWJ woman ZWJ girl is one cluster (chars 1..6).
+        let buf = Buffer::from_str(0, "test", "x\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}z");
+        for pos in 2..6 {
+            assert_eq!(buf.snap_to_grapheme_boundary(pos), 1, "pos {pos}");
+        }
+        assert_eq!(buf.snap_to_grapheme_boundary(6), 6);
+    }
+
+    #[test]
+    fn snap_to_grapheme_boundary_snaps_mid_crlf_before_break() {
+        // Position 2 sits between \r and \n; snap back to the line's end.
+        let buf = Buffer::from_str(0, "test", "a\r\nb");
+        assert_eq!(buf.snap_to_grapheme_boundary(2), 1);
+        assert_eq!(buf.snap_to_grapheme_boundary(1), 1);
+        assert_eq!(buf.snap_to_grapheme_boundary(3), 3);
+    }
+
+    #[test]
+    fn snap_to_grapheme_boundary_clamps_past_end() {
+        let buf = Buffer::from_str(0, "test", "ab");
+        assert_eq!(buf.snap_to_grapheme_boundary(10), 2);
     }
 
     #[test]

@@ -606,7 +606,10 @@ impl Editor {
         let target_col = pane.preferred_column.unwrap_or(col);
 
         if line + 1 < buf.line_count() {
-            let new_point = buf.line_col_to_char(line + 1, target_col);
+            // Snap the landing point out of any grapheme cluster the raw
+            // column falls into; the remembered column stays unsnapped.
+            let new_point =
+                buf.snap_to_grapheme_boundary(buf.line_col_to_char(line + 1, target_col));
             let pane = self.active_pane_mut();
             pane.point = new_point;
             pane.preferred_column = Some(target_col);
@@ -620,7 +623,8 @@ impl Editor {
         let target_col = pane.preferred_column.unwrap_or(col);
 
         if line > 0 {
-            let new_point = buf.line_col_to_char(line - 1, target_col);
+            let new_point =
+                buf.snap_to_grapheme_boundary(buf.line_col_to_char(line - 1, target_col));
             let pane = self.active_pane_mut();
             pane.point = new_point;
             pane.preferred_column = Some(target_col);
@@ -666,7 +670,7 @@ impl Editor {
         let (line, col) = buf.char_to_line_col(pane.point);
         let target_col = pane.preferred_column.unwrap_or(col);
         let new_line = (line + height).min(buf.line_count().saturating_sub(1));
-        let new_point = buf.line_col_to_char(new_line, target_col);
+        let new_point = buf.snap_to_grapheme_boundary(buf.line_col_to_char(new_line, target_col));
         let pane = self.active_pane_mut();
         pane.point = new_point;
         pane.preferred_column = Some(target_col);
@@ -679,7 +683,7 @@ impl Editor {
         let (line, col) = buf.char_to_line_col(pane.point);
         let target_col = pane.preferred_column.unwrap_or(col);
         let new_line = line.saturating_sub(height);
-        let new_point = buf.line_col_to_char(new_line, target_col);
+        let new_point = buf.snap_to_grapheme_boundary(buf.line_col_to_char(new_line, target_col));
         let pane = self.active_pane_mut();
         pane.point = new_point;
         pane.preferred_column = Some(target_col);
