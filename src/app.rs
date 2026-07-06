@@ -7,7 +7,7 @@ use ratatui::Terminal;
 
 use crate::command::Command;
 use crate::editor::{EditRecord, Editor};
-use crate::event::EventSource;
+use crate::event::{EventSource, Poll};
 use crate::keymap::{default_keymap, Key, KeymapResult, KeymapState};
 use crate::minibuffer::PromptKind;
 use crate::render;
@@ -92,10 +92,17 @@ where
         self.render()?;
 
         loop {
-            // Poll timeouts deliver no event; nothing can have changed, so
-            // skip the re-render instead of redrawing ~10×/s while idle.
-            let Some(event) = event_source.next_event() else {
-                continue;
+            let event = match event_source.next_event() {
+                Poll::Event(event) => event,
+                // Timeouts deliver no event; nothing can have changed, so
+                // skip the re-render instead of redrawing ~10×/s while idle.
+                Poll::Timeout => continue,
+                // The terminal is gone (tty hangup): no further input can
+                // arrive, so exit instead of spinning on a dead source.
+                // We can't prompt about unsaved buffers — there is no input
+                // to answer with — so the editor just quits; main still
+                // restores the terminal on this error path.
+                Poll::Closed => anyhow::bail!("event source closed"),
             };
             self.dispatch_event(event);
             if self.editor.should_quit {
@@ -114,7 +121,7 @@ where
         self.update_viewport();
         self.render()?;
 
-        while let Some(event) = event_source.next_event() {
+        while let Poll::Event(event) = event_source.next_event() {
             self.dispatch_event(event);
             if self.editor.should_quit {
                 break;
@@ -562,7 +569,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event::TestEventSource;
+    use crate::event::{Poll, TestEventSource};
     use ratatui::backend::TestBackend;
 
     fn test_app(width: u16, height: u16, events: Vec<Event>) -> (App<TestBackend>, TestEventSource) {
@@ -723,6 +730,57 @@ mod tests {
         let events = vec![ctrl('x'), ctrl('c')];
         let (mut app, mut events) = test_app(40, 10, events);
         app.run_until_idle(&mut events).unwrap();
+        assert!(app.editor.should_quit);
+    }
+
+    /// Event source scripted with an explicit sequence of poll outcomes,
+    /// including timeouts and closure — unlike `TestEventSource`, which only
+    /// ever yields events until it closes.
+    struct ScriptedEventSource {
+        polls: std::collections::VecDeque<Poll>,
+    }
+
+    impl EventSource for ScriptedEventSource {
+        fn next_event(&mut self) -> Poll {
+            self.polls.pop_front().unwrap_or(Poll::Closed)
+        }
+    }
+
+    #[test]
+    fn run_returns_error_when_event_source_closes() {
+        // A dead terminal (poll/read error) must terminate the main loop
+        // with an error, not be treated as a timeout — the old code spun
+        // forever at 10 polls/s on a hung-up tty.
+        let (mut app, _) = test_app(40, 10, vec![]);
+        let mut source = ScriptedEventSource {
+            polls: std::collections::VecDeque::new(),
+        };
+        let err = app.run(&mut source).unwrap_err();
+        assert!(
+            err.to_string().contains("event source closed"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn run_continues_after_timeout_and_errors_on_close() {
+        // A timeout is idle, not death: the loop must keep going and
+        // process later events; only Closed ends it.
+        let (mut app, _) = test_app(40, 10, vec![]);
+        let mut source = ScriptedEventSource {
+            polls: [Poll::Timeout, Poll::Event(char_key('a')), Poll::Closed].into(),
+        };
+        let result = app.run(&mut source);
+        assert!(result.is_err());
+        assert_eq!(app.editor.buffer_text(), "a");
+    }
+
+    #[test]
+    fn run_exits_cleanly_on_quit_before_source_closes() {
+        // A normal quit must still return Ok — the queue behind it never
+        // gets a chance to close the source.
+        let (mut app, mut events) = test_app(40, 10, vec![ctrl('x'), ctrl('c')]);
+        app.run(&mut events).unwrap();
         assert!(app.editor.should_quit);
     }
 

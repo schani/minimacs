@@ -51,7 +51,7 @@ src/
   history.rs        History -- undo/redo with edit grouping
   indent.rs         Shared indentation constants (INDENT_WIDTH = 4)
   syntax.rs         SyntaxState -- tree-sitter highlighting
-  event.rs          EventSource trait -- abstracts terminal vs test input
+  event.rs          EventSource trait + Poll -- abstracts terminal vs test input
 ```
 
 ### Dependency Graph
@@ -332,13 +332,21 @@ installed hook so the panic message prints on the normal screen.
 
 `App::run()` is the main loop:
 
-1. Poll `EventSource::next_event()`.
+1. Poll `EventSource::next_event()`, which returns a three-way `Poll`:
+   `Event` (input arrived), `Timeout` (idle — skip the re-render and poll
+   again), or `Closed` (the source is dead; see below).
 2. Pass the event to `dispatch_event()`, the single dispatcher that routes
    every event kind (key, paste, mouse, resize) to its handler. The
    dispatcher is the one place that decides, per event kind, what happens to
    the pending input state (see below).
 3. After each event: update viewport dimensions for all panes, then render.
 4. Loop until `editor.should_quit`.
+
+`Poll::Closed` means no further input can ever arrive (e.g. a tty hangup),
+so `run()` exits with an "event source closed" error instead of spinning on
+the dead source. Unsaved buffers cannot be prompted about — there is no
+input to answer with — so the editor just quits; `main` still runs
+`restore_terminal()` on this error path before propagating the error.
 
 ### Input State
 
@@ -687,13 +695,18 @@ The editor is generic over `ratatui::Backend`. Production uses
 abstracted via the `EventSource` trait:
 
 ```rust
+enum Poll { Event(Event), Timeout, Closed }
+
 trait EventSource {
-    fn next_event(&mut self) -> Option<Event>;
+    fn next_event(&mut self) -> Poll;
 }
 ```
 
-`TerminalEventSource` reads from the real terminal. `TestEventSource` replays a
-`VecDeque<Event>`.
+`TerminalEventSource` reads from the real terminal: a poll timeout maps to
+`Timeout`, and poll/read *errors* map to `Closed` (the terminal is gone —
+mapping them to `Timeout` would busy-spin the run loop forever).
+`TestEventSource` replays a `VecDeque<Event>` and reports `Closed` once the
+queue is drained, which is how `run_until_idle` terminates in tests.
 
 ### Test Layers
 
