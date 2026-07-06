@@ -36,7 +36,8 @@ Terminal input (crossterm)
 
 ```
 src/
-  main.rs           Terminal setup/teardown, panic hook, CLI args, runs the event loop
+  main.rs           CLI parsing (parse_args), terminal setup/teardown (Drop
+                    guard + panic hook), runs the event loop
   app.rs            App<B: Backend> -- event loop and key routing
   editor.rs         Editor -- struct, apply_edit, movement/editing, dispatch
   editor/isearch.rs   Incremental search state and commands
@@ -323,12 +324,29 @@ discarded branch, `clean_version` is set to `None` (unreachable).
 
 ## Terminal Lifecycle
 
-`main()` installs a panic hook before entering raw mode. Both the normal exit
-path and the panic hook call `restore_terminal()`, which best-effort disables
-raw mode, pops keyboard enhancement flags, leaves the alternate screen,
-disables bracketed paste and mouse capture, and shows the cursor. Every step
-runs even if earlier ones fail, and the panic hook chains to the previously
-installed hook so the panic message prints on the normal screen.
+CLI arguments are handled before any terminal setup by the pure
+`parse_args()` (unit-tested in main.rs): `-h`/`--help` and `-V`/`--version`
+print to a normal screen and exit 0; unrecognized leading-dash arguments and
+empty arguments print an error pointing at `--help` and exit 2; `--` ends
+option parsing so files literally named `--help` stay reachable, and a lone
+`-` is a file name. Every file argument is opened, in order, via
+`Editor::open_files` (fileops.rs): like `emacs a b`, all files become
+buffers, the *first* successfully opened one is displayed, and the rest are
+reachable via `C-x b`; a path that fails to open is reported and skipped
+(the error message is never papered over by the "Opened N files" summary).
+
+`main()` installs a panic hook before entering raw mode, and holds a
+`RestoreGuard` whose `Drop` calls `restore_terminal()`, so every error path
+between `enable_raw_mode()` and the end of `main` (the `?` early returns
+from terminal setup and from the run loop) restores the terminal before the
+error prints. The normal path drops the guard explicitly before the
+abort-quit `std::process::exit(1)` (which skips destructors). Both the guard
+and the panic hook call `restore_terminal()`, which best-effort disables raw
+mode, pops keyboard enhancement flags, leaves the alternate screen, disables
+bracketed paste and mouse capture, and shows the cursor. Every step runs
+even if earlier ones fail, the whole function is idempotent (guard + panic
+hook may both fire), and the panic hook chains to the previously installed
+hook so the panic message prints on the normal screen.
 
 ## Event Loop
 

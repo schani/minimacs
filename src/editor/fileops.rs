@@ -68,6 +68,41 @@ impl Editor {
         Ok(())
     }
 
+    /// Open every path in order (CLI arguments), then display the first one
+    /// that opened successfully — like `emacs a b`, all files are visited
+    /// and the first is shown; the rest are reachable via `C-x b`. A path
+    /// that fails to open is reported and skipped; when several files open
+    /// cleanly the individual "Opened ..." messages are summarized so the
+    /// message matches the buffer on display, but an error is never papered
+    /// over by the summary.
+    pub fn open_files(&mut self, paths: &[PathBuf]) {
+        let mut first_buffer_id = None;
+        let mut last_error = None;
+        let mut opened = 0usize;
+        for path in paths {
+            match self.open_file(path) {
+                Ok(()) => {
+                    opened += 1;
+                    if first_buffer_id.is_none() {
+                        first_buffer_id = Some(self.pane_tree.focused_pane().buffer_id);
+                    }
+                }
+                Err(e) => last_error = Some(format!("{}: {e}", path.display())),
+            }
+        }
+        if let Some(id) = first_buffer_id {
+            if self.pane_tree.focused_pane().buffer_id != id {
+                self.switch_focused_pane_to_buffer(id);
+            }
+        }
+        if let Some(msg) = last_error {
+            self.minibuffer.show_message(msg);
+        } else if opened > 1 {
+            self.minibuffer
+                .show_message(format!("Opened {opened} files"));
+        }
+    }
+
     /// Disambiguate a buffer name against the existing buffers, emacs-style:
     /// `mod.rs` collides → `mod.rs<lib>` (trailing path components), falling
     /// back to `mod.rs<2>` when paths can't tell them apart.
