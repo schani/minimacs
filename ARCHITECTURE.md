@@ -38,7 +38,9 @@ Terminal input (crossterm)
 src/
   main.rs           CLI parsing (parse_args), terminal setup/teardown (Drop
                     guard + panic hook), runs the event loop
-  app.rs            App<B: Backend> -- event loop and key routing
+  app.rs            App<B: Backend> -- event loop, dispatch_event, viewport update
+  app/input.rs        InputState (chord + pending ESC) and key routing:
+                      handle_key, isearch keys, minibuffer Tab, paste
   app/mouse.rs        Mouse click-to-point mapping and wheel scrolling
   app/tests.rs        Integration-test harness (test_app, event/screen helpers)
                       and the screen snapshot tests
