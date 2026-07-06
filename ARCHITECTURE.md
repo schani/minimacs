@@ -39,6 +39,7 @@ src/
   main.rs           CLI parsing (parse_args), terminal setup/teardown (Drop
                     guard + panic hook), runs the event loop
   app.rs            App<B: Backend> -- event loop and key routing
+  app/mouse.rs        Mouse click-to-point mapping and wheel scrolling
   app/tests.rs        Integration-test harness (test_app, event/screen helpers)
                       and the screen snapshot tests
   app/tests/*.rs      Integration tests by topic: editing, visual, input_state,
