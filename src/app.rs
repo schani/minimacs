@@ -126,18 +126,17 @@ where
     /// Route one input event to its handler. This is the single place that
     /// decides, per event kind, what happens to the pending input state
     /// (`InputState`): key events consume or reset it inside `handle_key`;
-    /// a resize intentionally leaves a chord in progress alone.
-    ///
-    /// KNOWN BUG, characterized in tests and fixed by a later TODO item:
-    /// the paste and mouse arms do NOT reset the pending chord / pending
-    /// ESC (stale-prefix item: `C-x` <paste> `C-s` completes the chord, a
-    /// click mid-chord leaves it pending).
+    /// paste and mouse events cancel any pending chord and pending ESC
+    /// before being handled (cancel-then-handle, so a click mid-chord both
+    /// cancels the chord and performs the click); a resize intentionally
+    /// leaves a chord in progress alone.
     fn dispatch_event(&mut self, event: Event) {
         match event {
             Event::Key(key_event) => {
                 self.handle_key(key_event);
             }
             Event::Paste(text) => {
+                self.input.reset(&mut self.editor);
                 // Paste during isearch extends the query (isearch-yank)
                 // instead of inserting into a buffer.
                 if self.editor.isearch.is_some() {
@@ -147,6 +146,7 @@ where
                 }
             }
             Event::Mouse(mouse_event) => {
+                self.input.reset(&mut self.editor);
                 self.handle_mouse(mouse_event);
             }
             Event::Resize(_, _) => {}
@@ -2291,12 +2291,11 @@ mod tests {
         assert_eq!(app.editor.minibuffer_text(), expected);
     }
 
-    // === Input-state characterization tests ===
+    // === Input-state tests ===
     //
     // These pin down how the pending-chord (`C-x ...`) and pending-ESC state
-    // interact with the other event kinds. Some of them characterize known
-    // bugs (marked below) so that the input-state refactor stays
-    // behavior-preserving; the bug-fix TODO items will flip those tests.
+    // interact with the other event kinds: paste and mouse events cancel any
+    // pending input (like C-g does), while a resize leaves it alone.
 
     #[test]
     fn cg_cancelled_chord_key_self_inserts() {
@@ -2337,10 +2336,10 @@ mod tests {
     }
 
     #[test]
-    fn pending_chord_survives_paste_and_completes() {
-        // Characterizes current behavior; fixed by the stale-prefix TODO item.
-        // A paste event does not cancel a pending chord, so C-x <paste> C-s
-        // completes C-x C-s and saves the file (with the pasted text in it).
+    fn paste_cancels_pending_chord() {
+        // A paste event cancels a pending chord: C-x <paste> C-s must NOT
+        // complete C-x C-s (save-file); the paste is inserted and the C-s
+        // starts an incremental search from the keymap root.
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("test.txt");
         std::fs::write(&file, "original").unwrap();
@@ -2355,48 +2354,60 @@ mod tests {
         let mut event_source = TestEventSource::new(events);
         app.run_until_idle(&mut event_source).unwrap();
 
-        let content = std::fs::read_to_string(&file).unwrap();
-        assert_eq!(content, "Yoriginal");
-    }
-
-    #[test]
-    fn pending_chord_survives_mouse_click() {
-        // Characterizes current behavior; fixed by the stale-prefix TODO item.
-        // A mouse click mid-chord leaves the chord pending (stale mode-line
-        // indicator included), and the next key still completes it.
-        let events = vec![ctrl('x'), mouse_click(0, 0)];
-        let (mut app, mut events) = test_app_with_text(40, 12, "hello", events);
-        app.run_until_idle(&mut events).unwrap();
-        assert_eq!(app.editor.pending_keys, "C-x ");
-
-        // The chord is still live: '2' completes C-x 2 and splits the window.
-        let mut more = TestEventSource::new(vec![char_key('2')]);
-        app.run_until_idle(&mut more).unwrap();
-        let screen = capture_screen(&app.terminal);
-        let mode_line_count = screen.lines().filter(|l| l.contains("--")).count();
+        assert_eq!(app.editor.buffer_text(), "Yoriginal", "paste was inserted");
         assert!(
-            mode_line_count >= 2,
-            "chord completed across a click, screen:\n{screen}"
+            app.editor.isearch.is_some(),
+            "C-s after the paste starts isearch instead of completing C-x C-s"
+        );
+        assert_eq!(app.editor.pending_keys, "", "no pending prefix remains");
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            "original",
+            "file must not have been saved"
         );
     }
 
     #[test]
-    fn pending_esc_survives_mouse_click() {
-        // Characterizes current behavior; fixed by the stale-prefix TODO item.
-        // ESC, then a mouse click, then 'f' still runs M-f (forward-word)
-        // instead of self-inserting 'f'.
-        let events = vec![key(KeyCode::Esc), mouse_click(0, 0), char_key('f')];
-        let (mut app, mut events) = test_app_with_text(40, 10, "hello world", events);
+    fn mouse_click_cancels_pending_chord() {
+        // A mouse click mid-chord cancels the chord AND performs the click
+        // (cancel-then-handle): after C-x <click on other pane>, '2' goes
+        // through the keymap from the root and self-inserts into the clicked
+        // pane instead of completing C-x 2.
+        let mut events = vec![ctrl('x'), char_key('2')]; // split first
+        events.push(ctrl('x')); // start a chord
+        events.push(mouse_click(3, 6)); // click the bottom pane mid-chord
+        events.push(char_key('2'));
+        let (mut app, mut events) = test_app_with_text(40, 10, "hello\nworld", events);
         app.run_until_idle(&mut events).unwrap();
-        assert_eq!(app.editor.buffer_text(), "hello world");
-        assert_eq!(app.editor.point(), 5, "M-f from the clicked position 0");
+
+        assert_eq!(app.editor.pending_keys, "", "the click cancelled the chord");
+        assert_eq!(
+            app.editor.pane_tree.focus_path(),
+            &[1],
+            "the click still switched focus to the second pane"
+        );
+        assert!(
+            app.editor.buffer_text().contains('2'),
+            "'2' self-inserted instead of completing C-x 2, text: {:?}",
+            app.editor.buffer_text()
+        );
     }
 
     #[test]
-    fn pending_esc_survives_paste() {
-        // Characterizes current behavior; fixed by the stale-prefix TODO item.
-        // ESC, then a paste, then 'f' still runs M-f instead of
-        // self-inserting 'f' after the pasted text.
+    fn mouse_click_cancels_pending_esc() {
+        // A mouse click cancels a pending ESC: ESC <click> 'f' self-inserts
+        // 'f' at the clicked position instead of running M-f (forward-word).
+        let events = vec![key(KeyCode::Esc), mouse_click(0, 0), char_key('f')];
+        let (mut app, mut events) = test_app_with_text(40, 10, "hello world", events);
+        app.run_until_idle(&mut events).unwrap();
+        assert_eq!(app.editor.buffer_text(), "fhello world");
+        assert_eq!(app.editor.point(), 1, "point after the self-inserted 'f'");
+    }
+
+    #[test]
+    fn paste_cancels_pending_esc() {
+        // A paste cancels a pending ESC: ESC <paste> 'f' self-inserts 'f'
+        // after the pasted text instead of running M-f.
         let events = vec![
             key(KeyCode::Esc),
             Event::Paste("xy".to_string()),
@@ -2404,12 +2415,8 @@ mod tests {
         ];
         let (mut app, mut events) = test_app_with_text(40, 10, "hello world", events);
         app.run_until_idle(&mut events).unwrap();
-        assert_eq!(app.editor.buffer_text(), "xyhello world");
-        assert_eq!(
-            app.editor.point(),
-            7,
-            "M-f from inside 'xyhello' goes to its end"
-        );
+        assert_eq!(app.editor.buffer_text(), "xyfhello world");
+        assert_eq!(app.editor.point(), 3, "point after the self-inserted 'f'");
     }
 
     #[test]

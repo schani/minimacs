@@ -327,6 +327,12 @@ indicator).
 
 ### Other event kinds
 
+Paste and mouse events cancel any pending input first (cancel-then-handle):
+the dispatcher calls `InputState::reset()` before handling them, so a paste
+or click mid-chord cancels the chord (and any pending ESC) and then performs
+the paste/click normally. This only touches the chord/ESC state — isearch is
+not pending input and is unaffected.
+
 `Event::Paste(text)` inserts the pasted text at point as a single undo group.
 When incremental search is active, the dispatcher instead routes the paste to
 `Editor::isearch_yank` (see the Incremental Search section).
@@ -340,11 +346,6 @@ Mouse scroll events (`ScrollUp`/`ScrollDown`) scroll the pane under the mouse
 cursor by 3 lines without changing which pane is focused.
 `Event::Resize` is handled implicitly by the viewport update; it deliberately
 does not cancel a chord in progress.
-
-Known bug, characterized in `app::tests` and fixed by a later TODO item: the
-paste and mouse arms of `dispatch_event` do not reset the pending chord /
-pending ESC (so `C-x` followed by a paste and `C-s` completes `C-x C-s`, and
-a click mid-chord leaves the chord pending).
 
 ## Rendering
 
