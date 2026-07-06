@@ -11,13 +11,30 @@ use crate::pane::{visual_lines_for_length, Pane};
 
 /// Compute the multi-column layout for completions.
 ///
-/// `max_candidate_len` is in display columns (chars). Returns
-/// `(num_cols, num_rows, col_width)`.
+/// `max_candidate_len` is in display columns (unicode-width, not chars —
+/// CJK and emoji take two columns). Returns `(num_cols, num_rows, col_width)`.
 pub fn completions_layout(num_candidates: usize, max_candidate_len: usize, width: usize) -> (usize, usize, usize) {
     let col_width = (max_candidate_len + 2).max(1).min(width.max(1));
     let num_cols = (width / col_width).max(1);
     let num_rows = num_candidates.div_ceil(num_cols);
     (num_cols, num_rows, col_width)
+}
+
+/// Longest prefix of `s` that fits in `max_width` display columns, and that
+/// prefix's width. A wide char that would straddle the budget is dropped
+/// entirely — never render half a glyph.
+fn truncate_to_width(s: &str, max_width: usize) -> (&str, usize) {
+    let mut width = 0;
+    let mut end = 0;
+    for (i, ch) in s.char_indices() {
+        let w = char_width(ch);
+        if width + w > max_width {
+            break;
+        }
+        width += w;
+        end = i + ch.len_utf8();
+    }
+    (&s[..end], width)
 }
 
 /// Compute the height of the completions area.
@@ -27,12 +44,9 @@ pub fn completions_height(editor: &Editor, total_height: u16, total_width: u16) 
     }
     match &editor.minibuffer.completions {
         Some(candidates) if !candidates.is_empty() => {
+            use unicode_width::UnicodeWidthStr;
             let max_rows = ((total_height.saturating_sub(2)) / 3).max(1) as usize;
-            let max_len = candidates
-                .iter()
-                .map(|c| c.chars().count())
-                .max()
-                .unwrap_or(0);
+            let max_len = candidates.iter().map(|c| c.width()).max().unwrap_or(0);
             let (_num_cols, num_rows, _col_width) = completions_layout(candidates.len(), max_len, total_width as usize);
             num_rows.min(max_rows) as u16
         }
@@ -728,13 +742,10 @@ fn render_completions(frame: &mut Frame, candidates: &[String], page: usize, are
         return;
     }
 
-    // All measurements below are in chars (display columns), never bytes:
-    // candidate names can contain multibyte characters.
-    let max_len = candidates
-        .iter()
-        .map(|c| c.chars().count())
-        .max()
-        .unwrap_or(0);
+    // All measurements below are in display columns (unicode-width), never
+    // bytes or chars: candidate names can contain multibyte and wide chars.
+    use unicode_width::UnicodeWidthStr;
+    let max_len = candidates.iter().map(|c| c.width()).max().unwrap_or(0);
     let (num_cols, _num_rows, col_width) = completions_layout(candidates.len(), max_len, width);
 
     // How many candidates can we display per page?
@@ -753,7 +764,7 @@ fn render_completions(frame: &mut Frame, candidates: &[String], page: usize, are
             let idx = start + col * rows + row;
             if idx < candidates.len() && idx < start + displayable {
                 let name = &candidates[idx];
-                let name_cols = name.chars().count();
+                let name_cols = name.width();
                 if text_cols + name_cols <= width {
                     text.push_str(name);
                     // Pad to column width
@@ -763,10 +774,12 @@ fn render_completions(frame: &mut Frame, candidates: &[String], page: usize, are
                     text.extend(std::iter::repeat_n(' ', pad));
                     text_cols += name_cols + pad;
                 } else {
-                    // Truncate to fit
+                    // Truncate to fit; the row is full after this.
                     let remaining = width.saturating_sub(text_cols);
-                    text.extend(name.chars().take(remaining));
-                    text_cols += remaining.min(name_cols);
+                    let (prefix, prefix_cols) = truncate_to_width(name, remaining);
+                    text.push_str(prefix);
+                    text_cols += prefix_cols;
+                    break;
                 }
             }
         }
@@ -778,10 +791,14 @@ fn render_completions(frame: &mut Frame, candidates: &[String], page: usize, are
         // If this is the last row and there are multiple pages, show page indicator
         if row == rows - 1 && page_count > 1 {
             let suffix = format!("[Page {}/{}]", page + 1, page_count);
-            let suffix_cols = suffix.chars().count();
+            let suffix_cols = suffix.width();
             if suffix_cols <= width {
                 let keep = width - suffix_cols;
-                let mut truncated: String = text.chars().take(keep).collect();
+                let (prefix, prefix_cols) = truncate_to_width(&text, keep);
+                let mut truncated = prefix.to_string();
+                // A dropped straddling wide char leaves a gap; pad so the
+                // indicator still lands flush against the right edge.
+                truncated.extend(std::iter::repeat_n(' ', keep - prefix_cols));
                 truncated.push_str(&suffix);
                 text = truncated;
             }
@@ -1079,6 +1096,30 @@ mod tests {
         assert_eq!(cw, 20);
     }
 
+    // === truncate_to_width tests ===
+
+    #[test]
+    fn truncate_to_width_drops_straddling_wide_char() {
+        // The second wide char would occupy columns 3-4; it is dropped
+        // entirely rather than split.
+        assert_eq!(truncate_to_width("你好x", 3), ("你", 2));
+    }
+
+    #[test]
+    fn truncate_to_width_keeps_exact_fit() {
+        assert_eq!(truncate_to_width("你好x", 5), ("你好x", 5));
+    }
+
+    #[test]
+    fn truncate_to_width_zero_budget() {
+        assert_eq!(truncate_to_width("abc", 0), ("", 0));
+    }
+
+    #[test]
+    fn truncate_to_width_keeps_combining_marks_with_base() {
+        assert_eq!(truncate_to_width("e\u{301}x", 1), ("e\u{301}", 1));
+    }
+
     // === completions_height tests ===
 
     #[test]
@@ -1135,6 +1176,24 @@ mod tests {
         // max_len=11 ("file10.txt"...), col_width=13, width=80 => 6 cols
         // num_rows=ceil(50/6)=9, capped at max_rows=(24-2)/3=7
         assert_eq!(completions_height(&editor, 24, 80), 7);
+    }
+
+    #[test]
+    fn completions_height_measures_display_width_not_chars() {
+        let mut editor = Editor::new();
+        editor.minibuffer.start_prompt(
+            crate::minibuffer::PromptKind::FindFile,
+            "Find file: ",
+        );
+        // "你你你你a.txt" is 9 chars but 13 display columns.
+        let candidates: Vec<String> = ["a", "b", "c", "d"]
+            .iter()
+            .map(|s| format!("你你你你{s}.txt"))
+            .collect();
+        editor.minibuffer.completions = Some(candidates);
+        // col_width = 13+2 = 15; at width 24 only one column fits => 4 rows.
+        // (Counting chars would give col_width 11, two columns => 2 rows.)
+        assert_eq!(completions_height(&editor, 24, 24), 4);
     }
 
     #[test]

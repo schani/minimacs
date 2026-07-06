@@ -632,10 +632,14 @@ is cleared:
 Rendering uses `completions_height()` (shared by `render()` and
 `update_viewport()`) to conditionally insert a completions area between panes
 and minibuffer. The shared `completions_layout()` helper computes column width,
-column count, and row count from the candidates and terminal width. Height is
-the number of layout rows, capped at `(screen_height - 2) / 3`, always leaving
-room for panes and minibuffer. Candidates display in a multi-column layout
-(like `ls` output) with a dark gray background.
+column count, and row count from the candidates and terminal width. All widths
+are display columns measured with unicode-width (CJK/emoji names count two
+columns per glyph, not one per char); names too wide for the remaining row are
+truncated by `truncate_to_width()`, which drops a straddling wide char entirely
+rather than splitting a glyph. Height is the number of layout rows, capped at
+`(screen_height - 2) / 3`, always leaving room for panes and minibuffer.
+Candidates display in a multi-column layout (like `ls` output) with a dark
+gray background.
 
 When candidates overflow a single page, pressing Tab again advances the page
 (`completion_page` on `Minibuffer`). The renderer wraps the page counter via

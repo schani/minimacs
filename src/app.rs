@@ -2308,6 +2308,67 @@ mod tests {
     }
 
     #[test]
+    fn completions_with_wide_names_align_columns_by_display_width() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["zaa.txt", "zbb.txt", "zcc.txt", "z你你你你你你.txt"] {
+            std::fs::write(dir.path().join(name), "").unwrap();
+        }
+
+        let mut events = open_find_file_with_clear();
+        for c in format!("{}/z", dir.path().display()).chars() {
+            events.push(char_key(c));
+        }
+        events.push(key(KeyCode::Tab));
+        let (mut app, mut events) = test_app(40, 12, events);
+        app.run_until_idle(&mut events).unwrap();
+        assert!(app.editor.minibuffer.completions.is_some());
+        let screen = capture_screen(&app.terminal);
+        // The widest candidate "z你你你你你你.txt" is 17 display columns
+        // (11 chars), so col_width = 19 and 40 columns fit 2 columns of the
+        // 4 sorted candidates (column-major: rows are [zaa, zcc], [zbb, z你…]).
+        // The second column must start at display column 19 in both rows.
+        // (capture_screen dumps a wide char's continuation cell as a space,
+        // so string index == display column.)
+        let row0 = screen
+            .lines()
+            .find(|l| l.contains("zaa.txt"))
+            .expect("row with zaa.txt");
+        assert_eq!(row0.find("zcc.txt"), Some(19), "row: {row0:?}");
+        let row1 = screen
+            .lines()
+            .find(|l| l.contains("zbb.txt"))
+            .expect("row with zbb.txt");
+        assert_eq!(row1.find("z你"), Some(19), "row: {row1:?}");
+    }
+
+    #[test]
+    fn completion_page_indicator_flush_right_with_wide_names() {
+        let dir = tempfile::tempdir().unwrap();
+        for i in 0..30 {
+            std::fs::write(dir.path().join(format!("你你e{i:02}.txt")), "").unwrap();
+        }
+
+        let mut events = open_find_file_with_clear();
+        for c in format!("{}/你", dir.path().display()).chars() {
+            events.push(char_key(c));
+        }
+        events.push(key(KeyCode::Tab));
+        let (mut app, mut events) = test_app(14, 8, events);
+        app.run_until_idle(&mut events).unwrap();
+        let screen = capture_screen(&app.terminal);
+        // 30 candidates, 1 column x 2 visible rows => 15 pages. The splice
+        // budget before "[Page 1/15]" (11 columns) is 3 columns, which fits
+        // only "你" (2 columns) plus one pad space, so the indicator lands
+        // flush against the right edge without splitting a glyph.
+        let line = screen
+            .lines()
+            .find(|l| l.contains("[Page"))
+            .expect("indicator line");
+        assert!(line.ends_with("[Page 1/15]"), "line: {line:?}");
+        assert_eq!(line.chars().count(), 14, "flush right: {line:?}");
+    }
+
+    #[test]
     fn multi_column_completions_in_wide_terminal() {
         let dir = tempfile::tempdir().unwrap();
         for i in 0..10 {
