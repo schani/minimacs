@@ -995,17 +995,94 @@ mod tests {
     }
 
     #[test]
+    fn cursor_at_eol_of_exactly_full_line_wraps_to_next_row() {
+        // Terminal 20 wide: a 20-char line exactly fills the pane width.
+        // C-e puts point at EOL (visual col 20 == text_width, one past the
+        // last cell), so the cursor wraps to column 0 of the next visual
+        // row (emacs behavior) instead of being hidden.
+        let text = "aaaaaaaaaaaaaaaaaaaa\nnext"; // 20 a's
+        let events = vec![ctrl('e')];
+        let (mut app, mut events) = test_app_with_text(20, 6, text, events);
+        app.run_until_idle(&mut events).unwrap();
+        assert_eq!(app.editor.point(), 20);
+        let pos = app.terminal.get_cursor_position().unwrap();
+        assert_eq!((pos.x, pos.y), (0, 1));
+    }
+
+    #[test]
+    fn cursor_wrap_at_viewport_bottom_scrolls_one_row() {
+        // 20x6 => 4 text rows. The exactly-full line sits on the last text
+        // row; its EOL cursor wraps to a row below the viewport, so the
+        // pane must scroll one visual row to keep the cursor visible.
+        let text = "one\ntwo\nthree\naaaaaaaaaaaaaaaaaaaa\nnext";
+        let events = vec![ctrl('n'), ctrl('n'), ctrl('n'), ctrl('e')];
+        let (mut app, mut events) = test_app_with_text(20, 6, text, events);
+        app.run_until_idle(&mut events).unwrap();
+        let pane = app.editor.pane_tree.focused_pane();
+        assert_eq!((pane.scroll_top, pane.scroll_row_offset), (1, 0));
+        let pos = app.terminal.get_cursor_position().unwrap();
+        assert_eq!((pos.x, pos.y), (0, 3));
+        let screen = capture_screen(&app.terminal);
+        assert!(
+            screen.lines().nth(3).unwrap().starts_with("next"),
+            "row under the cursor must show the next line: {screen}"
+        );
+    }
+
+    #[test]
+    fn cursor_wrap_past_last_buffer_line_still_visible() {
+        // The exactly-full line is the LAST buffer line: the cursor's
+        // wrapped row is past all content (a blank row), but it is still
+        // within the text area and must be drawn there.
+        let text = "one\naaaaaaaaaaaaaaaaaaaa"; // 20 a's, no trailing newline
+        let events = vec![ctrl('n'), ctrl('e')];
+        let (mut app, mut events) = test_app_with_text(20, 6, text, events);
+        app.run_until_idle(&mut events).unwrap();
+        assert_eq!(app.editor.point(), 24);
+        let pos = app.terminal.get_cursor_position().unwrap();
+        assert_eq!((pos.x, pos.y), (0, 2));
+    }
+
+    #[test]
+    fn cursor_at_eol_of_exactly_full_cjk_line_wraps_to_next_row() {
+        // 10 CJK chars = 20 visual columns, exactly filling a 20-wide pane.
+        let text = "你好你好你好你好你好\nnext";
+        let events = vec![ctrl('e')];
+        let (mut app, mut events) = test_app_with_text(20, 6, text, events);
+        app.run_until_idle(&mut events).unwrap();
+        assert_eq!(app.editor.point(), 10);
+        let pos = app.terminal.get_cursor_position().unwrap();
+        assert_eq!((pos.x, pos.y), (0, 1));
+    }
+
+    #[test]
+    fn cursor_at_eol_of_exactly_full_final_wrap_segment_wraps_to_next_row() {
+        // Terminal 10 wide: cps=9, so a 19-char line renders as rows
+        // [0..9)+'\' and [9..19) — the final segment exactly fills all 10
+        // columns. EOL wraps the cursor to row 2, column 0.
+        let text = "abcdefghijklmnopqrs\nZZZ"; // 19 chars
+        let events = vec![ctrl('e')];
+        let (mut app, mut events) = test_app_with_text(10, 6, text, events);
+        app.run_until_idle(&mut events).unwrap();
+        assert_eq!(app.editor.point(), 19);
+        let pos = app.terminal.get_cursor_position().unwrap();
+        assert_eq!((pos.x, pos.y), (0, 2));
+    }
+
+    #[test]
     fn cursor_in_right_pane_never_drawn_outside_pane() {
         // Terminal 21 wide; C-x 3 gives left pane 10, separator, right pane 10.
         // A line exactly filling the right pane's width puts EOL at col 10,
-        // which has no cell; the cursor must not be drawn at x=21 (outside
-        // the terminal/pane).
+        // which has no cell; the cursor wraps to column 0 of the pane's next
+        // row (x=11, the right pane's origin) and must never be drawn at
+        // x=21 (outside the terminal/pane).
         let text = "abcdefghij"; // 10 chars
         let events = vec![ctrl('x'), char_key('3'), ctrl('x'), char_key('o'), ctrl('e')];
         let (mut app, mut events) = test_app_with_text(21, 6, text, events);
         app.run_until_idle(&mut events).unwrap();
         let pos = app.terminal.get_cursor_position().unwrap();
         assert!(pos.x < 21, "cursor drawn outside the terminal: {pos:?}");
+        assert_eq!((pos.x, pos.y), (11, 1));
     }
 
     #[test]
@@ -2172,6 +2249,31 @@ mod tests {
             .char_to_line_col(app.editor.point());
         assert_eq!(line, 1, "should be on line 1");
         assert_eq!(col, 2, "should be at column 2");
+    }
+
+    #[test]
+    fn mouse_click_on_wrapped_eol_cursor_row_maps_to_next_line_start() {
+        // A 20-char line exactly fills the 20-wide pane; the EOL cursor is
+        // drawn at column 0 of the next visual row, which shows the next
+        // buffer line. Clicking there maps to the next line's start — the
+        // position that row actually displays.
+        let text = "aaaaaaaaaaaaaaaaaaaa\nnext";
+        let events = vec![mouse_click(0, 1)];
+        let (mut app, mut events) = test_app_with_text(20, 6, text, events);
+        app.run_until_idle(&mut events).unwrap();
+        assert_eq!(app.editor.point(), 21); // start of "next"
+    }
+
+    #[test]
+    fn mouse_click_on_wrapped_eol_cursor_row_after_last_line_maps_to_eol() {
+        // Same, but the exactly-full line is the last buffer line: the
+        // wrapped cursor row is below all content, so clicking it places
+        // point at the end of the buffer — that line's EOL.
+        let text = "aaaaaaaaaaaaaaaaaaaa";
+        let events = vec![mouse_click(0, 1)];
+        let (mut app, mut events) = test_app_with_text(20, 6, text, events);
+        app.run_until_idle(&mut events).unwrap();
+        assert_eq!(app.editor.point(), 20);
     }
 
     #[test]

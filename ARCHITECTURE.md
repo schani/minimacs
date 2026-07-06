@@ -412,7 +412,16 @@ does not cancel a chord in progress.
    point, accounting for line wrapping and display-only tab expansion when
    computing the visual position, and subtracting the pane's
    `scroll_row_offset` (a cursor row among the scrolled-off wrap segments of
-   the top line is above the viewport and left unset). After every command,
+   the top line is above the viewport and left unset). When point is at EOL
+   of a line (or of a final wrap segment) that exactly fills the pane width,
+   the column would compute to one past the last cell; the cursor instead
+   wraps to column 0 of the next visual row (emacs behavior) — on screen the
+   next buffer line's first row, or a blank row past the end of the buffer.
+   `render::visual_row_col_in_line` computes this wrapped position and is
+   shared by cursor placement and scroll computation, so the extra row is
+   also counted when scrolling the cursor into view (clicking that row maps
+   to what it displays: the next line's start, or end-of-buffer — that same
+   EOL — below the last line). After every command,
    `Editor::ensure_cursor_visible` recomputes `(scroll_top,
    scroll_row_offset)` via `compute_scroll_position` so the cursor's visual
    row is always on screen — even inside one line that wraps taller than the

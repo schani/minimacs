@@ -237,6 +237,16 @@ fn visual_col_for_buffer_col(line_chars: &[char], buffer_col: usize) -> usize {
 /// segments, using tab-expanded display widths. The last wrap segment has no
 /// continuation marker and holds a full `text_width` columns, so the row is
 /// clamped to the line's actual row count.
+///
+/// When the position is at EOL of a segment that exactly fills the width
+/// (an unwrapped line of exactly `text_width` columns, or a wrapped line
+/// whose final segment does), the column would compute to `text_width` —
+/// one past the last cell. The cursor wraps to column 0 of the next visual
+/// row instead (emacs behavior). That row is one past the line's own rows:
+/// on screen it is the next buffer line's first row, or a blank row past
+/// the end of the buffer. Cursor placement and `compute_scroll_position`
+/// both consume this function, so rendering and scrolling agree on the
+/// extra row.
 pub(crate) fn visual_row_col_in_line(
     buf: &Buffer,
     line_idx: usize,
@@ -246,13 +256,18 @@ pub(crate) fn visual_row_col_in_line(
     let line_chars = line_chars_without_ending(buf, line_idx);
     let visual_col = visual_col_for_buffer_col(&line_chars, buffer_col);
     let line_visual_width = visual_width_for_chars(&line_chars);
-    if text_width > 1 && line_visual_width > text_width {
+    let (row, col) = if text_width > 1 && line_visual_width > text_width {
         let cps = text_width - 1;
         let last_row = visual_lines_for_length(line_visual_width, text_width) - 1;
         let row = (visual_col / cps).min(last_row);
         (row, visual_col - row * cps)
     } else {
         (0, visual_col)
+    };
+    if text_width > 0 && col >= text_width {
+        (row + 1, 0)
+    } else {
+        (row, col)
     }
 }
 
@@ -845,6 +860,41 @@ mod tests {
         // text_width=13, cps=12. 36 chars:
         // seg1=12, remaining=24. excess=36-13=23. 1+ceil(23/12)=1+2=3.
         assert_eq!(visual_lines_for_length(36, 13), 3);
+    }
+
+    #[test]
+    fn visual_row_col_wraps_eol_of_exactly_full_line() {
+        // Unwrapped 10-char line at width 10: EOL computes to column 10
+        // (one past the last cell) and must wrap to (1, 0). The virtual
+        // row is one past the line's own rows; renderer and scroll both
+        // count it.
+        let buf = Buffer::from_str(0, "t", "aaaaaaaaaa");
+        assert_eq!(visual_row_col_in_line(&buf, 0, 9, 10), (0, 9));
+        assert_eq!(visual_row_col_in_line(&buf, 0, 10, 10), (1, 0));
+    }
+
+    #[test]
+    fn visual_row_col_wraps_eol_of_exactly_full_final_segment() {
+        // 19 chars at width 10 (cps=9): rows [0..9)+'\' and [9..19); the
+        // final segment exactly fills the width, so EOL wraps to (2, 0).
+        let buf = Buffer::from_str(0, "t", "abcdefghijklmnopqrs");
+        assert_eq!(visual_row_col_in_line(&buf, 0, 18, 10), (1, 9));
+        assert_eq!(visual_row_col_in_line(&buf, 0, 19, 10), (2, 0));
+    }
+
+    #[test]
+    fn visual_row_col_eol_of_non_full_final_segment_stays_on_its_row() {
+        // 18 chars at width 10: the final segment holds 9 columns; EOL is
+        // a real cell position on that row and must not wrap.
+        let buf = Buffer::from_str(0, "t", "abcdefghijklmnopqr");
+        assert_eq!(visual_row_col_in_line(&buf, 0, 18, 10), (1, 9));
+    }
+
+    #[test]
+    fn visual_row_col_wraps_eol_of_exactly_full_cjk_line() {
+        // 5 CJK chars = 10 visual columns at width 10.
+        let buf = Buffer::from_str(0, "t", "你好你好你");
+        assert_eq!(visual_row_col_in_line(&buf, 0, 5, 10), (1, 0));
     }
 
     // === isearch match lookup tests ===
