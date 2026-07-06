@@ -1,5 +1,7 @@
 use anyhow::Result;
-use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use crossterm::event::{
+    Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
 use ratatui::backend::Backend;
 use ratatui::Terminal;
 
@@ -133,7 +135,13 @@ where
     fn dispatch_event(&mut self, event: Event) {
         match event {
             Event::Key(key_event) => {
-                self.handle_key(key_event);
+                // Act only on Press and Repeat (a held key must still
+                // repeat). Windows and kitty-protocol terminals also report
+                // Release events; letting those through would execute every
+                // keystroke twice.
+                if key_event.kind != KeyEventKind::Release {
+                    self.handle_key(key_event);
+                }
             }
             Event::Paste(text) => {
                 self.input.reset(&mut self.editor);
@@ -591,6 +599,14 @@ mod tests {
         Event::Key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE))
     }
 
+    fn release(code: KeyCode, modifiers: KeyModifiers) -> Event {
+        Event::Key(KeyEvent::new_with_kind(
+            code,
+            modifiers,
+            KeyEventKind::Release,
+        ))
+    }
+
     fn key_events(s: &str) -> Vec<Event> {
         s.chars().map(char_key).collect()
     }
@@ -630,6 +646,47 @@ mod tests {
         assert_eq!(app.editor.buffer_text(), "hello");
         let screen = capture_screen(&app.terminal);
         insta::assert_snapshot!(screen);
+    }
+
+    #[test]
+    fn key_release_events_are_ignored() {
+        // Kitty-protocol terminals (and Windows) report release events;
+        // acting on them would execute every keystroke twice.
+        let events = vec![
+            char_key('a'),
+            release(KeyCode::Char('a'), KeyModifiers::NONE),
+            char_key('b'),
+            release(KeyCode::Char('b'), KeyModifiers::NONE),
+        ];
+        let (mut app, mut events) = test_app(40, 10, events);
+        app.run_until_idle(&mut events).unwrap();
+        assert_eq!(app.editor.buffer_text(), "ab");
+    }
+
+    #[test]
+    fn key_release_does_not_start_isearch() {
+        let events = vec![release(KeyCode::Char('s'), KeyModifiers::CONTROL)];
+        let (mut app, mut events) = test_app(40, 10, events);
+        app.run_until_idle(&mut events).unwrap();
+        assert!(app.editor.isearch.is_none());
+    }
+
+    #[test]
+    fn key_release_does_not_advance_pending_chord() {
+        // C-x pressed, then a released C-c: the chord must neither complete
+        // (no quit) nor be consumed — a following C-c press still quits.
+        let events = vec![
+            ctrl('x'),
+            release(KeyCode::Char('c'), KeyModifiers::CONTROL),
+        ];
+        let (mut app, mut events) = test_app(40, 10, events);
+        app.run_until_idle(&mut events).unwrap();
+        assert!(!app.editor.should_quit);
+        assert_eq!(app.editor.pending_keys, "C-x ");
+
+        let mut events = TestEventSource::new(vec![ctrl('c')]);
+        app.run_until_idle(&mut events).unwrap();
+        assert!(app.editor.should_quit);
     }
 
     #[test]

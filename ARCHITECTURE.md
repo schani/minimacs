@@ -354,6 +354,9 @@ indicator).
 
 ### Key routing (`handle_key`)
 
+- The dispatcher drops `KeyEventKind::Release` events before they reach
+  `handle_key` (Windows and kitty-protocol terminals report them, which
+  would execute every keystroke twice); Press and Repeat are handled.
 - `C-g` always cancels (hard-coded, bypasses keymap): resets all pending
   input state, then runs `Cancel`.
 - A bare ESC calls `set_esc_pending()`; the next key is re-tagged with ALT.
