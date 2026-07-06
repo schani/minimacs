@@ -93,3 +93,19 @@ ARCHITECTURE.md current.
 - [ ] Completion layout measures display width with `chars().count()` (`render.rs:31-35, 681-733`), so CJK/emoji candidate names misalign columns and overflow rows. Use `unicode-width` like the mode line already does.
 - [ ] Submitting an empty path creates garbage in both path prompts: empty find-file input creates a phantom, unsaveable buffer with an empty name (`prompts.rs:97-103` → `fileops.rs:9-35`), and empty write-file input falls through to `write_buffer_to_path(PathBuf::new())` (`prompts.rs:108,242`). Add one shared "non-empty normalized path" validation both prompts go through; on empty input show a message and re-ask.
 - [ ] `main.rs` CLI/teardown gaps: `minimacs a.txt b.txt` silently ignores every file after the first (open them all); `--help`/`--version` open as literal buffer names (print usage/version and exit); an `Err` between `enable_raw_mode()` and entering the run loop returns early without `restore_terminal()`, leaving the shell raw (the panic hook only covers panics).
+
+## Refactor: split src/app.rs (after all fixes above — Codex-reviewed plan)
+
+app.rs is ~2900 lines, 81% of which is `mod tests`. Split it following the
+`editor.rs` → `src/editor/` idiom: `src/app.rs` stays as the module root
+(never renamed); children under `src/app/`. Land these only AFTER the
+remaining app.rs-touching fixes above (KeyEventKind, dead event source,
+render storm) — per Codex plan review, the fixes take priority and the
+production-code moves would churn against them. Behavior-preserving
+throughout (module plumbing, explicit test imports, and `pub(super)`
+promotions are expected; no logic changes).
+
+- [ ] Split commit 1: move `#[cfg(test)] mod tests` to `src/app/tests.rs` verbatim (plus its own explicit imports so it no longer borrows app.rs's `use` list via `use super::*`), and `git mv` the three insta snapshots from `src/snapshots/` to `src/app/snapshots/` in the same commit (insta's snapshot *directory* follows the source file; the *names* stay because the module path `app::tests` is unchanged — the three snapshot tests must stay at the tests-module root forever for this reason). Do not run insta --accept; stale `source:` headers are ignored metadata.
+- [ ] Split commit 2: shard the tests by topic into `src/app/tests/{editing,visual,input_state,isearch,minibuffer,completions,mouse}.rs`, each starting `use super::*;`. Shared helpers (`test_app*`, `key`/`ctrl`/`alt`/`char_key`/`key_events`, `capture_screen`, `mouse_click`, `mouse_scroll_*`) stay at the tests root — `mouse_scroll_down` is used by three topics. `digit_line`/`char_under_cursor` go to visual.rs; `open_find_file_with_clear` to completions.rs. Test count must be identical before/after.
+- [ ] Split commit 3: extract `handle_mouse` + `handle_mouse_scroll` into `src/app/mouse.rs` (same impl header incl. the `where B::Error: Send + Sync + 'static` bound; `handle_mouse` becomes `pub(super)`); prune app.rs's mouse imports.
+- [ ] Split commit 4: extract `InputState` + `handle_key`/`handle_isearch_key`/`handle_minibuffer_tab`/`handle_paste` into `src/app/input.rs` (`InputState`, `InputState::{new,reset}`, `App::{handle_key,handle_paste}` become `pub(super)`); prune app.rs imports. `dispatch_event`, `run`, `run_until_idle`, `update_viewport`, `render`, and the `App` struct stay in app.rs. Update ARCHITECTURE.md's module map in each commit that creates a file.
