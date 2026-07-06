@@ -39,8 +39,10 @@ src/
   main.rs           CLI parsing (parse_args), terminal setup/teardown (Drop
                     guard + panic hook), runs the event loop
   app.rs            App<B: Backend> -- event loop and key routing
-  app/tests.rs        Integration tests: the full event loop driven through
-                      TestBackend/TestEventSource, incl. screen snapshots
+  app/tests.rs        Integration-test harness (test_app, event/screen helpers)
+                      and the screen snapshot tests
+  app/tests/*.rs      Integration tests by topic: editing, visual, input_state,
+                      isearch, minibuffer, completions, mouse
   editor.rs         Editor -- struct, apply_edit, movement/editing, dispatch
   editor/isearch.rs   Incremental search state and commands
   editor/prompts.rs   Prompt starters, submit_prompt, confirm/quit flows
@@ -763,7 +765,9 @@ queue is drained, which is how `run_until_idle` terminates in tests.
 
 2. **Integration tests** (in `app::tests`): drive the full event loop through
    `App<TestBackend>` with `TestEventSource`. Verify typing, navigation, key
-   chords, file I/O, paste handling.
+   chords, file I/O, paste handling. Split by topic under `src/app/tests/`
+   (editing, visual, input_state, isearch, minibuffer, completions, mouse);
+   shared helpers live at the tests-module root in `src/app/tests.rs`.
 
 3. **Snapshot tests**: use `insta::assert_snapshot!` to capture rendered screen
    output from `TestBackend` and compare against stored snapshots. The stored
