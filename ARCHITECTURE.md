@@ -124,7 +124,11 @@ lengths (`String::len()`) must never be mixed in. `apply_edit`:
 2. Records undo history according to `EditRecord`
    (`Insert`/`Delete`/`Replace`/`NoHistory` — the latter used when replaying
    undo/redo groups).
-3. Performs the rope edit.
+3. Calls `Buffer::replace`, which performs deletion and insertion as one atomic
+   rope edit, advances `edit_generation` exactly once, and computes the
+   tree-sitter `InputEdit` in UTF-8 byte offsets/byte columns for the syntax
+   layer. `Buffer::insert` and `Buffer::remove` are thin wrappers around the
+   same primitive.
 4. Calls `Pane::adjust_for_edit` on every pane viewing the buffer (or on the
    minibuffer pane for the minibuffer buffer), keeping point, mark, scroll
    position, and saved per-buffer view states valid. Positions at or before
@@ -528,7 +532,7 @@ when building `Span`s.
 
 **Caching**: `SyntaxState` caches the most recent highlight result in a
 `RefCell<Option<HighlightCache>>`. The cache stores the `edit_generation`
-(incremented on every `Buffer::insert()` / `remove()`), the highlighted byte
+(incremented once for every atomic `Buffer::replace()`), the highlighted byte
 range, and the resulting spans. On each render frame,
 `compute_syntax_char_styles()` checks the cache before extracting bytes from the
 Rope. On cache hits (the common case for scrolling, cursor movement, and idle

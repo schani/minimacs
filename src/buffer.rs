@@ -2,6 +2,7 @@ use anyhow::{bail, Result};
 use ropey::{Rope, RopeSlice};
 use std::fs;
 use std::path::{Path, PathBuf};
+use tree_house::tree_sitter::{InputEdit, Point};
 
 use crate::history::History;
 use crate::syntax::{self, SyntaxState};
@@ -319,26 +320,92 @@ impl Buffer {
         line.len_chars() - line_break_len_chars(line)
     }
 
-    /// Insert a string at the given char offset.
-    pub fn insert(&mut self, char_idx: usize, text: &str) {
-        self.text.insert(char_idx, text);
-        self.modified = true;
-        self.edit_generation += 1;
-    }
+    /// Atomically replace chars in `[start, end)` and return the corresponding
+    /// tree-sitter edit. A replacement advances `edit_generation` exactly once,
+    /// regardless of whether it deletes, inserts, or does both.
+    pub(crate) fn replace(
+        &mut self,
+        start: usize,
+        end: usize,
+        replacement: &str,
+    ) -> Option<InputEdit> {
+        let len = self.text.len_chars();
+        let start = start.min(len);
+        let end = end.min(len).max(start);
+        if start == end && replacement.is_empty() {
+            return None;
+        }
 
-    /// Remove chars in range [start..end).
-    pub fn remove(&mut self, start: usize, end: usize) {
+        let edit = input_edit_for_replace(&self.text, start, end, replacement);
         if start < end {
             self.text.remove(start..end);
-            self.modified = true;
-            self.edit_generation += 1;
         }
+        if !replacement.is_empty() {
+            self.text.insert(start, replacement);
+        }
+        self.modified = true;
+        self.edit_generation += 1;
+        Some(edit)
     }
 
     /// Update the modified flag based on undo history clean state.
     pub fn update_modified(&mut self) {
         self.modified = !self.history.is_clean();
     }
+}
+
+fn input_edit_for_replace(
+    text: &Rope,
+    start: usize,
+    end: usize,
+    replacement: &str,
+) -> InputEdit {
+    let start_byte = text.char_to_byte(start);
+    let old_end_byte = text.char_to_byte(end);
+    let start_point = tree_sitter_point_at_char(text, start);
+    let old_end_point = tree_sitter_point_at_char(text, end);
+    let replacement_bytes = replacement.as_bytes();
+    let newline_count = replacement_bytes
+        .iter()
+        .filter(|&&byte| byte == b'\n')
+        .count();
+    let new_end_point = match replacement_bytes.iter().rposition(|&byte| byte == b'\n') {
+        Some(last_newline) => Point {
+            row: start_point.row.saturating_add(to_u32(newline_count)),
+            col: to_u32(replacement_bytes.len() - last_newline - 1),
+        },
+        None => Point {
+            row: start_point.row,
+            col: start_point.col.saturating_add(to_u32(replacement_bytes.len())),
+        },
+    };
+
+    InputEdit {
+        start_byte: to_u32(start_byte),
+        old_end_byte: to_u32(old_end_byte),
+        new_end_byte: to_u32(start_byte.saturating_add(replacement_bytes.len())),
+        start_point,
+        old_end_point,
+        new_end_point,
+    }
+}
+
+fn tree_sitter_point_at_char(text: &Rope, char_idx: usize) -> Point {
+    // Buffers loaded from disk and all normal editing paths use LF or CRLF,
+    // for which ropey's line index agrees with tree-sitter's point rows. The
+    // column is explicitly measured in UTF-8 bytes, not chars.
+    let row = text.char_to_line(char_idx);
+    let line_start_char = text.line_to_char(row);
+    let byte = text.char_to_byte(char_idx);
+    let line_start_byte = text.char_to_byte(line_start_char);
+    Point {
+        row: to_u32(row),
+        col: to_u32(byte - line_start_byte),
+    }
+}
+
+fn to_u32(value: usize) -> u32 {
+    u32::try_from(value).unwrap_or(u32::MAX)
 }
 
 /// Resolve the physical file a write to `path` should land on, following
@@ -529,33 +596,76 @@ mod tests {
     }
 
     #[test]
-    fn insert_and_remove() {
+    fn replace_can_insert_and_remove() {
         let mut buf = Buffer::from_str(0, "test", "hello");
-        buf.insert(5, " world");
+        buf.replace(5, 5, " world");
         assert_eq!(buf.text.to_string(), "hello world");
         assert!(buf.modified);
 
-        buf.remove(5, 11);
+        buf.replace(5, 11, "");
         assert_eq!(buf.text.to_string(), "hello");
     }
 
     #[test]
-    fn edit_generation_increments_on_insert_and_remove() {
+    fn edit_generation_increments_once_per_replace() {
         let mut buf = Buffer::from_str(0, "test", "hello");
         assert_eq!(buf.edit_generation, 0);
 
-        buf.insert(5, " world");
+        buf.replace(5, 5, " world");
         assert_eq!(buf.edit_generation, 1);
 
-        buf.insert(11, "!");
+        buf.replace(11, 11, "!");
         assert_eq!(buf.edit_generation, 2);
 
-        buf.remove(11, 12);
+        buf.replace(11, 12, "");
         assert_eq!(buf.edit_generation, 3);
 
         // No-op remove (start == end) should NOT increment
-        buf.remove(5, 5);
+        buf.replace(5, 5, "");
         assert_eq!(buf.edit_generation, 3);
+    }
+
+    #[test]
+    fn replace_is_one_atomic_generation() {
+        let mut buf = Buffer::from_str(0, "test", "hello world");
+        buf.replace(6, 11, "tree-house");
+
+        assert_eq!(buf.text.to_string(), "hello tree-house");
+        assert_eq!(buf.edit_generation, 1);
+        assert!(buf.modified);
+    }
+
+    #[test]
+    fn input_edit_uses_byte_offsets_and_byte_columns_for_unicode() {
+        let text = Rope::from_str("αbc\ndéf");
+        let edit = input_edit_for_replace(&text, 1, 3, "x\nλ");
+
+        assert_eq!(edit.start_byte, 2);
+        assert_eq!(edit.old_end_byte, 4);
+        assert_eq!(edit.new_end_byte, 6);
+        assert_eq!(edit.start_point, tree_house::tree_sitter::Point { row: 0, col: 2 });
+        assert_eq!(edit.old_end_point, tree_house::tree_sitter::Point { row: 0, col: 4 });
+        assert_eq!(edit.new_end_point, tree_house::tree_sitter::Point { row: 1, col: 2 });
+    }
+
+    #[test]
+    fn input_edit_multiline_endpoint_is_after_last_newline() {
+        let text = Rope::from_str("first\nsecond\nthird");
+        let edit = input_edit_for_replace(&text, 6, 12, "one\ntwo\nthree");
+
+        assert_eq!(edit.start_point, tree_house::tree_sitter::Point { row: 1, col: 0 });
+        assert_eq!(edit.old_end_point, tree_house::tree_sitter::Point { row: 1, col: 6 });
+        assert_eq!(edit.new_end_point, tree_house::tree_sitter::Point { row: 3, col: 5 });
+        assert_eq!(edit.new_end_byte - edit.start_byte, 13);
+    }
+
+    #[test]
+    fn empty_replace_is_a_noop() {
+        let mut buf = Buffer::from_str(0, "test", "hello");
+        buf.replace(2, 2, "");
+        assert_eq!(buf.text.to_string(), "hello");
+        assert_eq!(buf.edit_generation, 0);
+        assert!(!buf.modified);
     }
 
     #[test]
@@ -569,7 +679,7 @@ mod tests {
         assert_eq!(buf.line_count(), 3);
         assert!(!buf.modified);
 
-        buf.insert(5, " there");
+        buf.replace(5, 5, " there");
         assert!(buf.modified);
         buf.save().unwrap();
         assert!(!buf.modified);
@@ -596,7 +706,7 @@ mod tests {
         assert!(buf.externally_modified());
 
         // Saving takes ownership of the file again.
-        buf.insert(0, "x");
+        buf.replace(0, 0, "x");
         buf.save().unwrap();
         assert!(!buf.externally_modified());
     }
@@ -614,7 +724,7 @@ mod tests {
         fs::write(&file, "hello").unwrap();
 
         let mut buf = Buffer::from_file(0, &file).unwrap();
-        buf.insert(0, "x");
+        buf.replace(0, 0, "x");
         buf.save().unwrap();
 
         let entries: Vec<_> = fs::read_dir(dir.path())
@@ -635,7 +745,7 @@ mod tests {
         fs::set_permissions(&file, fs::Permissions::from_mode(0o755)).unwrap();
 
         let mut buf = Buffer::from_file(0, &file).unwrap();
-        buf.insert(0, "#!/bin/sh\n");
+        buf.replace(0, 0, "#!/bin/sh\n");
         buf.save().unwrap();
 
         let mode = fs::metadata(&file).unwrap().permissions().mode() & 0o777;
@@ -654,7 +764,7 @@ mod tests {
         std::os::unix::fs::symlink(&target, &link).unwrap();
 
         let mut buf = Buffer::from_file(0, &link).unwrap();
-        buf.insert(0, "new ");
+        buf.replace(0, 0, "new ");
         buf.save().unwrap();
 
         assert!(
@@ -681,7 +791,7 @@ mod tests {
         std::os::unix::fs::symlink("missing.txt", &link).unwrap();
 
         let mut buf = Buffer::new_for_path(0, &link);
-        buf.insert(0, "hello");
+        buf.replace(0, 0, "hello");
         buf.save().unwrap();
 
         assert!(
@@ -706,7 +816,7 @@ mod tests {
         std::os::unix::fs::symlink("a.txt", &b).unwrap();
 
         let mut buf = Buffer::new_for_path(0, &a);
-        buf.insert(0, "x");
+        buf.replace(0, 0, "x");
         assert!(buf.save().is_err(), "a symlink loop must fail the save");
         assert!(
             fs::symlink_metadata(&a).unwrap().file_type().is_symlink(),
@@ -726,7 +836,7 @@ mod tests {
         fs::hard_link(&a, &b).unwrap();
 
         let mut buf = Buffer::from_file(0, &a).unwrap();
-        buf.insert(0, "new ");
+        buf.replace(0, 0, "new ");
         buf.save().unwrap();
 
         assert_eq!(
@@ -766,7 +876,7 @@ mod tests {
 
         // Saving through the link recaptures the mtime of the file
         // actually written.
-        buf.insert(0, "x");
+        buf.replace(0, 0, "x");
         buf.save().unwrap();
         assert!(!buf.externally_modified());
     }

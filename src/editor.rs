@@ -760,12 +760,7 @@ impl Editor {
                 EditRecord::Replace => buf.history.record_replace(start, &deleted, text),
                 EditRecord::NoHistory => {}
             }
-            if end > start {
-                buf.remove(start, end);
-            }
-            if !text.is_empty() {
-                buf.insert(start, text);
-            }
+            buf.replace(start, end, text);
             let inserted = text.chars().count();
             let inserted_lines = buf.char_to_line_col(start + inserted).0 - first_line;
             let delta = crate::pane::EditDelta {
