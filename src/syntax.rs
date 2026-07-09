@@ -1,12 +1,16 @@
 use std::borrow::Cow;
 use std::cell::RefCell;
+#[cfg(test)]
+use std::cell::Cell;
 use std::ops::Range;
 use std::path::Path;
 use std::sync::OnceLock;
 use std::time::Duration;
 
 use ratatui::style::{Color, Modifier, Style};
-use ropey::{Rope, RopeSlice};
+#[cfg(test)]
+use ropey::Rope;
+use ropey::RopeSlice;
 use tree_house::highlighter::{Highlight as TreeHouseHighlight, HighlightEvent as TreeHouseEvent};
 use tree_house::{
     InjectionLanguageMarker, Language as TreeHouseLanguage,
@@ -53,6 +57,9 @@ const HIGHLIGHT_NAMES: &[&str] = &[
     "markup.heading",
     "markup.link",
 ];
+
+const PARSE_TIMEOUT: Duration = Duration::from_secs(2);
+const HIGHLIGHT_CACHE_PADDING: usize = 64 * 1024;
 
 /// A styled span: byte range + style.
 #[derive(Debug, Clone)]
@@ -515,14 +522,19 @@ fn tree_house_spans(
 
 struct HighlightCache {
     version: usize,
-    cached_end_byte: usize,
+    range: Range<usize>,
     spans: Vec<StyledSpan>,
 }
 
 /// Holds a parsed tree and highlight config for a buffer.
 pub struct SyntaxState {
     pub language: Language,
+    syntax: RefCell<Option<TreeHouseSyntax>>,
     cache: RefCell<Option<HighlightCache>>,
+    #[cfg(test)]
+    full_parse_count: Cell<usize>,
+    #[cfg(test)]
+    incremental_update_count: Cell<usize>,
 }
 
 impl SyntaxState {
@@ -539,57 +551,157 @@ impl SyntaxState {
 
         Some(SyntaxState {
             language: lang,
+            syntax: RefCell::new(None),
             cache: RefCell::new(None),
+            #[cfg(test)]
+            full_parse_count: Cell::new(0),
+            #[cfg(test)]
+            incremental_update_count: Cell::new(0),
         })
     }
 
     /// Highlight a slice of source code bytes and return styled spans.
     /// The spans have byte offsets relative to the input `source`.
+    #[cfg(test)]
     pub fn highlight(&self, source: &[u8]) -> Vec<StyledSpan> {
         let Ok(source) = std::str::from_utf8(source) else {
             return Vec::new();
         };
+        let rope = Rope::from_str(source);
+        self.highlight_rope(rope.slice(..), 0..rope.len_bytes(), 0)
+    }
+
+    /// Update the persistent parse tree after `source` has been changed by `edit`.
+    /// If there is no tree yet, the next highlight lazily performs the initial parse.
+    /// A failed incremental update also falls back to a fresh parse on the next render.
+    pub(crate) fn apply_edit(
+        &self,
+        source: RopeSlice<'_>,
+        edit: tree_house::tree_sitter::InputEdit,
+    ) {
+        *self.cache.borrow_mut() = None;
+        let mut syntax = self.syntax.borrow_mut();
+        let Some(parsed) = syntax.as_mut() else {
+            return;
+        };
         let Ok(loader) = tree_house_loader() else {
-            return Vec::new();
+            *syntax = None;
+            return;
+        };
+        if parsed.update(source, PARSE_TIMEOUT, &[edit], loader).is_err() {
+            *syntax = None;
+        } else {
+            #[cfg(test)]
+            self.incremental_update_count
+                .set(self.incremental_update_count.get() + 1);
+        }
+    }
+
+    /// Highlight an absolute byte range in a Rope. The parse tree covers the
+    /// entire buffer, while highlight queries are limited to a padded window
+    /// around the requested viewport.
+    pub(crate) fn highlight_rope(
+        &self,
+        source: RopeSlice<'_>,
+        requested: Range<usize>,
+        version: usize,
+    ) -> Vec<StyledSpan> {
+        let requested = clamp_range(requested, source.len_bytes());
+        if !self.cache_is_valid(version, requested.clone()) {
+            if !self.ensure_syntax(source) {
+                return Vec::new();
+            }
+            let window = padded_range(source, requested.clone());
+            let Ok(loader) = tree_house_loader() else {
+                return Vec::new();
+            };
+            let syntax = self.syntax.borrow();
+            let Some(parsed) = syntax.as_ref() else {
+                return Vec::new();
+            };
+            let spans = tree_house_spans(parsed, source, loader, window.clone());
+            drop(syntax);
+            *self.cache.borrow_mut() = Some(HighlightCache {
+                version,
+                range: window,
+                spans,
+            });
+        }
+
+        self.cache
+            .borrow()
+            .as_ref()
+            .map(|cache| {
+                cache.spans
+                    .iter()
+                    .filter(|span| span.end > requested.start && span.start < requested.end)
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn ensure_syntax(&self, source: RopeSlice<'_>) -> bool {
+        if self.syntax.borrow().is_some() {
+            return true;
+        }
+        let Ok(loader) = tree_house_loader() else {
+            return false;
         };
         let Some(language) = loader.id_for_language(self.language) else {
-            return Vec::new();
+            return false;
         };
-        let rope = Rope::from_str(source);
-        let Ok(syntax) = TreeHouseSyntax::new(
-            rope.slice(..),
-            language,
-            Duration::from_secs(2),
-            loader,
-        ) else {
-            return Vec::new();
+        let Ok(syntax) = TreeHouseSyntax::new(source, language, PARSE_TIMEOUT, loader) else {
+            return false;
         };
-        tree_house_spans(&syntax, rope.slice(..), loader, 0..source.len())
+        *self.syntax.borrow_mut() = Some(syntax);
+        #[cfg(test)]
+        self.full_parse_count.set(self.full_parse_count.get() + 1);
+        true
     }
 
     /// Check if the cached highlight result covers the needed range at the right version.
-    pub fn cache_is_valid(&self, version: usize, end_byte: usize) -> bool {
+    fn cache_is_valid(&self, version: usize, requested: Range<usize>) -> bool {
         let cache = self.cache.borrow();
         match cache.as_ref() {
-            Some(c) => c.version == version && c.cached_end_byte >= end_byte,
+            Some(c) => {
+                c.version == version
+                    && c.range.start <= requested.start
+                    && c.range.end >= requested.end
+            }
             None => false,
         }
     }
 
-    /// Run highlight and store the result in the cache.
-    pub fn highlight_and_cache(&self, source: &[u8], version: usize) {
-        let spans = self.highlight(source);
-        *self.cache.borrow_mut() = Some(HighlightCache {
-            version,
-            cached_end_byte: source.len(),
-            spans,
-        });
+    #[cfg(test)]
+    fn full_parse_count(&self) -> usize {
+        self.full_parse_count.get()
     }
 
-    /// Borrow the cached spans. Panics if cache is empty.
-    pub fn cached_spans(&self) -> std::cell::Ref<'_, Vec<StyledSpan>> {
-        std::cell::Ref::map(self.cache.borrow(), |c| &c.as_ref().unwrap().spans)
+    #[cfg(test)]
+    fn incremental_update_count(&self) -> usize {
+        self.incremental_update_count.get()
     }
+}
+
+fn clamp_range(range: Range<usize>, len: usize) -> Range<usize> {
+    let start = range.start.min(len);
+    start..range.end.min(len).max(start)
+}
+
+fn padded_range(source: RopeSlice<'_>, requested: Range<usize>) -> Range<usize> {
+    let raw_start = requested.start.saturating_sub(HIGHLIGHT_CACHE_PADDING);
+    let raw_end = requested
+        .end
+        .saturating_add(HIGHLIGHT_CACHE_PADDING)
+        .min(source.len_bytes());
+    let start = source.char_to_byte(source.byte_to_char(raw_start));
+    let end_char = source.byte_to_char(raw_end);
+    let mut end = source.char_to_byte(end_char);
+    if end < raw_end && end_char < source.len_chars() {
+        end = source.char_to_byte(end_char + 1);
+    }
+    start..end
 }
 
 #[cfg(test)]
@@ -949,35 +1061,72 @@ mod tests {
     }
 
     #[test]
-    fn cache_hit_same_version_and_range() {
+    fn highlight_rope_caches_a_window_covering_the_requested_range() {
         let state = SyntaxState::new(Language::Rust).unwrap();
-        let source = b"fn main() { let x = 42; }";
-        assert!(!state.cache_is_valid(0, source.len()));
+        let source = Rope::from_str("fn main() { let x = 42; }\n");
+        assert!(!state.cache_is_valid(0, 3..12));
 
-        state.highlight_and_cache(source, 0);
-        assert!(state.cache_is_valid(0, source.len()));
-        // Smaller range is still covered
-        assert!(state.cache_is_valid(0, 10));
+        let spans = state.highlight_rope(source.slice(..), 3..12, 0);
+
+        assert!(!spans.is_empty());
+        assert!(state.cache_is_valid(0, 3..12));
+        assert!(state.cache_is_valid(0, 5..10));
     }
 
     #[test]
     fn cache_miss_on_version_change() {
         let state = SyntaxState::new(Language::Rust).unwrap();
-        let source = b"fn main() { let x = 42; }";
-        state.highlight_and_cache(source, 0);
-        assert!(state.cache_is_valid(0, source.len()));
-        // Different version invalidates
-        assert!(!state.cache_is_valid(1, source.len()));
+        let source = Rope::from_str("fn main() { let x = 42; }\n");
+        state.highlight_rope(source.slice(..), 0..source.len_bytes(), 0);
+        assert!(state.cache_is_valid(0, 0..source.len_bytes()));
+        assert!(!state.cache_is_valid(1, 0..source.len_bytes()));
     }
 
     #[test]
-    fn cache_miss_on_range_growth() {
+    fn incremental_update_matches_a_fresh_full_parse() {
         let state = SyntaxState::new(Language::Rust).unwrap();
-        let source = b"fn main() {}";
-        state.highlight_and_cache(source, 0);
-        assert!(state.cache_is_valid(0, source.len()));
-        // Larger range invalidates
-        assert!(!state.cache_is_valid(0, source.len() + 100));
+        let mut source = Rope::from_str("fn main() { let answer = 42; }\n");
+        let old = source.to_string();
+        let start_byte = old.find("42").unwrap();
+        state.highlight_rope(source.slice(..), 0..source.len_bytes(), 0);
+
+        let replacement = "compute(α)";
+        let start_char = source.byte_to_char(start_byte);
+        source.remove(start_char..start_char + 2);
+        source.insert(start_char, replacement);
+        state.apply_edit(
+            source.slice(..),
+            tree_house::tree_sitter::InputEdit {
+                start_byte: start_byte as u32,
+                old_end_byte: (start_byte + 2) as u32,
+                new_end_byte: (start_byte + replacement.len()) as u32,
+                start_point: tree_house::tree_sitter::Point { row: 0, col: start_byte as u32 },
+                old_end_point: tree_house::tree_sitter::Point {
+                    row: 0,
+                    col: (start_byte + 2) as u32,
+                },
+                new_end_point: tree_house::tree_sitter::Point {
+                    row: 0,
+                    col: (start_byte + replacement.len()) as u32,
+                },
+            },
+        );
+
+        let incremental = state.highlight_rope(source.slice(..), 0..source.len_bytes(), 1);
+        let fresh = SyntaxState::new(Language::Rust).unwrap();
+        let full = fresh.highlight_rope(source.slice(..), 0..source.len_bytes(), 1);
+
+        assert_eq!(
+            incremental
+                .iter()
+                .map(|span| (span.start, span.end, span.style))
+                .collect::<Vec<_>>(),
+            full.iter()
+                .map(|span| (span.start, span.end, span.style))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(state.full_parse_count(), 1);
+        assert_eq!(state.incremental_update_count(), 1);
     }
 
     #[test]

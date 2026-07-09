@@ -127,8 +127,9 @@ lengths (`String::len()`) must never be mixed in. `apply_edit`:
 3. Calls `Buffer::replace`, which performs deletion and insertion as one atomic
    rope edit, advances `edit_generation` exactly once, and computes the
    tree-sitter `InputEdit` in UTF-8 byte offsets/byte columns for the syntax
-   layer. `Buffer::insert` and `Buffer::remove` are thin wrappers around the
-   same primitive.
+   layer. After mutating the Rope, the buffer applies that edit to its persistent
+   tree-house syntax tree; if the incremental update fails, the syntax state is
+   discarded and rebuilt lazily on the next render.
 4. Calls `Pane::adjust_for_edit` on every pane viewing the buffer (or on the
    minibuffer pane for the minibuffer buffer), keeping point, mark, scroll
    position, and saved per-buffer view states valid. Positions at or before
@@ -520,25 +521,26 @@ recognized language gets a `SyntaxState` backed by the tree-house highlighter.
 once and maps injection names to those configurations; no dynamic grammar
 libraries are required.
 
-Highlighting happens at render time. The renderer always passes bytes from the
-start of the buffer through the end of the visible region to tree-sitter, so
-that context-dependent constructs (like fenced code blocks in Markdown) are
-parsed correctly regardless of scroll position. Only styles for visible lines
-are extracted. The `highlight()` method takes a byte slice, parses it through
-tree-house, and converts its range-highlighter events into a list of
-`StyledSpan { start, end, style }` byte ranges. The renderer converts these to
-per-character `Style` entries in a `HashMap<(line, col), Style>` that it consults
-when building `Span`s.
+`SyntaxState` owns a persistent tree-house `Syntax` whose root and injection
+layers parse the entire Rope, preserving context-dependent constructs such as
+Markdown fenced code blocks. The initial parse is lazy. Every subsequent
+`Buffer::replace()` supplies one atomic `InputEdit` and the updated Rope to
+`Syntax::update()`, so tree-sitter can reuse unchanged subtrees. Parsing reads
+the Rope directly through tree-house's `RopeSlice` input instead of copying a
+buffer prefix into a temporary byte vector. A failed or timed-out incremental
+update drops the tree and falls back to a fresh lazy parse.
 
-**Caching**: `SyntaxState` caches the most recent highlight result in a
-`RefCell<Option<HighlightCache>>`. The cache stores the `edit_generation`
-(incremented once for every atomic `Buffer::replace()`), the highlighted byte
-range, and the resulting spans. On each render frame,
-`compute_syntax_char_styles()` checks the cache before extracting bytes from the
-Rope. On cache hits (the common case for scrolling, cursor movement, and idle
-frames), both the byte copy and the tree-sitter re-parse are skipped entirely.
-The cache is invalidated when the buffer's `edit_generation` changes or when the
-visible region extends beyond the previously highlighted range.
+At render time, `highlight_rope()` runs tree-house's range highlighter only for
+a padded byte window around the viewport and converts its events into absolute
+`StyledSpan { start, end, style }` ranges. The renderer clips those spans to
+visible lines and converts them to per-character `Style` entries in a
+`HashMap<(line, col), Style>` used while building terminal spans.
+
+**Caching**: the highlight cache stores `edit_generation`, the padded absolute
+byte range, and its spans. Requests contained by that range reuse the captures,
+so ordinary nearby scrolling does not rerun highlight queries. A replacement
+updates the parse tree and clears the capture cache; cursor movement and idle
+frames reuse both. The padding is currently 64 KiB on each side of the viewport.
 
 **Language injections**: `TreeHouseLoader` resolves injection names to any
 grammar minimacs ships. Markdown uses this both for fenced languages and for the

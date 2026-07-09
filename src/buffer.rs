@@ -343,6 +343,9 @@ impl Buffer {
         if !replacement.is_empty() {
             self.text.insert(start, replacement);
         }
+        if let Some(syntax) = self.syntax.as_ref() {
+            syntax.apply_edit(self.text.slice(..), edit);
+        }
         self.modified = true;
         self.edit_generation += 1;
         Some(edit)
@@ -666,6 +669,34 @@ mod tests {
         assert_eq!(buf.text.to_string(), "hello");
         assert_eq!(buf.edit_generation, 0);
         assert!(!buf.modified);
+    }
+
+    #[test]
+    fn replace_updates_the_buffer_syntax_tree() {
+        let mut buf = Buffer::from_str(0, "test.rs", "fn main() { let value = 1; }\n");
+        buf.syntax = SyntaxState::new(crate::syntax::Language::Rust);
+        let syntax = buf.syntax.as_ref().unwrap();
+        syntax.highlight_rope(buf.text.slice(..), 0..buf.text.len_bytes(), 0);
+
+        let start = buf.text.to_string().find('1').unwrap();
+        buf.replace(start, start + 1, "call()");
+
+        let incremental = buf.syntax.as_ref().unwrap().highlight_rope(
+            buf.text.slice(..),
+            0..buf.text.len_bytes(),
+            buf.edit_generation,
+        );
+        let fresh = SyntaxState::new(crate::syntax::Language::Rust).unwrap();
+        let full = fresh.highlight_rope(buf.text.slice(..), 0..buf.text.len_bytes(), 0);
+        assert_eq!(
+            incremental
+                .iter()
+                .map(|span| (span.start, span.end, span.style))
+                .collect::<Vec<_>>(),
+            full.iter()
+                .map(|span| (span.start, span.end, span.style))
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]
