@@ -59,7 +59,7 @@ const HIGHLIGHT_NAMES: &[&str] = &[
 ];
 
 const PARSE_TIMEOUT: Duration = Duration::from_secs(2);
-const HIGHLIGHT_CACHE_PADDING: usize = 64 * 1024;
+const HIGHLIGHT_CACHE_PADDING: usize = 8 * 1024;
 
 /// A styled span: byte range + style.
 #[derive(Debug, Clone)]
@@ -641,6 +641,13 @@ impl SyntaxState {
             .unwrap_or_default()
     }
 
+    /// Ensure the whole Rope has a parse tree without running highlight
+    /// queries. This is exposed separately for the performance harness.
+    #[allow(dead_code)]
+    pub(crate) fn parse_rope(&self, source: RopeSlice<'_>) -> bool {
+        self.ensure_syntax(source)
+    }
+
     fn ensure_syntax(&self, source: RopeSlice<'_>) -> bool {
         if self.syntax.borrow().is_some() {
             return true;
@@ -1088,10 +1095,10 @@ mod tests {
         let source = Rope::from_str(&" ".repeat(220_000));
         state.highlight_rope(source.slice(..), 100_000..100_100, 0);
 
-        assert!(state.cache_is_valid(0, 50_000..50_100));
-        assert!(state.cache_is_valid(0, 160_000..160_100));
-        assert!(!state.cache_is_valid(0, 20_000..20_100));
-        assert!(!state.cache_is_valid(0, 190_000..190_100));
+        assert!(state.cache_is_valid(0, 94_000..94_100));
+        assert!(state.cache_is_valid(0, 106_000..106_100));
+        assert!(!state.cache_is_valid(0, 90_000..90_100));
+        assert!(!state.cache_is_valid(0, 110_000..110_100));
     }
 
     #[test]

@@ -163,6 +163,9 @@ impl Workload {
 struct RunResult {
     mode: BenchMode,
     elapsed: Duration,
+    edit_elapsed: Duration,
+    parse_elapsed: Duration,
+    highlight_elapsed: Duration,
     text_checksum: u64,
     highlight_checksum: u64,
 }
@@ -173,6 +176,7 @@ fn run_mode(mode: BenchMode, workload: &Workload, edits: usize) -> RunResult {
     let edit = workload.edit();
     let incremental = if matches!(mode, BenchMode::Incremental) {
         let state = SyntaxState::new(Language::Rust).expect("Rust syntax configuration");
+        black_box(state.parse_rope(rope.slice(..)));
         black_box(state.highlight_rope(rope.slice(..), workload.viewport.clone(), 0));
         Some(state)
     } else {
@@ -182,30 +186,46 @@ fn run_mode(mode: BenchMode, workload: &Workload, edits: usize) -> RunResult {
     };
 
     let mut highlight_checksum = 0_u64;
+    let mut edit_elapsed = Duration::ZERO;
+    let mut parse_elapsed = Duration::ZERO;
+    let mut highlight_elapsed = Duration::ZERO;
     let started = Instant::now();
     for generation in 1..=edits {
         let replacement = if generation % 2 == 1 { "1" } else { "0" };
+        let edit_started = Instant::now();
         rope.remove(target_char..target_char + 1);
         rope.insert(target_char, replacement);
+        edit_elapsed += edit_started.elapsed();
 
         let spans = match mode {
             BenchMode::None => Vec::new(),
             BenchMode::Full => {
                 let state = SyntaxState::new(Language::Rust).expect("Rust syntax configuration");
-                state.highlight_rope(
+                let parse_started = Instant::now();
+                black_box(state.parse_rope(rope.slice(..)));
+                parse_elapsed += parse_started.elapsed();
+                let highlight_started = Instant::now();
+                let spans = state.highlight_rope(
                     rope.slice(..),
                     workload.viewport.clone(),
                     generation,
-                )
+                );
+                highlight_elapsed += highlight_started.elapsed();
+                spans
             }
             BenchMode::Incremental => {
                 let state = incremental.as_ref().unwrap();
+                let parse_started = Instant::now();
                 state.apply_edit(rope.slice(..), edit);
-                state.highlight_rope(
+                parse_elapsed += parse_started.elapsed();
+                let highlight_started = Instant::now();
+                let spans = state.highlight_rope(
                     rope.slice(..),
                     workload.viewport.clone(),
                     generation,
-                )
+                );
+                highlight_elapsed += highlight_started.elapsed();
+                spans
             }
         };
         highlight_checksum = highlight_checksum.rotate_left(1) ^ spans_checksum(&spans);
@@ -216,6 +236,9 @@ fn run_mode(mode: BenchMode, workload: &Workload, edits: usize) -> RunResult {
     RunResult {
         mode,
         elapsed,
+        edit_elapsed,
+        parse_elapsed,
+        highlight_elapsed,
         text_checksum: bytes_checksum(rope.to_string().as_bytes()),
         highlight_checksum,
     }
@@ -252,15 +275,17 @@ fn selected_modes(mode: SelectedMode) -> &'static [BenchMode] {
 }
 
 fn help_text() -> &'static str {
-    "syntax-bench - compare minimacs edit parsing strategies\n\
-\n\
-Usage: syntax-bench [OPTIONS]\n\
-\n\
-Options:\n\
-  --mode MODE    all, full, incremental, or none (default: all)\n\
-  --lines N      generated Rust source lines (default: 10000)\n\
-  --edits N      single-character edits to apply (default: 100)\n\
-  -h, --help     print this help\n"
+    concat!(
+        "syntax-bench - compare minimacs edit parsing strategies\n",
+        "\n",
+        "Usage: syntax-bench [OPTIONS]\n",
+        "\n",
+        "Options:\n",
+        "  --mode MODE    all, full, incremental, or none (default: all)\n",
+        "  --lines N      generated Rust source lines (default: 10000)\n",
+        "  --edits N      single-character edits to apply (default: 100)\n",
+        "  -h, --help     print this help\n",
+    )
 }
 
 pub(crate) fn main() {
@@ -293,15 +318,19 @@ pub(crate) fn main() {
         .map(|mode| run_mode(*mode, &workload, options.edits))
         .collect::<Vec<_>>();
 
-    println!("mode                     total       per edit      edits/s");
+    println!(
+        "mode                     total    per edit        rope       parse   highlight"
+    );
     for result in &results {
         let seconds = result.elapsed.as_secs_f64();
         println!(
-            "{:<22} {:>9.2} ms {:>10.2} us {:>12.0}",
+            "{:<22} {:>8.2} ms {:>8.2} ms {:>8.2} ms {:>8.2} ms {:>8.2} ms",
             result.mode.name(),
             seconds * 1_000.0,
-            seconds * 1_000_000.0 / options.edits as f64,
-            options.edits as f64 / seconds.max(f64::MIN_POSITIVE),
+            seconds * 1_000.0 / options.edits as f64,
+            result.edit_elapsed.as_secs_f64() * 1_000.0,
+            result.parse_elapsed.as_secs_f64() * 1_000.0,
+            result.highlight_elapsed.as_secs_f64() * 1_000.0,
         );
     }
 
@@ -357,6 +386,12 @@ mod tests {
     }
 
     #[test]
+    fn help_indents_options_for_scannability() {
+        assert!(help_text().contains("\n  --mode MODE"));
+        assert!(help_text().contains("\n  -h, --help"));
+    }
+
+    #[test]
     fn all_modes_apply_identical_edits_and_parsers_agree() {
         let workload = Workload::generate(20);
         let none = run_mode(BenchMode::None, &workload, 4);
@@ -366,5 +401,11 @@ mod tests {
         assert_eq!(none.text_checksum, full.text_checksum);
         assert_eq!(full.text_checksum, incremental.text_checksum);
         assert_eq!(full.highlight_checksum, incremental.highlight_checksum);
+        assert_eq!(none.parse_elapsed, Duration::ZERO);
+        assert_eq!(none.highlight_elapsed, Duration::ZERO);
+        assert!(full.parse_elapsed > Duration::ZERO);
+        assert!(full.highlight_elapsed > Duration::ZERO);
+        assert!(incremental.parse_elapsed > Duration::ZERO);
+        assert!(incremental.highlight_elapsed > Duration::ZERO);
     }
 }

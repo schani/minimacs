@@ -2,6 +2,22 @@
 
 Larger features deliberately deferred. Near-term fixes live in TODO.md.
 
+## Incremental injection-query scaling
+
+Tree-house 0.4.0 incrementally reuses tree-sitter parse trees, but
+`Syntax::update()` still executes each language layer's injection query over the
+whole updated tree. This is particularly visible for Rust: the upstream query
+self-injects Rust into every macro token tree, and a one-byte edit in a generated
+568 KB file spends about 20 ms in tree-house update even when the file contains
+no macros. Removing that injection query experimentally reduces update time to
+about 4 ms, but loses recursive highlighting inside macros, so minimacs keeps it
+for correctness.
+
+A complete fix belongs either upstream in tree-house (incrementally update
+injection matches over changed ranges), in a maintained fork, or in a lower-level
+syntax layer that owns root and injection trees directly. Moving parse work to a
+background worker would protect input latency as a complementary measure.
+
 ## Missing emacs features
 
 The README promises "emacs keybindings"; these are the standard facilities a

@@ -540,7 +540,8 @@ visible lines and converts them to per-character `Style` entries in a
 byte range, and its spans. Requests contained by that range reuse the captures,
 so ordinary nearby scrolling does not rerun highlight queries. A replacement
 updates the parse tree and clears the capture cache; cursor movement and idle
-frames reuse both. The padding is currently 64 KiB on each side of the viewport.
+frames reuse both. The padding is currently 8 KiB on each side of the viewport,
+which keeps typical highlight queries small while absorbing nearby scrolling.
 
 **Performance harness**: `cargo run --release --bin syntax-bench --` generates a
 deterministic Rust buffer and applies the same fixed-width visible edit under
@@ -550,7 +551,8 @@ Grammar/query initialization and the incremental tree's initial parse happen
 before timing, modeling edits to an already-open buffer. The harness consumes
 highlight results to prevent optimization, checks final text across modes, and
 requires full and incremental highlight checksums to match before reporting the
-speedup.
+speedup. Its output also separates Rope mutation, parse/update, and highlight
+query time so whole-file parser work cannot be mistaken for rendering overhead.
 
 **Language injections**: `TreeHouseLoader` resolves injection names to any
 grammar minimacs ships. Markdown uses this both for fenced languages and for the
