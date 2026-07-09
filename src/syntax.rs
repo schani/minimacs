@@ -1,7 +1,18 @@
+use std::borrow::Cow;
 use std::cell::RefCell;
+use std::ops::Range;
+use std::path::Path;
+use std::sync::OnceLock;
+use std::time::Duration;
 
 use ratatui::style::{Color, Modifier, Style};
-use tree_sitter_highlight::{HighlightConfiguration, HighlightEvent, Highlighter};
+use ropey::{Rope, RopeSlice};
+use tree_house::highlighter::{Highlight as TreeHouseHighlight, HighlightEvent as TreeHouseEvent};
+use tree_house::{
+    InjectionLanguageMarker, Language as TreeHouseLanguage,
+    LanguageConfig as TreeHouseLanguageConfig, LanguageLoader as TreeHouseLanguageLoader,
+    Syntax as TreeHouseSyntax,
+};
 use tree_sitter_language::LanguageFn;
 
 /// The highlight names we recognize, in order. The index into this array
@@ -92,13 +103,15 @@ pub(crate) fn style_for_highlight(idx: usize) -> Style {
 }
 
 /// Custom markdown block injection query. The upstream tree-sitter-md query omits
-/// `injection.include-children` on the inline injection, which causes the inline
-/// parser to receive empty ranges. We add it here so inline highlighting works.
+/// `injection.include-children`, which can give injected parsers only the gaps
+/// between child nodes. Include the complete fenced and inline content so both
+/// nested language highlighting and Markdown inline highlighting see all text.
 const MARKDOWN_INJECTION_QUERY: &str = r#"
-(fenced_code_block
+((fenced_code_block
   (info_string
     (language) @injection.language)
   (code_fence_content) @injection.content)
+  (#set! injection.include-children))
 
 ((html_block) @injection.content
   (#set! injection.language "html"))
@@ -279,6 +292,227 @@ fn language_config(lang: Language) -> (LanguageFn, String, String, String) {
     }
 }
 
+struct TreeHouseConfigEntry {
+    language: Option<Language>,
+    names: &'static [&'static str],
+    config: TreeHouseLanguageConfig,
+}
+
+/// Adapter between minimacs' statically linked grammar crates and tree-house's
+/// language-loader API. Tree-house normally loads Helix's shared grammar
+/// libraries, but its bindings also accept the `LanguageFn` values exported by
+/// the grammar crates we already ship.
+struct TreeHouseLoader {
+    configs: Vec<TreeHouseConfigEntry>,
+}
+
+static TREE_HOUSE_LOADER: OnceLock<Result<TreeHouseLoader, String>> = OnceLock::new();
+
+fn tree_house_loader() -> Result<&'static TreeHouseLoader, &'static str> {
+    match TREE_HOUSE_LOADER.get_or_init(TreeHouseLoader::new) {
+        Ok(loader) => Ok(loader),
+        Err(error) => Err(error.as_str()),
+    }
+}
+
+impl TreeHouseLoader {
+    fn new() -> Result<Self, String> {
+        const LANGUAGES: &[Language] = &[
+            Language::Rust,
+            Language::JavaScript,
+            Language::TypeScript,
+            Language::Tsx,
+            Language::Json,
+            Language::Toml,
+            Language::Markdown,
+            Language::Go,
+            Language::Html,
+            Language::Bash,
+            Language::Yaml,
+            Language::GitCommit,
+        ];
+
+        let mut configs = Vec::with_capacity(LANGUAGES.len() + 1);
+        for &language in LANGUAGES {
+            let (language_fn, highlights, mut injections, locals) = language_config(language);
+            // tree-sitter-javascript's injections query contains an editor-specific
+            // `#offset!` predicate for Glimmer templates. Tree-house rejects unknown
+            // predicates, and minimacs does not ship or resolve a Glimmer grammar, so
+            // this query could not produce a usable injection in either implementation.
+            if language == Language::JavaScript {
+                injections.clear();
+            }
+            let grammar = tree_house::tree_sitter::Grammar::try_from(language_fn)
+                .map_err(|error| format!("failed to load {language:?} grammar: {error}"))?;
+            let config = TreeHouseLanguageConfig::new(
+                grammar,
+                &highlights,
+                &injections,
+                &locals,
+            )
+            .map_err(|error| format!("failed to compile {language:?} queries: {error}"))?;
+            config.configure(highlight_for_capture);
+            configs.push(TreeHouseConfigEntry {
+                language: Some(language),
+                names: injection_names(language),
+                config,
+            });
+        }
+
+        let inline_grammar = tree_house::tree_sitter::Grammar::try_from(
+            tree_sitter_md::INLINE_LANGUAGE,
+        )
+        .map_err(|error| format!("failed to load Markdown inline grammar: {error}"))?;
+        let inline_config = TreeHouseLanguageConfig::new(
+            inline_grammar,
+            tree_sitter_md::HIGHLIGHT_QUERY_INLINE,
+            tree_sitter_md::INJECTION_QUERY_INLINE,
+            "",
+        )
+        .map_err(|error| format!("failed to compile Markdown inline queries: {error}"))?;
+        inline_config.configure(highlight_for_capture);
+        configs.push(TreeHouseConfigEntry {
+            language: None,
+            names: &["markdown_inline"],
+            config: inline_config,
+        });
+
+        Ok(Self { configs })
+    }
+
+    fn id_for_language(&self, language: Language) -> Option<TreeHouseLanguage> {
+        let language = if language == Language::Env {
+            Language::Bash
+        } else {
+            language
+        };
+        self.configs
+            .iter()
+            .position(|entry| entry.language == Some(language))
+            .map(|idx| TreeHouseLanguage::new(idx as u32))
+    }
+
+    fn config_for_language(&self, language: Language) -> Option<&TreeHouseLanguageConfig> {
+        self.id_for_language(language)
+            .and_then(|id| self.get_config(id))
+    }
+
+    fn id_for_name(&self, name: &str) -> Option<TreeHouseLanguage> {
+        let name = name.trim().to_ascii_lowercase();
+        self.configs
+            .iter()
+            .position(|entry| entry.names.contains(&name.as_str()))
+            .map(|idx| TreeHouseLanguage::new(idx as u32))
+    }
+
+    #[cfg(test)]
+    fn config_for_name(&self, name: &str) -> Option<&TreeHouseLanguageConfig> {
+        self.id_for_name(name).and_then(|id| self.get_config(id))
+    }
+}
+
+impl TreeHouseLanguageLoader for TreeHouseLoader {
+    fn language_for_marker(
+        &self,
+        marker: InjectionLanguageMarker<'_>,
+    ) -> Option<TreeHouseLanguage> {
+        match marker {
+            InjectionLanguageMarker::Name(name) => self.id_for_name(name),
+            InjectionLanguageMarker::Match(text) | InjectionLanguageMarker::Shebang(text) => {
+                let text: Cow<'_, str> = text.into();
+                self.id_for_name(&text)
+            }
+            InjectionLanguageMarker::Filename(filename) => {
+                let filename: Cow<'_, str> = filename.into();
+                detect_language(Path::new(filename.as_ref()))
+                    .and_then(|language| self.id_for_language(language))
+            }
+        }
+    }
+
+    fn get_config(&self, language: TreeHouseLanguage) -> Option<&TreeHouseLanguageConfig> {
+        self.configs
+            .get(language.idx())
+            .map(|entry| &entry.config)
+    }
+}
+
+fn injection_names(language: Language) -> &'static [&'static str] {
+    match language {
+        Language::Rust => &["rust", "rs"],
+        Language::JavaScript => &["javascript", "js", "jsx"],
+        Language::TypeScript => &["typescript", "ts"],
+        Language::Tsx => &["tsx"],
+        Language::Json => &["json"],
+        Language::Toml => &["toml"],
+        Language::Markdown => &["markdown", "md"],
+        Language::Go => &["go", "golang"],
+        Language::Html => &["html"],
+        Language::Bash | Language::Env => &["bash", "sh", "shell", "zsh", "env"],
+        Language::Yaml => &["yaml", "yml"],
+        Language::GitCommit => &["gitcommit", "git-commit"],
+    }
+}
+
+fn highlight_for_capture(capture: &str) -> Option<TreeHouseHighlight> {
+    HIGHLIGHT_NAMES
+        .iter()
+        .enumerate()
+        .filter(|(_, name)| {
+            capture == **name
+                || capture
+                    .strip_prefix(**name)
+                    .is_some_and(|suffix| suffix.starts_with('.'))
+        })
+        .max_by_key(|(_, name)| name.len())
+        .map(|(idx, _)| TreeHouseHighlight::new(idx as u32))
+}
+
+fn tree_house_spans(
+    syntax: &TreeHouseSyntax,
+    source: RopeSlice<'_>,
+    loader: &TreeHouseLoader,
+    range: Range<usize>,
+) -> Vec<StyledSpan> {
+    let start = range.start.min(source.len_bytes());
+    let end = range.end.min(source.len_bytes()).max(start);
+    let mut highlighter = tree_house::highlighter::Highlighter::new(
+        syntax,
+        source,
+        loader,
+        start as u32..end as u32,
+    );
+    let mut spans = Vec::new();
+    let mut position = start;
+    let mut style = Style::default();
+
+    loop {
+        let next = (highlighter.next_event_offset() as usize).min(end);
+        if position < next {
+            spans.push(StyledSpan {
+                start: position,
+                end: next,
+                style,
+            });
+            position = next;
+        }
+        if position >= end {
+            break;
+        }
+
+        let (event, highlights) = highlighter.advance();
+        let base = match event {
+            TreeHouseEvent::Refresh => Style::default(),
+            TreeHouseEvent::Push => style,
+        };
+        style = highlights.fold(base, |current, highlight| {
+            current.patch(style_for_highlight(highlight.idx()))
+        });
+    }
+
+    spans
+}
+
 struct HighlightCache {
     version: usize,
     cached_end_byte: usize,
@@ -288,45 +522,23 @@ struct HighlightCache {
 /// Holds a parsed tree and highlight config for a buffer.
 pub struct SyntaxState {
     pub language: Language,
-    config: HighlightConfiguration,
-    /// Additional language configs for injection (e.g. markdown inline).
-    injection_configs: Vec<(String, HighlightConfiguration)>,
     cache: RefCell<Option<HighlightCache>>,
 }
 
 impl SyntaxState {
     /// Create a new syntax state for the given language.
     pub fn new(lang: Language) -> Option<Self> {
-        let (language_fn, highlights, injections, locals) = language_config(lang);
-        let result =
-            HighlightConfiguration::new(language_fn.into(), "source", &highlights, &injections, &locals);
-        let mut config = match result {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!("Failed to create highlight config for {lang:?}: {e:?}");
+        let loader = match tree_house_loader() {
+            Ok(loader) => loader,
+            Err(error) => {
+                eprintln!("Failed to create tree-house config for {lang:?}: {error}");
                 return None;
             }
         };
-        config.configure(HIGHLIGHT_NAMES);
-
-        let mut injection_configs = Vec::new();
-        if lang == Language::Markdown {
-            if let Ok(mut inline_config) = HighlightConfiguration::new(
-                tree_sitter_md::INLINE_LANGUAGE.into(),
-                "source",
-                tree_sitter_md::HIGHLIGHT_QUERY_INLINE,
-                tree_sitter_md::INJECTION_QUERY_INLINE,
-                "",
-            ) {
-                inline_config.configure(HIGHLIGHT_NAMES);
-                injection_configs.push(("markdown_inline".to_string(), inline_config));
-            }
-        }
+        loader.config_for_language(lang)?;
 
         Some(SyntaxState {
             language: lang,
-            config,
-            injection_configs,
             cache: RefCell::new(None),
         })
     }
@@ -334,39 +546,25 @@ impl SyntaxState {
     /// Highlight a slice of source code bytes and return styled spans.
     /// The spans have byte offsets relative to the input `source`.
     pub fn highlight(&self, source: &[u8]) -> Vec<StyledSpan> {
-        let mut highlighter = Highlighter::new();
-        let events = match highlighter.highlight(&self.config, source, None, |lang_name| {
-            self.injection_configs
-                .iter()
-                .find(|(name, _)| name == lang_name)
-                .map(|(_, config)| config)
-        }) {
-            Ok(events) => events,
-            Err(_) => return Vec::new(),
+        let Ok(source) = std::str::from_utf8(source) else {
+            return Vec::new();
         };
-
-        let mut spans = Vec::new();
-        let mut style_stack: Vec<Style> = Vec::new();
-
-        for event in events {
-            match event {
-                Ok(HighlightEvent::Source { start, end }) => {
-                    let style = style_stack.last().copied().unwrap_or_default();
-                    if start < end {
-                        spans.push(StyledSpan { start, end, style });
-                    }
-                }
-                Ok(HighlightEvent::HighlightStart(highlight)) => {
-                    style_stack.push(style_for_highlight(highlight.0));
-                }
-                Ok(HighlightEvent::HighlightEnd) => {
-                    style_stack.pop();
-                }
-                Err(_) => break,
-            }
-        }
-
-        spans
+        let Ok(loader) = tree_house_loader() else {
+            return Vec::new();
+        };
+        let Some(language) = loader.id_for_language(self.language) else {
+            return Vec::new();
+        };
+        let rope = Rope::from_str(source);
+        let Ok(syntax) = TreeHouseSyntax::new(
+            rope.slice(..),
+            language,
+            Duration::from_secs(2),
+            loader,
+        ) else {
+            return Vec::new();
+        };
+        tree_house_spans(&syntax, rope.slice(..), loader, 0..source.len())
     }
 
     /// Check if the cached highlight result covers the needed range at the right version.
@@ -657,6 +855,7 @@ mod tests {
             Language::Bash,
             Language::Yaml,
             Language::Env,
+            Language::GitCommit,
         ];
         for lang in languages {
             assert!(
@@ -665,6 +864,75 @@ mod tests {
                 lang
             );
         }
+    }
+
+    #[test]
+    fn tree_house_adapter_loads_every_static_grammar() {
+        let loader = TreeHouseLoader::new().expect("all tree-house configs should compile");
+        for lang in [
+            Language::Rust,
+            Language::JavaScript,
+            Language::TypeScript,
+            Language::Tsx,
+            Language::Json,
+            Language::Toml,
+            Language::Markdown,
+            Language::Go,
+            Language::Html,
+            Language::Bash,
+            Language::Yaml,
+            Language::Env,
+            Language::GitCommit,
+        ] {
+            assert!(
+                loader.config_for_language(lang).is_some(),
+                "missing tree-house config for {lang:?}"
+            );
+        }
+        assert!(loader.config_for_name("markdown_inline").is_some());
+    }
+
+    #[test]
+    fn tree_house_adapter_preserves_representative_highlights() {
+        for (lang, source) in [
+            (Language::Rust, "fn main() { let answer = 42; }"),
+            (Language::JavaScript, "const answer = () => 42;"),
+            (Language::Json, r#"{"answer": 42}"#),
+            (Language::Markdown, "# Title\n\nSome *emphasis*.\n"),
+            (Language::GitCommit, "Fix parser\n\n# Comment\n"),
+        ] {
+            let state = SyntaxState::new(lang)
+                .unwrap_or_else(|| panic!("tree-house failed to initialize {lang:?}"));
+            let spans = state.highlight(source.as_bytes());
+            assert!(
+                spans.iter().any(|span| span.style != Style::default()),
+                "tree-house emitted no styled span for {lang:?}: {spans:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn tree_house_adapter_handles_markdown_inline_and_fenced_rust_injections() {
+        let source = "# Title\n\nSome *emphasis*.\n\n```rust\nfn injected() {}\n```\n";
+        let state = SyntaxState::new(Language::Markdown).expect("markdown should initialize");
+        let spans = state.highlight(source.as_bytes());
+
+        let emphasis = source.find("emphasis").unwrap();
+        assert!(spans.iter().any(|span| {
+            span.start <= emphasis
+                && span.end >= emphasis + "emphasis".len()
+                && span.style.add_modifier.contains(Modifier::ITALIC)
+        }));
+
+        let function = source.find("injected").unwrap();
+        assert!(
+            spans.iter().any(|span| {
+                span.start <= function
+                    && span.end >= function + "injected".len()
+                    && span.style == style_for_highlight(highlight_index("function"))
+            }),
+            "fenced Rust function was not highlighted: {spans:?}"
+        );
     }
 
     #[test]

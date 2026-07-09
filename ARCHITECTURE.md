@@ -511,17 +511,20 @@ does not cancel a chord in progress.
 Language is detected from file extension or filename at load time (e.g. `.env`
 files are matched by filename). Each `Language` variant has a `name()` method
 returning a human-readable string displayed in the mode line. Each buffer with a
-recognized language gets a `SyntaxState` containing a tree-sitter
-`HighlightConfiguration`.
+recognized language gets a `SyntaxState` backed by the tree-house highlighter.
+`TreeHouseLoader` compiles the queries for all statically linked grammar crates
+once and maps injection names to those configurations; no dynamic grammar
+libraries are required.
 
 Highlighting happens at render time. The renderer always passes bytes from the
 start of the buffer through the end of the visible region to tree-sitter, so
 that context-dependent constructs (like fenced code blocks in Markdown) are
 parsed correctly regardless of scroll position. Only styles for visible lines
-are extracted. The `highlight()` method takes a byte slice, runs
-tree-sitter-highlight, and returns a list of `StyledSpan { start, end, style }`
-(byte ranges). The renderer converts these to per-character `Style` entries in a
-`HashMap<(line, col), Style>` that it consults when building `Span`s.
+are extracted. The `highlight()` method takes a byte slice, parses it through
+tree-house, and converts its range-highlighter events into a list of
+`StyledSpan { start, end, style }` byte ranges. The renderer converts these to
+per-character `Style` entries in a `HashMap<(line, col), Style>` that it consults
+when building `Span`s.
 
 **Caching**: `SyntaxState` caches the most recent highlight result in a
 `RefCell<Option<HighlightCache>>`. The cache stores the `edit_generation`
@@ -533,13 +536,14 @@ frames), both the byte copy and the tree-sitter re-parse are skipped entirely.
 The cache is invalidated when the buffer's `edit_generation` changes or when the
 visible region extends beyond the previously highlighted range.
 
-**Language injections**: `SyntaxState` supports tree-sitter language injections
-via `injection_configs`, a list of `(name, HighlightConfiguration)` pairs.
-During highlighting, the injection callback resolves language names to these
-configs. Markdown uses this to inject the `markdown_inline` parser for inline
-content (emphasis, strong, code spans, links). A custom injection query with
-`injection.include-children` is used instead of the upstream default, which
-omits it and causes empty injection ranges.
+**Language injections**: `TreeHouseLoader` resolves injection names to any
+grammar minimacs ships. Markdown uses this both for fenced languages and for the
+`markdown_inline` parser (emphasis, strong, code spans, links). A custom
+injection query with `injection.include-children` is used instead of the
+upstream default so injected parsers receive complete fenced/inline contents.
+The JavaScript query's Glimmer-only `#offset!` injection is omitted because
+tree-house does not implement that editor-specific predicate and minimacs ships
+no Glimmer grammar.
 
 The color theme is a built-in light palette matching VSCode's Light+ theme,
 using true color (RGB) values. Markdown-specific highlight names (`text.title`,
@@ -778,4 +782,3 @@ queue is drained, which is how `run_until_idle` terminates in tests.
    directory from the source file's directory, and the snapshot names from
    the module path `app::tests` — so these tests must stay directly in that
    module).
-
