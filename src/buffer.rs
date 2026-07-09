@@ -699,6 +699,107 @@ mod tests {
         );
     }
 
+    fn span_signature(
+        spans: &[crate::syntax::StyledSpan],
+    ) -> Vec<(usize, usize, ratatui::style::Style)> {
+        spans
+            .iter()
+            .map(|span| (span.start, span.end, span.style))
+            .collect()
+    }
+
+    #[test]
+    fn incremental_syntax_matches_full_parse_across_mixed_edits() {
+        let source = "fn main() {\n    let greeting = \"hello\";\n    println!(\"{}\", greeting);\n}\n";
+        let mut buf = Buffer::from_str(0, "test.rs", source);
+        buf.syntax = SyntaxState::new(crate::syntax::Language::Rust);
+        buf.syntax.as_ref().unwrap().highlight_rope(
+            buf.text.slice(..),
+            0..buf.text.len_bytes(),
+            0,
+        );
+        let replacements = ["", "x", "λ", "\n", "/* note */", "\"text\""];
+        let mut random = 0x5eed_f00d_u64;
+
+        for step in 0..48 {
+            random = random.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let len = buf.text.len_chars();
+            let start = (random as usize) % (len + 1);
+            random = random.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let delete_len = (random as usize) % (len.saturating_sub(start).min(4) + 1);
+            random = random.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let replacement = replacements[(random as usize) % replacements.len()];
+            if delete_len == 0 && replacement.is_empty() {
+                continue;
+            }
+
+            buf.replace(start, start + delete_len, replacement);
+            let incremental = buf.syntax.as_ref().unwrap().highlight_rope(
+                buf.text.slice(..),
+                0..buf.text.len_bytes(),
+                buf.edit_generation,
+            );
+            let fresh = SyntaxState::new(crate::syntax::Language::Rust).unwrap();
+            let full = fresh.highlight_rope(buf.text.slice(..), 0..buf.text.len_bytes(), 0);
+            assert_eq!(
+                span_signature(&incremental),
+                span_signature(&full),
+                "incremental parse diverged at step {step} after replacing {start}..{} with {replacement:?}; source: {:?}",
+                start + delete_len,
+                buf.text.to_string(),
+            );
+        }
+    }
+
+    #[test]
+    fn incremental_markdown_injections_match_full_parse_after_edits() {
+        let source = "# Demo\n\n```rust\nfn answer() -> u32 { 42 }\n```\n\n*tail*\n";
+        let mut buf = Buffer::from_str(0, "test.md", source);
+        buf.syntax = SyntaxState::new(crate::syntax::Language::Markdown);
+        buf.syntax.as_ref().unwrap().highlight_rope(
+            buf.text.slice(..),
+            0..buf.text.len_bytes(),
+            0,
+        );
+
+        for (needle, replacement) in [
+            ("42", "compute()"),
+            ("rust", "javascript"),
+            ("*tail*", "**strong λ**"),
+        ] {
+            let text = buf.text.to_string();
+            let start_byte = text.find(needle).unwrap();
+            let start = buf.text.byte_to_char(start_byte);
+            let end = start + needle.chars().count();
+            buf.replace(start, end, replacement);
+
+            let incremental = buf.syntax.as_ref().unwrap().highlight_rope(
+                buf.text.slice(..),
+                0..buf.text.len_bytes(),
+                buf.edit_generation,
+            );
+            let fresh = SyntaxState::new(crate::syntax::Language::Markdown).unwrap();
+            let full = fresh.highlight_rope(buf.text.slice(..), 0..buf.text.len_bytes(), 0);
+            assert_eq!(span_signature(&incremental), span_signature(&full));
+        }
+    }
+
+    #[test]
+    fn edit_before_initial_parse_is_included_in_lazy_full_parse() {
+        let mut buf = Buffer::from_str(0, "test.rs", "fn old() {}\n");
+        buf.syntax = SyntaxState::new(crate::syntax::Language::Rust);
+        buf.replace(3, 6, "new_name");
+
+        let lazy = buf.syntax.as_ref().unwrap().highlight_rope(
+            buf.text.slice(..),
+            0..buf.text.len_bytes(),
+            buf.edit_generation,
+        );
+        let fresh = SyntaxState::new(crate::syntax::Language::Rust).unwrap();
+        let full = fresh.highlight_rope(buf.text.slice(..), 0..buf.text.len_bytes(), 0);
+        assert_eq!(span_signature(&lazy), span_signature(&full));
+    }
+
     #[test]
     fn from_file_and_save() {
         let dir = tempfile::tempdir().unwrap();

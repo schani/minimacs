@@ -1083,6 +1083,18 @@ mod tests {
     }
 
     #[test]
+    fn padded_cache_covers_nearby_scrolls_but_not_distant_ranges() {
+        let state = SyntaxState::new(Language::Rust).unwrap();
+        let source = Rope::from_str(&" ".repeat(220_000));
+        state.highlight_rope(source.slice(..), 100_000..100_100, 0);
+
+        assert!(state.cache_is_valid(0, 50_000..50_100));
+        assert!(state.cache_is_valid(0, 160_000..160_100));
+        assert!(!state.cache_is_valid(0, 20_000..20_100));
+        assert!(!state.cache_is_valid(0, 190_000..190_100));
+    }
+
+    #[test]
     fn incremental_update_matches_a_fresh_full_parse() {
         let state = SyntaxState::new(Language::Rust).unwrap();
         let mut source = Rope::from_str("fn main() { let answer = 42; }\n");
