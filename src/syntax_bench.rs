@@ -185,7 +185,7 @@ fn run_mode(mode: BenchMode, workload: &Workload, edits: usize) -> RunResult {
         None
     };
 
-    let mut highlight_checksum = 0_u64;
+    let mut highlight_results = Vec::with_capacity(edits);
     let mut edit_elapsed = Duration::ZERO;
     let mut parse_elapsed = Duration::ZERO;
     let mut highlight_elapsed = Duration::ZERO;
@@ -228,10 +228,18 @@ fn run_mode(mode: BenchMode, workload: &Workload, edits: usize) -> RunResult {
                 spans
             }
         };
-        highlight_checksum = highlight_checksum.rotate_left(1) ^ spans_checksum(&spans);
-        black_box(&spans);
+        // Keep the spans alive so highlighting cannot be optimized away;
+        // checksumming stays outside the timed region.
+        highlight_results.push(spans);
     }
     let elapsed = started.elapsed();
+    black_box(&highlight_results);
+
+    let highlight_checksum = highlight_results
+        .iter()
+        .fold(0_u64, |checksum, spans| {
+            checksum.rotate_left(1) ^ spans_checksum(spans)
+        });
 
     RunResult {
         mode,
@@ -401,6 +409,14 @@ mod tests {
         assert_eq!(none.text_checksum, full.text_checksum);
         assert_eq!(full.text_checksum, incremental.text_checksum);
         assert_eq!(full.highlight_checksum, incremental.highlight_checksum);
+        // The phase columns are measured inside the totaled loop, so they can
+        // never exceed it; checksum work happens outside the timed region.
+        for result in [&none, &full, &incremental] {
+            assert!(
+                result.edit_elapsed + result.parse_elapsed + result.highlight_elapsed
+                    <= result.elapsed
+            );
+        }
         assert_eq!(none.parse_elapsed, Duration::ZERO);
         assert_eq!(none.highlight_elapsed, Duration::ZERO);
         assert!(full.parse_elapsed > Duration::ZERO);

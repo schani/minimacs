@@ -548,11 +548,12 @@ deterministic Rust buffer and applies the same fixed-width visible edit under
 three strategies: Rope editing without parsing, a new full parse after every
 edit, and the editor's persistent incremental tree plus viewport highlighting.
 Grammar/query initialization and the incremental tree's initial parse happen
-before timing, modeling edits to an already-open buffer. The harness consumes
-highlight results to prevent optimization, checks final text across modes, and
-requires full and incremental highlight checksums to match before reporting the
-speedup. Its output also separates Rope mutation, parse/update, and highlight
-query time so whole-file parser work cannot be mistaken for rendering overhead.
+before timing, modeling edits to an already-open buffer. The harness keeps
+highlight results alive to prevent optimization but computes their checksums
+outside the timed region, checks final text across modes, and requires full and
+incremental highlight checksums to match before reporting the speedup. Its
+output also separates Rope mutation, parse/update, and highlight query time so
+whole-file parser work cannot be mistaken for rendering overhead.
 
 **Language injections**: `TreeHouseLoader` resolves injection names to any
 grammar minimacs ships. Markdown uses this both for fenced languages and for the
