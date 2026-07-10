@@ -75,6 +75,28 @@ final text and that full and incremental parsing produce identical highlight
 checksums. Run `syntax-bench --help` for all options. Release mode is important
 for representative timings.
 
+### Syntax fuzz harness
+
+The `syntax-fuzz` CLI applies random edits through the editor's real edit
+path and, after every edit, compares the incremental tree's highlights
+against a fresh parse of the same text — whole-file and over a random
+viewport window. It exits 1 with a one-line reproduce command on divergence:
+
+```sh
+cargo run --release --bin syntax-fuzz                       # default sweep
+cargo run --release --bin syntax-fuzz -- --lang all --runs 8 --steps 400
+cargo run --release --bin syntax-fuzz -- --lang json --seed 3 --steps 82
+```
+
+Edits mix a plain alphabet with an adversarial one (CR/CRLF fragments,
+Unicode separators, combining characters, fence/quote/comment tokens, big
+pastes) and target structural hotspots; runs are deterministic per `--seed`.
+`--keep-going` probes whether a divergence self-heals, and `--raw` attributes
+it to tree-sitter core versus tree-house. Run `syntax-fuzz --help` for all
+options. Known limitation: on heavily corrupted buffers, tree-sitter's
+incremental error recovery can transiently differ from a fresh parse
+(upstream behavior, self-healing) — deep sweeps report those.
+
 ## Usage
 
 ```sh
