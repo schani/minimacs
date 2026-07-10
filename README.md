@@ -197,6 +197,12 @@ The test suite includes unit tests for every module, integration tests that
 drive the full editor through a `TestBackend`, and snapshot tests for rendered
 output.
 
+CI (GitHub Actions, `.github/workflows/ci.yml`) runs on every pull request and
+on pushes to `main`. It mirrors the pre-commit hook — build, tests behind the
+90% line-coverage threshold (`cargo llvm-cov`), and `cargo clippy -D warnings`
+— plus a syntax-subsystem smoke check: a short `syntax-fuzz` sweep and a
+`syntax-bench` checksum run.
+
 ## License
 
 MIT License. See [LICENSE](LICENSE) for details.

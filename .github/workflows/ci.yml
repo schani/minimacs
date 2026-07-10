@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Mirrors the pre-commit hook managed by build.rs: build, tests behind the
+  # 90% line-coverage threshold, and clippy with warnings denied.
+  test:
+    name: Build, test, lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+      - name: Build
+        run: cargo build
+      - name: Test with coverage threshold
+        run: cargo llvm-cov --fail-under-lines 90 --summary-only
+      - name: Clippy
+        run: cargo clippy -- -D warnings
+
+  # Smoke check for the syntax subsystem. Modest step counts on purpose: the
+  # default languages are clean at this size, while deep sweeps can hit known
+  # transient upstream error-recovery divergences (see TODO.md); re-run the
+  # deep sweep manually when bumping the pinned grammar/tree-house versions.
+  syntax-smoke:
+    name: Syntax fuzz and bench smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Fuzz smoke
+        run: cargo run --release --bin syntax-fuzz -- --runs 2 --steps 120
+      - name: Bench checksum smoke
+        run: cargo run --release --bin syntax-bench -- --lines 500 --edits 50
