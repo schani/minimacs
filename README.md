@@ -17,7 +17,8 @@ users. It is not extensible -- it ships one good editor, not a platform.
 - **Incremental search** -- `C-s`/`C-r` with live match highlighting
 - **Undo/redo** -- grouped edits with automatic boundary detection
 - **OS clipboard** -- copy/paste integrates with the system clipboard
-- **Line ending detection** -- handles both LF and CRLF files
+- **Line ending detection** -- CRLF files are edited as LF in memory and
+  saved back with their original ending
 - **Bracketed paste** -- pastes multi-line text as a single undo group
 
 ## Supported Languages

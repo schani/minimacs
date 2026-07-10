@@ -152,8 +152,8 @@ other panes' points are adjusted there too.
 
 `C-f`/`C-b` and Backspace/`C-d` move and delete by **grapheme cluster**
 (`unicode-segmentation`): combining sequences and emoji ZWJ sequences are one
-step, and CRLF pairs are likewise atomic (`next_grapheme_boundary` /
-`prev_grapheme_boundary`). Positions computed by column arithmetic — line
+step (`next_grapheme_boundary` / `prev_grapheme_boundary`), and line endings
+are a single `\n`. Positions computed by column arithmetic — line
 movement's column clamping (`C-n`/`C-p`, page up/down) and mouse-click
 mapping — are snapped to the nearest cluster boundary at or before the raw
 column (`Buffer::snap_to_grapheme_boundary`), so point never rests
@@ -168,29 +168,25 @@ Text is stored in a `ropey::Rope`. Each buffer has an independent undo history
 and optional syntax highlighting state. Buffers have no cursor -- cursor
 position is per-pane.
 
-Line-break stripping follows ropey's own line-break set (its default
-`unicode_lines` feature: LF, CRLF, lone CR, VT, FF, NEL, LS, PS). The single
-authority is `buffer::line_break_len_chars(line)` — the char length (0, 1,
-or 2) of the break terminating a ropey line slice. `Buffer::line_len_chars`,
-the renderer's line extraction (display, wrapping, mouse mapping, syntax
-styling), and kill-line's at-EOL break removal all use it, so movement
-(`C-e`, column clamping), display, and editing agree with where ropey breaks
-lines. This is display/movement only — `LineEnding` (what `RET` inserts and
-paste normalizes to) remains LF-vs-CRLF.
+**LF-only line endings (decision, 2026-07-10).** Only LF is supported as a
+line break; the rope is invariantly LF-only. CRLF is a file *encoding*:
+`Buffer::from_file` detects it and converts to LF, `save_as` converts back
+when `LineEnding` is CrLf, and `RET`/paste always insert `\n` — so a CRLF
+file round-trips byte-identical while every in-memory position, line count,
+and movement sees only `\n`. Ropey is pinned to
+`default-features = false` (dropping its `unicode_lines` feature, as Helix
+does): lone CR, VT, FF, NEL, LS, and PS are ordinary content — `C-e` moves
+past them, `C-k` kills through them, and they render as width-bearing chars
+(a raw control char reaching the terminal cell is a known, accepted
+limitation). This also makes ropey line rows exactly equal tree-sitter
+Point rows for arbitrary content (see the syntax section). Accepted
+tradeoffs: mixed-ending files are normalized to one uniform ending on
+save, and mac-classic lone-CR files are not split into lines.
 
-**Decision (2026-07-10): LF-only line endings.** Only LF needs to be
-supported correctly. The target state (migration plan in TODO.md) is an
-LF-only rope invariant: CRLF becomes a file *encoding* converted to LF at
-load and back at save (`LineEnding` survives as the save-time choice), and
-ropey's `unicode_lines` extras stop being line breaks — ropey gets pinned
-to `default-features = false` (as Helix does). This deletes the CRLF
-special cases in movement/paste/grapheme stepping, shrinks
-`line_break_len_chars` to a trailing-`\n` check, and makes ropey line rows
-exactly equal tree-sitter Point rows for arbitrary content, removing the
-row-divergence caveat in the incremental-parsing path. Accepted tradeoffs:
-mixed-ending files are normalized on save; lone `\r` (mac-classic) is
-ordinary content, not a line break. The paragraph above describes the
-pre-migration behavior and gets rewritten as the plan lands.
+The single line-break authority is `buffer::line_break_len_chars(line)` —
+1 for a terminating `\n`, 0 on the final line. `Buffer::line_len_chars`,
+the renderer's line extraction (display, wrapping, mouse mapping, syntax
+styling), and kill-line's at-EOL break removal all use it.
 
 Saving is atomic: `Buffer::save()` writes to a temp file in the target's
 directory, copies the target's permissions, fsyncs, and renames over the
@@ -542,7 +538,10 @@ libraries are required.
 layers parse the entire Rope, preserving context-dependent constructs such as
 Markdown fenced code blocks. The initial parse is lazy. Every subsequent
 `Buffer::replace()` supplies one atomic `InputEdit` and the updated Rope to
-`Syntax::update()`, so tree-sitter can reuse unchanged subtrees. Parsing reads
+`Syntax::update()`, so tree-sitter can reuse unchanged subtrees. The edit's
+`Point` rows are exact for arbitrary content: with ropey pinned to
+`default-features = false`, its line index counts exactly the `\n` chars
+tree-sitter counts. Parsing reads
 the Rope directly through tree-house's `RopeSlice` input instead of copying a
 buffer prefix into a temporary byte vector. A failed or timed-out incremental
 update drops the tree and falls back to a fresh lazy parse.
@@ -740,8 +739,9 @@ area when multiple pages exist. `completion_page` resets to 0 on typing, paste,
 
 Pasted text is normalized (`Editor::normalized_paste`, used by both `C-y` and
 bracketed paste): in the minibuffer every line-break form (`\r\n`, `\r`, `\n`)
-becomes a space; in a buffer, breaks are converted to that buffer's own line
-ending so pasting CRLF text into an LF file cannot introduce stray `\r` chars.
+becomes a space; in a buffer, every break form is unified to `\n` (the rope
+is LF-only regardless of the buffer's save-time `LineEnding`), so pasting
+CRLF text cannot smuggle in raw `\r` chars.
 
 ## Incremental Search
 
