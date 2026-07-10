@@ -1171,6 +1171,27 @@ fn backward_word_with_underscore() {
     assert_eq!(editor.point(), 0); // Start of "foo_bar"
 }
 
+#[test]
+fn word_commands_cross_rope_chunks() {
+    let punctuation = ".".repeat(2_000);
+    let source = format!("{punctuation}λ_word");
+    let mut editor = Editor::new_with_text(&source);
+    assert!(
+        editor.current_buffer().text.chunks().count() > 1,
+        "fixture must span rope chunks"
+    );
+
+    editor.execute(Command::ForwardWord);
+    assert_eq!(editor.point(), source.chars().count());
+
+    editor.execute(Command::BackwardWord);
+    assert_eq!(editor.point(), punctuation.chars().count());
+
+    editor.pane_tree.focused_pane_mut().point = source.chars().count();
+    editor.execute(Command::DeleteWordBackward);
+    assert_eq!(editor.buffer_text(), punctuation);
+}
+
 // === Delete word backward tests ===
 
 #[test]
@@ -2620,6 +2641,19 @@ fn undo_redo_preserves_modified_after_save() {
 }
 
 // === Indentation tests ===
+
+#[test]
+fn insert_newline_copies_indentation_across_rope_chunks() {
+    let indentation = " ".repeat(2_000);
+    let source = format!("{indentation}value");
+    let mut editor = Editor::new_with_text(&source);
+    assert!(editor.current_buffer().text.chunks().count() > 1);
+    editor.pane_tree.focused_pane_mut().point = source.chars().count();
+
+    editor.execute(Command::InsertNewline);
+
+    assert_eq!(editor.buffer_text(), format!("{source}\n{indentation}"));
+}
 
 #[test]
 fn insert_newline_copies_indentation() {
