@@ -74,23 +74,24 @@ fn mouse_click_beyond_line_end_places_cursor_past_last_char() {
 }
 
 #[test]
-fn mouse_click_beyond_eol_of_form_feed_line_stops_before_break() {
-    // FF is a line break: "one" / "two". Clicking way past EOL of
-    // line 0 must place point before the FF, not on or after it.
+fn mouse_click_beyond_eol_of_form_feed_line_lands_at_eol() {
+    // FF is content: "one\u{0c}two" is one line of seven chars.
+    // Clicking way past its EOL clamps to the end of the line's text.
     let text = "one\u{0c}two\n";
     let events = vec![mouse_click(10, 0)];
     let (mut app, mut events) = test_app_with_text(20, 6, text, events);
     app.run_until_idle(&mut events).unwrap();
-    assert_eq!(app.editor.point(), 3, "point must stop before the FF");
+    assert_eq!(app.editor.point(), 7, "point lands after \"two\"");
 }
 
 #[test]
-fn mouse_click_on_line_after_form_feed_break_maps_to_that_line() {
+fn mouse_click_on_row_below_form_feed_line_maps_past_newline() {
+    // Row 1 is the empty final line after the \n (the FF broke nothing).
     let text = "one\u{0c}two\n";
     let events = vec![mouse_click(1, 1)];
     let (mut app, mut events) = test_app_with_text(20, 6, text, events);
     app.run_until_idle(&mut events).unwrap();
-    assert_eq!(app.editor.point(), 5); // col 1 of "two"
+    assert_eq!(app.editor.point(), 8);
 }
 
 #[test]

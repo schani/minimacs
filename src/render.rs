@@ -1033,28 +1033,28 @@ mod tests {
     }
 
     #[test]
-    fn line_chars_without_ending_strips_every_ropey_break() {
-        // The full break set ropey recognizes with its default
-        // `unicode_lines` feature.
-        for br in [
-            "\n", "\r\n", "\r", "\u{0b}", "\u{0c}", "\u{85}", "\u{2028}", "\u{2029}",
-        ] {
-            let buf = Buffer::from_str(0, "test", &format!("ab{br}cd"));
+    fn line_chars_without_ending_strips_only_newline() {
+        let buf = Buffer::from_str(0, "test", "ab\ncd");
+        assert_eq!(line_chars_without_ending(&buf, 0), vec!['a', 'b']);
+        assert_eq!(line_chars_without_ending(&buf, 1), vec!['c', 'd']);
+        // Ex-break chars (lone CR, VT, FF, NEL, LS, PS) are content and
+        // stay in the line's chars.
+        for ch in ['\r', '\u{0b}', '\u{0c}', '\u{85}', '\u{2028}', '\u{2029}'] {
+            let buf = Buffer::from_str(0, "test", &format!("ab{ch}cd\n"));
             assert_eq!(
                 line_chars_without_ending(&buf, 0),
-                vec!['a', 'b'],
-                "break {br:?}"
+                vec!['a', 'b', ch, 'c', 'd'],
+                "{ch:?}"
             );
-            assert_eq!(line_chars_without_ending(&buf, 1), vec!['c', 'd']);
         }
     }
 
     #[test]
-    fn buffer_col_for_visual_col_stops_before_form_feed_break() {
-        // Clicking beyond EOL of an FF-terminated line must land before
-        // the FF, not on or past it.
+    fn buffer_col_for_visual_col_counts_form_feed_as_content() {
+        // "one\u{0c}two" is one line of seven chars; clicking beyond its
+        // EOL clamps to the end of the line's text, after the FF.
         let buf = Buffer::from_str(0, "test", "one\u{0c}two\n");
-        assert_eq!(buffer_col_for_visual_col(&buf, 0, 10), 3);
+        assert_eq!(buffer_col_for_visual_col(&buf, 0, 10), 7);
     }
 
     #[test]

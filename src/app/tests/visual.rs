@@ -603,14 +603,23 @@ fn cl_recenter_via_app() {
 }
 
 #[test]
-fn lone_cr_line_breaks_render_as_separate_lines() {
-    // Old-Mac style file: the \r breaks must not leak into the
-    // rendered rows.
+fn lone_cr_is_content_and_renders_on_one_row() {
+    // Old-Mac style content: \r is not a line break, so "x" and "y"
+    // share the first row (the raw \r passing through to the cell is a
+    // known limitation of the LF-only decision).
     let text = "x\ry\r";
     let (mut app, mut events) = test_app_with_text(20, 6, text, vec![]);
     app.run_until_idle(&mut events).unwrap();
     let screen = capture_screen(&app.terminal);
     let lines: Vec<&str> = screen.lines().collect();
-    assert_eq!(lines[0], "x");
-    assert_eq!(lines[1], "y");
+    assert!(
+        lines[0].contains('x') && lines[0].contains('y'),
+        "x and y must share row 0, got {:?}",
+        lines[0]
+    );
+    assert!(
+        !lines[1].contains('y'),
+        "nothing must spill to row 1, got {:?}",
+        lines[1]
+    );
 }

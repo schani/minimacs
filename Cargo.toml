@@ -12,7 +12,9 @@ clipboard = ["arboard"]
 [dependencies]
 ratatui = "0.30"
 crossterm = { version = "0.29", features = ["bracketed-paste"] }
-ropey = "1"
+# default-features = false drops `unicode_lines`: only \n breaks lines,
+# matching tree-sitter's row semantics (LF-only decision, ARCHITECTURE.md).
+ropey = { version = "1", default-features = false, features = ["simd"] }
 unicode-segmentation = "1"
 unicode-width = "0.2"
 anyhow = "1"
