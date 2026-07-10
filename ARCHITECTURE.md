@@ -188,9 +188,11 @@ The single line-break authority is `buffer::line_break_len_chars(line)` —
 the renderer's line extraction (display, wrapping, mouse mapping, syntax
 styling), and kill-line's at-EOL break removal all use it.
 
-Saving is atomic: `Buffer::save()` writes to a temp file in the target's
-directory, copies the target's permissions, fsyncs, and renames over the
-target, so a crash or full disk mid-write cannot destroy the existing file.
+Saving is atomic: `Buffer::save()` streams the rope's chunks directly to a
+temp file in the target's directory (transcoding LF to CRLF chunk-by-chunk
+when needed), copies the target's permissions, fsyncs, and renames over the
+target. No contiguous whole-buffer `String` is allocated, and a crash or full
+disk mid-write cannot destroy the existing file.
 The bytes land on the *physical* file behind the buffer's *logical* path:
 `save_as` resolves symlink chains at write time (`resolve_write_target`,
 including dangling links — writing through `foo -> missing` creates

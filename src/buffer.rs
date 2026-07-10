@@ -2,6 +2,7 @@ use anyhow::{bail, Result};
 use ropey::{Rope, RopeSlice};
 use std::borrow::Cow;
 use std::fs;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use tree_house::tree_sitter::{InputEdit, Point};
 
@@ -165,16 +166,6 @@ impl Buffer {
     /// so saving through a symlink rewrites the target instead of replacing
     /// the link, without renaming the buffer to the resolved path.
     pub fn save_as(&mut self, path: &Path) -> Result<()> {
-        use std::io::Write;
-
-        // The rope is LF-only (see `from_file`); a CrLf buffer gets its
-        // line ending re-applied at write time. Only \n chars are
-        // rewritten, so a content \r is untouched — even one directly
-        // before a \n, which loads from and saves back to "\r\r\n".
-        let content: String = match self.line_ending {
-            LineEnding::Lf => self.text.to_string(),
-            LineEnding::CrLf => self.text.to_string().replace('\n', "\r\n"),
-        };
         let physical = resolve_write_target(path)?;
 
         if has_other_hard_links(&physical) {
@@ -188,7 +179,7 @@ impl Buffer {
                 .write(true)
                 .truncate(true)
                 .open(&physical)?;
-            file.write_all(content.as_bytes())?;
+            write_rope_text(&self.text, self.line_ending, &mut file)?;
             file.sync_all()?;
         } else {
             let dir = match physical.parent() {
@@ -196,7 +187,7 @@ impl Buffer {
                 _ => PathBuf::from("."),
             };
             let mut tmp = tempfile::NamedTempFile::new_in(&dir)?;
-            tmp.write_all(content.as_bytes())?;
+            write_rope_text(&self.text, self.line_ending, &mut tmp)?;
             // Keep the target's permissions; a fresh temp file defaults to 0600.
             if let Ok(meta) = fs::metadata(&physical) {
                 tmp.as_file().set_permissions(meta.permissions())?;
@@ -341,6 +332,28 @@ impl Buffer {
     pub fn update_modified(&mut self) {
         self.modified = !self.history.is_clean();
     }
+}
+
+/// Stream rope chunks to disk, applying the buffer's on-disk line ending
+/// without first flattening the whole buffer into a contiguous `String`.
+fn write_rope_text(text: &Rope, line_ending: LineEnding, mut writer: impl Write) -> io::Result<()> {
+    if line_ending == LineEnding::Lf {
+        return text.write_to(writer);
+    }
+
+    // The rope is LF-only (see `from_file`); a CrLf buffer gets its line
+    // ending re-applied at write time. Only `\n` is rewritten, so a content
+    // `\r` is untouched — even directly before `\n`, which saves as `\r\r\n`.
+    for chunk in text.chunks() {
+        let mut rest = chunk;
+        while let Some((before_newline, after_newline)) = rest.split_once('\n') {
+            writer.write_all(before_newline.as_bytes())?;
+            writer.write_all(b"\r\n")?;
+            rest = after_newline;
+        }
+        writer.write_all(rest.as_bytes())?;
+    }
+    Ok(())
 }
 
 fn input_edit_for_replace(
@@ -787,6 +800,22 @@ mod tests {
         let fresh = SyntaxState::new(crate::syntax::Language::Rust).unwrap();
         let full = fresh.highlight_rope(buf.text.slice(..), 0..buf.text.len_bytes(), 0);
         assert_eq!(span_signature(&lazy), span_signature(&full));
+    }
+
+    #[test]
+    fn write_rope_text_preserves_line_endings_across_chunks() {
+        let source = format!("{}\nmiddle\r\n{}\n", "λ".repeat(2_000), "終".repeat(2_000));
+        let text = Rope::from_str(&source);
+        assert!(text.chunks().count() > 1, "fixture must span rope chunks");
+
+        for (line_ending, expected) in [
+            (LineEnding::Lf, source.clone()),
+            (LineEnding::CrLf, source.replace('\n', "\r\n")),
+        ] {
+            let mut written = Vec::new();
+            write_rope_text(&text, line_ending, &mut written).unwrap();
+            assert_eq!(String::from_utf8(written).unwrap(), expected);
+        }
     }
 
     #[test]
