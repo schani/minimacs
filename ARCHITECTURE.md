@@ -61,6 +61,9 @@ src/
   history.rs        History -- undo/redo with edit grouping
   indent.rs         Shared indentation constants (INDENT_WIDTH = 4)
   syntax.rs         SyntaxState -- tree-sitter highlighting
+  syntax_bench.rs   syntax-bench performance harness (see below)
+  syntax_fuzz.rs    syntax-fuzz incremental-vs-fresh fuzz harness (see below)
+  bin/*.rs          Thin wrappers exposing the harnesses as cargo binaries
   event.rs          EventSource trait + Poll -- abstracts terminal vs test input
 ```
 
@@ -124,7 +127,12 @@ lengths (`String::len()`) must never be mixed in. `apply_edit`:
 2. Records undo history according to `EditRecord`
    (`Insert`/`Delete`/`Replace`/`NoHistory` — the latter used when replaying
    undo/redo groups).
-3. Performs the rope edit.
+3. Calls `Buffer::replace`, which performs deletion and insertion as one atomic
+   rope edit, advances `edit_generation` exactly once, and computes the
+   tree-sitter `InputEdit` in UTF-8 byte offsets/byte columns for the syntax
+   layer. After mutating the Rope, the buffer applies that edit to its persistent
+   tree-house syntax tree; if the incremental update fails, the syntax state is
+   discarded and rebuilt lazily on the next render.
 4. Calls `Pane::adjust_for_edit` on every pane viewing the buffer (or on the
    minibuffer pane for the minibuffer buffer), keeping point, mark, scroll
    position, and saved per-buffer view states valid. Positions at or before
@@ -144,8 +152,8 @@ other panes' points are adjusted there too.
 
 `C-f`/`C-b` and Backspace/`C-d` move and delete by **grapheme cluster**
 (`unicode-segmentation`): combining sequences and emoji ZWJ sequences are one
-step, and CRLF pairs are likewise atomic (`next_grapheme_boundary` /
-`prev_grapheme_boundary`). Positions computed by column arithmetic — line
+step (`next_grapheme_boundary` / `prev_grapheme_boundary`), and line endings
+are a single `\n`. Positions computed by column arithmetic — line
 movement's column clamping (`C-n`/`C-p`, page up/down) and mouse-click
 mapping — are snapped to the nearest cluster boundary at or before the raw
 column (`Buffer::snap_to_grapheme_boundary`), so point never rests
@@ -160,15 +168,25 @@ Text is stored in a `ropey::Rope`. Each buffer has an independent undo history
 and optional syntax highlighting state. Buffers have no cursor -- cursor
 position is per-pane.
 
-Line-break stripping follows ropey's own line-break set (its default
-`unicode_lines` feature: LF, CRLF, lone CR, VT, FF, NEL, LS, PS). The single
-authority is `buffer::line_break_len_chars(line)` — the char length (0, 1,
-or 2) of the break terminating a ropey line slice. `Buffer::line_len_chars`,
+**LF-only line endings (decision, 2026-07-10).** Only LF is supported as a
+line break; the rope is invariantly LF-only. CRLF is a file *encoding*:
+`Buffer::from_file` detects it and converts to LF, `save_as` converts back
+when `LineEnding` is CrLf, and `RET`/paste always insert `\n` — so a CRLF
+file round-trips byte-identical while every in-memory position, line count,
+and movement sees only `\n`. Ropey is pinned to
+`default-features = false` (dropping its `unicode_lines` feature, as Helix
+does): lone CR, VT, FF, NEL, LS, and PS are ordinary content — `C-e` moves
+past them, `C-k` kills through them, and they render as width-bearing chars
+(a raw control char reaching the terminal cell is a known, accepted
+limitation). This also makes ropey line rows exactly equal tree-sitter
+Point rows for arbitrary content (see the syntax section). Accepted
+tradeoffs: mixed-ending files are normalized to one uniform ending on
+save, and mac-classic lone-CR files are not split into lines.
+
+The single line-break authority is `buffer::line_break_len_chars(line)` —
+1 for a terminating `\n`, 0 on the final line. `Buffer::line_len_chars`,
 the renderer's line extraction (display, wrapping, mouse mapping, syntax
-styling), and kill-line's at-EOL break removal all use it, so movement
-(`C-e`, column clamping), display, and editing agree with where ropey breaks
-lines. This is display/movement only — `LineEnding` (what `RET` inserts and
-paste normalizes to) remains LF-vs-CRLF.
+styling), and kill-line's at-EOL break removal all use it.
 
 Saving is atomic: `Buffer::save()` writes to a temp file in the target's
 directory, copies the target's permissions, fsyncs, and renames over the
@@ -511,35 +529,73 @@ does not cancel a chord in progress.
 Language is detected from file extension or filename at load time (e.g. `.env`
 files are matched by filename). Each `Language` variant has a `name()` method
 returning a human-readable string displayed in the mode line. Each buffer with a
-recognized language gets a `SyntaxState` containing a tree-sitter
-`HighlightConfiguration`.
+recognized language gets a `SyntaxState` backed by the tree-house highlighter.
+`TreeHouseLoader` compiles the queries for all statically linked grammar crates
+once and maps injection names to those configurations; no dynamic grammar
+libraries are required.
 
-Highlighting happens at render time. The renderer always passes bytes from the
-start of the buffer through the end of the visible region to tree-sitter, so
-that context-dependent constructs (like fenced code blocks in Markdown) are
-parsed correctly regardless of scroll position. Only styles for visible lines
-are extracted. The `highlight()` method takes a byte slice, runs
-tree-sitter-highlight, and returns a list of `StyledSpan { start, end, style }`
-(byte ranges). The renderer converts these to per-character `Style` entries in a
-`HashMap<(line, col), Style>` that it consults when building `Span`s.
+`SyntaxState` owns a persistent tree-house `Syntax` whose root and injection
+layers parse the entire Rope, preserving context-dependent constructs such as
+Markdown fenced code blocks. The initial parse is lazy. Every subsequent
+`Buffer::replace()` supplies one atomic `InputEdit` and the updated Rope to
+`Syntax::update()`, so tree-sitter can reuse unchanged subtrees. The edit's
+`Point` rows are exact for arbitrary content: with ropey pinned to
+`default-features = false`, its line index counts exactly the `\n` chars
+tree-sitter counts. Parsing reads
+the Rope directly through tree-house's `RopeSlice` input instead of copying a
+buffer prefix into a temporary byte vector. A failed or timed-out incremental
+update drops the tree and falls back to a fresh lazy parse.
 
-**Caching**: `SyntaxState` caches the most recent highlight result in a
-`RefCell<Option<HighlightCache>>`. The cache stores the `edit_generation`
-(incremented on every `Buffer::insert()` / `remove()`), the highlighted byte
-range, and the resulting spans. On each render frame,
-`compute_syntax_char_styles()` checks the cache before extracting bytes from the
-Rope. On cache hits (the common case for scrolling, cursor movement, and idle
-frames), both the byte copy and the tree-sitter re-parse are skipped entirely.
-The cache is invalidated when the buffer's `edit_generation` changes or when the
-visible region extends beyond the previously highlighted range.
+At render time, `highlight_rope()` runs tree-house's range highlighter only for
+a padded byte window around the viewport and converts its events into absolute
+`StyledSpan { start, end, style }` ranges. The renderer clips those spans to
+visible lines and converts them to per-character `Style` entries in a
+`HashMap<(line, col), Style>` used while building terminal spans.
 
-**Language injections**: `SyntaxState` supports tree-sitter language injections
-via `injection_configs`, a list of `(name, HighlightConfiguration)` pairs.
-During highlighting, the injection callback resolves language names to these
-configs. Markdown uses this to inject the `markdown_inline` parser for inline
-content (emphasis, strong, code spans, links). A custom injection query with
-`injection.include-children` is used instead of the upstream default, which
-omits it and causes empty injection ranges.
+**Caching**: the highlight cache stores `edit_generation`, the padded absolute
+byte range, and its spans. Requests contained by that range reuse the captures,
+so ordinary nearby scrolling does not rerun highlight queries. A replacement
+updates the parse tree and clears the capture cache; cursor movement and idle
+frames reuse both. The padding is currently 8 KiB on each side of the viewport,
+which keeps typical highlight queries small while absorbing nearby scrolling.
+
+**Performance harness**: `cargo run --release --bin syntax-bench --` generates a
+deterministic Rust buffer and applies the same fixed-width visible edit under
+three strategies: Rope editing without parsing, a new full parse after every
+edit, and the editor's persistent incremental tree plus viewport highlighting.
+Grammar/query initialization and the incremental tree's initial parse happen
+before timing, modeling edits to an already-open buffer. The harness keeps
+highlight results alive to prevent optimization but computes their checksums
+outside the timed region, checks final text across modes, and requires full and
+incremental highlight checksums to match before reporting the speedup. Its
+output also separates Rope mutation, parse/update, and highlight query time so
+whole-file parser work cannot be mistaken for rendering overhead.
+
+**Fuzz harness**: `cargo run --release --bin syntax-fuzz --` applies random
+edits through `Buffer::replace` and after every edit compares the persistent
+incremental tree's highlights against a fresh parse of the same text — over
+the whole file and over a random padded viewport window (the same path the
+renderer uses). Edits mix a plain alphabet with an adversarial one (CRLF and
+lone-CR splits, Unicode line separators, combining characters, fence/quote/
+comment tokens, multi-kilobyte pastes, whole-buffer replacement), and half the
+edits target structural hotspots (fences, quotes, comment openers) that
+uniform random positions rarely hit. Runs are deterministic from `--seed`.
+With `--raw`, a raw tree-sitter tree fed the same `InputEdit`s (no tree-house)
+attributes each divergence to tree-sitter core versus tree-house's layer
+handling; it is opt-in because the raw tree can reach states tree-house never
+does, where the tree-sitter-md block scanner segfaults in its C serialize
+function, and it is only an annotation because tree-sitter's incremental error
+recovery legitimately produces transiently different trees on ERROR-heavy
+buffers (`--keep-going` shows such divergences healing within a few edits).
+
+**Language injections**: `TreeHouseLoader` resolves injection names to any
+grammar minimacs ships. Markdown uses this both for fenced languages and for the
+`markdown_inline` parser (emphasis, strong, code spans, links). A custom
+injection query with `injection.include-children` is used instead of the
+upstream default so injected parsers receive complete fenced/inline contents.
+The JavaScript query's Glimmer-only `#offset!` injection is omitted because
+tree-house does not implement that editor-specific predicate and minimacs ships
+no Glimmer grammar.
 
 The color theme is a built-in light palette matching VSCode's Light+ theme,
 using true color (RGB) values. Markdown-specific highlight names (`text.title`,
@@ -683,8 +739,9 @@ area when multiple pages exist. `completion_page` resets to 0 on typing, paste,
 
 Pasted text is normalized (`Editor::normalized_paste`, used by both `C-y` and
 bracketed paste): in the minibuffer every line-break form (`\r\n`, `\r`, `\n`)
-becomes a space; in a buffer, breaks are converted to that buffer's own line
-ending so pasting CRLF text into an LF file cannot introduce stray `\r` chars.
+becomes a space; in a buffer, every break form is unified to `\n` (the rope
+is LF-only regardless of the buffer's save-time `LineEnding`), so pasting
+CRLF text cannot smuggle in raw `\r` chars.
 
 ## Incremental Search
 
@@ -778,4 +835,3 @@ queue is drained, which is how `run_until_idle` terminates in tests.
    directory from the source file's directory, and the snapshot names from
    the module path `app::tests` — so these tests must stay directly in that
    module).
-

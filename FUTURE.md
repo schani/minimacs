@@ -2,27 +2,21 @@
 
 Larger features deliberately deferred. Near-term fixes live in TODO.md.
 
-## Incremental syntax highlighting
+## Incremental injection-query scaling
 
-Highlighting currently re-parses from scratch on every cache miss: any edit bumps
-`edit_generation`, the miss path copies bytes `0..end_of_visible_region` out of
-the rope (`render.rs:434-464`) and runs `tree-sitter-highlight` over all of it
-(`syntax.rs:315-368`). There is no use of tree-sitter's incremental API
-(`Tree::edit` + passing the old tree to `parse`). For a 10MB file with the
-viewport near the bottom this is plausibly seconds *per keystroke*, synchronous
-on the render path.
+Tree-house 0.4.0 incrementally reuses tree-sitter parse trees, but
+`Syntax::update()` still executes each language layer's injection query over the
+whole updated tree. This is particularly visible for Rust: the upstream query
+self-injects Rust into every macro token tree, and a one-byte edit in a generated
+568 KB file spends about 20 ms in tree-house update even when the file contains
+no macros. Removing that injection query experimentally reduces update time to
+about 4 ms, but loses recursive highlighting inside macros, so minimacs keeps it
+for correctness.
 
-- Switch from `tree-sitter-highlight`'s one-shot `Highlighter::highlight` to
-  maintaining a persistent `Tree` per buffer, applying `InputEdit`s on every
-  `Buffer::insert`/`remove`, and re-running only the highlight query over the
-  visible region.
-- Make the cache tolerate scrolling: the current check requires
-  `cached_end_byte >= end_byte` exactly from the previous highlight run
-  (`syntax.rs:352-368`), so every scroll-down step is a full re-parse. Highlight
-  past the viewport (e.g. to the next multiple of N bytes) so small scrolls hit
-  the cache.
-- Avoid the rope→`Vec<u8>` copy of the whole prefix; tree-sitter can parse from
-  chunked input via a callback, which ropey's chunk iterator can feed directly.
+A complete fix belongs either upstream in tree-house (incrementally update
+injection matches over changed ranges), in a maintained fork, or in a lower-level
+syntax layer that owns root and injection trees directly. Moving parse work to a
+background worker would protect input latency as a complementary measure.
 
 ## Missing emacs features
 

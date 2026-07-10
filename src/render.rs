@@ -571,9 +571,8 @@ fn build_styled_spans(
 /// Compute per-character syntax styles for visible lines.
 /// Returns a map from (line_idx, col) -> Style, or None if no syntax.
 ///
-/// Always highlights from the start of the buffer so that tree-sitter has full
-/// context (e.g., knowing whether we're inside a fenced code block). Only
-/// styles for the visible lines are returned.
+/// The persistent tree covers the whole buffer; only a padded byte window
+/// around the visible lines is queried for highlight captures.
 fn compute_syntax_char_styles(
     buf: &Buffer,
     scroll_top: usize,
@@ -587,8 +586,6 @@ fn compute_syntax_char_styles(
         return None;
     }
 
-    // Highlight from byte 0 through the end of visible lines so tree-sitter
-    // has full context for constructs like fenced code blocks.
     let first_visible_byte = buf.text.line_to_byte(first_visible);
     let last_byte = if last_visible < total_lines {
         buf.text.line_to_byte(last_visible)
@@ -596,18 +593,11 @@ fn compute_syntax_char_styles(
         buf.text.len_bytes()
     };
 
-    // Check cache before extracting bytes — cache hits skip both the byte
-    // copy and the re-parse (the common case on non-edit frames).
-    if !syntax.cache_is_valid(buf.edit_generation, last_byte) {
-        let mut highlight_bytes = Vec::with_capacity(last_byte);
-        for chunk in buf.text.byte_slice(0..last_byte).chunks() {
-            highlight_bytes.extend_from_slice(chunk.as_bytes());
-        }
-        syntax.highlight_and_cache(&highlight_bytes, buf.edit_generation);
-    }
-
-    // Borrow cached spans and build the HashMap for visible lines.
-    let cached_spans = syntax.cached_spans();
+    let highlighted_spans = syntax.highlight_rope(
+        buf.text.slice(..),
+        first_visible_byte..last_byte,
+        buf.edit_generation,
+    );
 
     // Build a byte-to-style lookup only for the visible portion. Spans are
     // non-overlapping and sorted, so binary-search to the first span that
@@ -615,8 +605,8 @@ fn compute_syntax_char_styles(
     // cost is bounded by the viewport, not the file size.
     let visible_len = last_byte - first_visible_byte;
     let mut byte_styles = vec![Style::default(); visible_len];
-    let begin = cached_spans.partition_point(|ss| ss.end <= first_visible_byte);
-    for ss in cached_spans[begin..].iter() {
+    let begin = highlighted_spans.partition_point(|ss| ss.end <= first_visible_byte);
+    for ss in highlighted_spans[begin..].iter() {
         if ss.start >= last_byte {
             break;
         }
@@ -634,9 +624,6 @@ fn compute_syntax_char_styles(
             *item = ss.style;
         }
     }
-
-    // Drop the Ref before building the result
-    drop(cached_spans);
 
     // Map each visible line's chars to styles
     let mut result = std::collections::HashMap::new();
@@ -1046,28 +1033,28 @@ mod tests {
     }
 
     #[test]
-    fn line_chars_without_ending_strips_every_ropey_break() {
-        // The full break set ropey recognizes with its default
-        // `unicode_lines` feature.
-        for br in [
-            "\n", "\r\n", "\r", "\u{0b}", "\u{0c}", "\u{85}", "\u{2028}", "\u{2029}",
-        ] {
-            let buf = Buffer::from_str(0, "test", &format!("ab{br}cd"));
+    fn line_chars_without_ending_strips_only_newline() {
+        let buf = Buffer::from_str(0, "test", "ab\ncd");
+        assert_eq!(line_chars_without_ending(&buf, 0), vec!['a', 'b']);
+        assert_eq!(line_chars_without_ending(&buf, 1), vec!['c', 'd']);
+        // Ex-break chars (lone CR, VT, FF, NEL, LS, PS) are content and
+        // stay in the line's chars.
+        for ch in ['\r', '\u{0b}', '\u{0c}', '\u{85}', '\u{2028}', '\u{2029}'] {
+            let buf = Buffer::from_str(0, "test", &format!("ab{ch}cd\n"));
             assert_eq!(
                 line_chars_without_ending(&buf, 0),
-                vec!['a', 'b'],
-                "break {br:?}"
+                vec!['a', 'b', ch, 'c', 'd'],
+                "{ch:?}"
             );
-            assert_eq!(line_chars_without_ending(&buf, 1), vec!['c', 'd']);
         }
     }
 
     #[test]
-    fn buffer_col_for_visual_col_stops_before_form_feed_break() {
-        // Clicking beyond EOL of an FF-terminated line must land before
-        // the FF, not on or past it.
+    fn buffer_col_for_visual_col_counts_form_feed_as_content() {
+        // "one\u{0c}two" is one line of seven chars; clicking beyond its
+        // EOL clamps to the end of the line's text, after the FF.
         let buf = Buffer::from_str(0, "test", "one\u{0c}two\n");
-        assert_eq!(buffer_col_for_visual_col(&buf, 0, 10), 3);
+        assert_eq!(buffer_col_for_visual_col(&buf, 0, 10), 7);
     }
 
     #[test]

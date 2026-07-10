@@ -17,7 +17,8 @@ users. It is not extensible -- it ships one good editor, not a platform.
 - **Incremental search** -- `C-s`/`C-r` with live match highlighting
 - **Undo/redo** -- grouped edits with automatic boundary detection
 - **OS clipboard** -- copy/paste integrates with the system clipboard
-- **Line ending detection** -- handles both LF and CRLF files
+- **Line ending detection** -- CRLF files are edited as LF in memory and
+  saved back with their original ending
 - **Bracketed paste** -- pastes multi-line text as a single undo group
 
 ## Supported Languages
@@ -58,6 +59,43 @@ To build without OS clipboard support (removes the `arboard` dependency):
 ```sh
 cargo build --release --no-default-features
 ```
+
+### Syntax edit benchmark
+
+The `syntax-bench` CLI compares the cost of applying the same deterministic
+edits with full parsing, persistent incremental parsing, and no parsing:
+
+```sh
+cargo run --release --bin syntax-bench -- --lines 10000 --edits 100
+```
+
+Use `--mode full`, `--mode incremental`, or `--mode none` to run one strategy.
+The default `all` mode also verifies that every strategy produces identical
+final text and that full and incremental parsing produce identical highlight
+checksums. Run `syntax-bench --help` for all options. Release mode is important
+for representative timings.
+
+### Syntax fuzz harness
+
+The `syntax-fuzz` CLI applies random edits through the editor's real edit
+path and, after every edit, compares the incremental tree's highlights
+against a fresh parse of the same text — whole-file and over a random
+viewport window. It exits 1 with a one-line reproduce command on divergence:
+
+```sh
+cargo run --release --bin syntax-fuzz                       # default sweep
+cargo run --release --bin syntax-fuzz -- --lang all --runs 8 --steps 400
+cargo run --release --bin syntax-fuzz -- --lang json --seed 3 --steps 82
+```
+
+Edits mix a plain alphabet with an adversarial one (CR/CRLF fragments,
+Unicode separators, combining characters, fence/quote/comment tokens, big
+pastes) and target structural hotspots; runs are deterministic per `--seed`.
+`--keep-going` probes whether a divergence self-heals, and `--raw` attributes
+it to tree-sitter core versus tree-house. Run `syntax-fuzz --help` for all
+options. Known limitation: on heavily corrupted buffers, tree-sitter's
+incremental error recovery can transiently differ from a fresh parse
+(upstream behavior, self-healing) — deep sweeps report those.
 
 ## Usage
 

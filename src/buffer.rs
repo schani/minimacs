@@ -1,55 +1,34 @@
 use anyhow::{bail, Result};
 use ropey::{Rope, RopeSlice};
+use std::borrow::Cow;
 use std::fs;
 use std::path::{Path, PathBuf};
+use tree_house::tree_sitter::{InputEdit, Point};
 
 use crate::history::History;
 use crate::syntax::{self, SyntaxState};
 
 pub type BufferId = usize;
 
+/// The file's on-disk line-break encoding, detected at load and applied
+/// at save. In-memory text is always LF-only regardless of this value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LineEnding {
     Lf,
     CrLf,
 }
 
-impl LineEnding {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            LineEnding::Lf => "\n",
-            LineEnding::CrLf => "\r\n",
-        }
-    }
-}
-
-/// True for chars ropey treats as line breaks (with its default
-/// `unicode_lines` feature): LF, VT, FF, CR, NEL, LS, PS.
-fn is_line_break_char(ch: char) -> bool {
-    matches!(
-        ch,
-        '\n' | '\u{0b}' | '\u{0c}' | '\r' | '\u{85}' | '\u{2028}' | '\u{2029}'
-    )
-}
-
-/// Char length of the line break terminating a ropey line slice: 0 (the
-/// final line, or an empty buffer), 2 for CRLF, 1 for every other break
-/// in ropey's set. Every consumer that strips a line's break — line
-/// lengths, rendering, mouse mapping, kill-line — must use this so it
-/// agrees with where ropey actually breaks lines.
+/// Char length of the line break terminating a ropey line slice: 1 for
+/// a trailing `\n` — the only break ropey recognizes with
+/// `default-features = false` — or 0 on the final line. Every consumer
+/// that strips a line's break — line lengths, rendering, mouse mapping,
+/// kill-line — must use this so it agrees with where ropey breaks lines.
 pub(crate) fn line_break_len_chars(line: RopeSlice) -> usize {
     let len = line.len_chars();
-    if len == 0 {
-        return 0;
-    }
-    let last = line.char(len - 1);
-    if !is_line_break_char(last) {
-        return 0;
-    }
-    if last == '\n' && len >= 2 && line.char(len - 2) == '\r' {
-        2
-    } else {
+    if len > 0 && line.char(len - 1) == '\n' {
         1
+    } else {
+        0
     }
 }
 
@@ -134,11 +113,13 @@ impl Buffer {
             Err(_) => bail!("File is not valid UTF-8: {}", path.display()),
         };
 
-        // Detect line ending
-        let line_ending = if content.contains("\r\n") {
-            LineEnding::CrLf
+        // Detect line ending. The rope is invariantly LF-only: CRLF is a
+        // file *encoding*, stripped here and reproduced by `save_as`.
+        // A lone \r is not a line ending and passes through as content.
+        let (line_ending, content) = if content.contains("\r\n") {
+            (LineEnding::CrLf, Cow::Owned(content.replace("\r\n", "\n")))
         } else {
-            LineEnding::Lf
+            (LineEnding::Lf, Cow::Borrowed(content))
         };
 
         let name = path
@@ -152,7 +133,7 @@ impl Buffer {
 
         Ok(Self {
             id,
-            text: Rope::from_str(content),
+            text: Rope::from_str(&content),
             path: Some(path.to_path_buf()),
             name,
             modified: false,
@@ -186,7 +167,14 @@ impl Buffer {
     pub fn save_as(&mut self, path: &Path) -> Result<()> {
         use std::io::Write;
 
-        let content: String = self.text.to_string();
+        // The rope is LF-only (see `from_file`); a CrLf buffer gets its
+        // line ending re-applied at write time. Only \n chars are
+        // rewritten, so a content \r is untouched — even one directly
+        // before a \n, which loads from and saves back to "\r\r\n".
+        let content: String = match self.line_ending {
+            LineEnding::Lf => self.text.to_string(),
+            LineEnding::CrLf => self.text.to_string().replace('\n', "\r\n"),
+        };
         let physical = resolve_write_target(path)?;
 
         if has_other_hard_links(&physical) {
@@ -281,11 +269,10 @@ impl Buffer {
 
     /// Snap a char position to the nearest grapheme-cluster boundary at or
     /// before it (emacs behavior). Identity for positions already on a
-    /// boundary; positions inside a line break (mid-CRLF) snap back to the
-    /// end of the line's text. Positions computed by column arithmetic
-    /// (line movement's column clamping, mouse-click mapping) must be
-    /// snapped so point never rests mid-cluster, where a backspace or
-    /// insert would split the cluster.
+    /// boundary. Positions computed by column arithmetic (line movement's
+    /// column clamping, mouse-click mapping) must be snapped so point
+    /// never rests mid-cluster, where a backspace or insert would split
+    /// the cluster.
     pub fn snap_to_grapheme_boundary(&self, pos: usize) -> usize {
         use unicode_segmentation::UnicodeSegmentation;
         let pos = pos.min(self.char_count());
@@ -293,8 +280,8 @@ impl Buffer {
         let line_len = self.line_len_chars(line);
         let line_start = self.line_col_to_char(line, 0);
         if col >= line_len {
-            // At the line's end (a boundary) or inside its line break
-            // (mid-CRLF): both resolve to the end of the line's text.
+            // At or past the line's end: resolve to the end of the
+            // line's text, before its line break.
             return line_start + line_len;
         }
         let line_text: String = self
@@ -319,26 +306,96 @@ impl Buffer {
         line.len_chars() - line_break_len_chars(line)
     }
 
-    /// Insert a string at the given char offset.
-    pub fn insert(&mut self, char_idx: usize, text: &str) {
-        self.text.insert(char_idx, text);
-        self.modified = true;
-        self.edit_generation += 1;
-    }
+    /// Atomically replace chars in `[start, end)` and return the corresponding
+    /// tree-sitter edit. A replacement advances `edit_generation` exactly once,
+    /// regardless of whether it deletes, inserts, or does both.
+    pub(crate) fn replace(
+        &mut self,
+        start: usize,
+        end: usize,
+        replacement: &str,
+    ) -> Option<InputEdit> {
+        let len = self.text.len_chars();
+        let start = start.min(len);
+        let end = end.min(len).max(start);
+        if start == end && replacement.is_empty() {
+            return None;
+        }
 
-    /// Remove chars in range [start..end).
-    pub fn remove(&mut self, start: usize, end: usize) {
+        let edit = input_edit_for_replace(&self.text, start, end, replacement);
         if start < end {
             self.text.remove(start..end);
-            self.modified = true;
-            self.edit_generation += 1;
         }
+        if !replacement.is_empty() {
+            self.text.insert(start, replacement);
+        }
+        if let Some(syntax) = self.syntax.as_ref() {
+            syntax.apply_edit(self.text.slice(..), edit);
+        }
+        self.modified = true;
+        self.edit_generation += 1;
+        Some(edit)
     }
 
     /// Update the modified flag based on undo history clean state.
     pub fn update_modified(&mut self) {
         self.modified = !self.history.is_clean();
     }
+}
+
+fn input_edit_for_replace(
+    text: &Rope,
+    start: usize,
+    end: usize,
+    replacement: &str,
+) -> InputEdit {
+    let start_byte = text.char_to_byte(start);
+    let old_end_byte = text.char_to_byte(end);
+    let start_point = tree_sitter_point_at_char(text, start);
+    let old_end_point = tree_sitter_point_at_char(text, end);
+    let replacement_bytes = replacement.as_bytes();
+    let newline_count = replacement_bytes
+        .iter()
+        .filter(|&&byte| byte == b'\n')
+        .count();
+    let new_end_point = match replacement_bytes.iter().rposition(|&byte| byte == b'\n') {
+        Some(last_newline) => Point {
+            row: start_point.row.saturating_add(to_u32(newline_count)),
+            col: to_u32(replacement_bytes.len() - last_newline - 1),
+        },
+        None => Point {
+            row: start_point.row,
+            col: start_point.col.saturating_add(to_u32(replacement_bytes.len())),
+        },
+    };
+
+    InputEdit {
+        start_byte: to_u32(start_byte),
+        old_end_byte: to_u32(old_end_byte),
+        new_end_byte: to_u32(start_byte.saturating_add(replacement_bytes.len())),
+        start_point,
+        old_end_point,
+        new_end_point,
+    }
+}
+
+fn tree_sitter_point_at_char(text: &Rope, char_idx: usize) -> Point {
+    // With ropey pinned to `default-features = false`, only `\n` breaks
+    // lines — exactly tree-sitter's row semantics — so ropey's line index
+    // equals the Point row for arbitrary content. The column is
+    // explicitly measured in UTF-8 bytes, not chars.
+    let row = text.char_to_line(char_idx);
+    let line_start_char = text.line_to_char(row);
+    let byte = text.char_to_byte(char_idx);
+    let line_start_byte = text.char_to_byte(line_start_char);
+    Point {
+        row: to_u32(row),
+        col: to_u32(byte - line_start_byte),
+    }
+}
+
+fn to_u32(value: usize) -> u32 {
+    u32::try_from(value).unwrap_or(u32::MAX)
 }
 
 /// Resolve the physical file a write to `path` should land on, following
@@ -452,44 +509,41 @@ mod tests {
         assert_eq!(buf.line_len_chars(2), 0); // empty last line
     }
 
-    /// Every line break ropey recognizes (with its default `unicode_lines`
-    /// feature): LF, CRLF, lone CR, VT, FF, NEL, LS, PS.
-    const ROPEY_LINE_BREAKS: [&str; 8] = [
-        "\n", "\r\n", "\r", "\u{0b}", "\u{0c}", "\u{85}", "\u{2028}", "\u{2029}",
+    /// Chars that were line breaks under ropey's `unicode_lines` feature
+    /// but are ordinary content with `default-features = false`: lone CR,
+    /// VT, FF, NEL, LS, PS.
+    const EX_LINE_BREAKS: [char; 6] = [
+        '\r', '\u{0b}', '\u{0c}', '\u{85}', '\u{2028}', '\u{2029}',
     ];
 
     #[test]
-    fn line_len_chars_excludes_every_ropey_line_break() {
-        for br in ROPEY_LINE_BREAKS {
-            let buf = Buffer::from_str(0, "test", &format!("ab{br}cd{br}"));
-            assert_eq!(buf.line_count(), 3, "ropey must break on {br:?}");
-            assert_eq!(buf.line_len_chars(0), 2, "line 0 with break {br:?}");
-            assert_eq!(buf.line_len_chars(1), 2, "line 1 with break {br:?}");
-            assert_eq!(buf.line_len_chars(2), 0, "line 2 with break {br:?}");
+    fn only_newline_breaks_lines() {
+        for ch in EX_LINE_BREAKS {
+            let buf = Buffer::from_str(0, "test", &format!("ab{ch}cd\n"));
+            assert_eq!(buf.line_count(), 2, "{ch:?} must not break lines");
+            assert_eq!(buf.line_len_chars(0), 5, "{ch:?} counts as content");
         }
     }
 
     #[test]
-    fn line_break_len_chars_matches_ropey_breaks() {
-        for br in ROPEY_LINE_BREAKS {
-            let buf = Buffer::from_str(0, "test", &format!("ab{br}cd"));
-            let expected = br.chars().count();
-            assert_eq!(
-                line_break_len_chars(buf.text.line(0)),
-                expected,
-                "break {br:?}"
-            );
-            assert_eq!(line_break_len_chars(buf.text.line(1)), 0, "final line");
+    fn line_break_len_chars_counts_only_newline() {
+        let buf = Buffer::from_str(0, "test", "ab\ncd");
+        assert_eq!(line_break_len_chars(buf.text.line(0)), 1);
+        assert_eq!(line_break_len_chars(buf.text.line(1)), 0, "final line");
+        for ch in EX_LINE_BREAKS {
+            // A trailing ex-break char is part of the line's text.
+            let buf = Buffer::from_str(0, "test", &format!("ab{ch}"));
+            assert_eq!(line_break_len_chars(buf.text.line(0)), 0, "{ch:?}");
         }
         let empty = Buffer::from_str(0, "test", "");
         assert_eq!(line_break_len_chars(empty.text.line(0)), 0);
     }
 
     #[test]
-    fn line_col_to_char_clamps_before_line_break() {
-        // Form feed is a line break: col clamps to 1, before the FF.
+    fn line_col_to_char_clamps_at_line_text_end() {
+        // The FF is content, so col clamps to 3, before the \n.
         let buf = Buffer::from_str(0, "test", "a\u{0c}b\n");
-        assert_eq!(buf.line_col_to_char(0, 10), 1);
+        assert_eq!(buf.line_col_to_char(0, 10), 3);
     }
 
     #[test]
@@ -514,48 +568,225 @@ mod tests {
     }
 
     #[test]
-    fn snap_to_grapheme_boundary_snaps_mid_crlf_before_break() {
-        // Position 2 sits between \r and \n; snap back to the line's end.
-        let buf = Buffer::from_str(0, "test", "a\r\nb");
-        assert_eq!(buf.snap_to_grapheme_boundary(2), 1);
-        assert_eq!(buf.snap_to_grapheme_boundary(1), 1);
-        assert_eq!(buf.snap_to_grapheme_boundary(3), 3);
-    }
-
-    #[test]
     fn snap_to_grapheme_boundary_clamps_past_end() {
         let buf = Buffer::from_str(0, "test", "ab");
         assert_eq!(buf.snap_to_grapheme_boundary(10), 2);
     }
 
     #[test]
-    fn insert_and_remove() {
+    fn replace_can_insert_and_remove() {
         let mut buf = Buffer::from_str(0, "test", "hello");
-        buf.insert(5, " world");
+        buf.replace(5, 5, " world");
         assert_eq!(buf.text.to_string(), "hello world");
         assert!(buf.modified);
 
-        buf.remove(5, 11);
+        buf.replace(5, 11, "");
         assert_eq!(buf.text.to_string(), "hello");
     }
 
     #[test]
-    fn edit_generation_increments_on_insert_and_remove() {
+    fn edit_generation_increments_once_per_replace() {
         let mut buf = Buffer::from_str(0, "test", "hello");
         assert_eq!(buf.edit_generation, 0);
 
-        buf.insert(5, " world");
+        buf.replace(5, 5, " world");
         assert_eq!(buf.edit_generation, 1);
 
-        buf.insert(11, "!");
+        buf.replace(11, 11, "!");
         assert_eq!(buf.edit_generation, 2);
 
-        buf.remove(11, 12);
+        buf.replace(11, 12, "");
         assert_eq!(buf.edit_generation, 3);
 
         // No-op remove (start == end) should NOT increment
-        buf.remove(5, 5);
+        buf.replace(5, 5, "");
         assert_eq!(buf.edit_generation, 3);
+    }
+
+    #[test]
+    fn replace_is_one_atomic_generation() {
+        let mut buf = Buffer::from_str(0, "test", "hello world");
+        buf.replace(6, 11, "tree-house");
+
+        assert_eq!(buf.text.to_string(), "hello tree-house");
+        assert_eq!(buf.edit_generation, 1);
+        assert!(buf.modified);
+    }
+
+    #[test]
+    fn input_edit_uses_byte_offsets_and_byte_columns_for_unicode() {
+        let text = Rope::from_str("αbc\ndéf");
+        let edit = input_edit_for_replace(&text, 1, 3, "x\nλ");
+
+        assert_eq!(edit.start_byte, 2);
+        assert_eq!(edit.old_end_byte, 4);
+        assert_eq!(edit.new_end_byte, 6);
+        assert_eq!(edit.start_point, tree_house::tree_sitter::Point { row: 0, col: 2 });
+        assert_eq!(edit.old_end_point, tree_house::tree_sitter::Point { row: 0, col: 4 });
+        assert_eq!(edit.new_end_point, tree_house::tree_sitter::Point { row: 1, col: 2 });
+    }
+
+    #[test]
+    fn input_edit_points_ignore_ex_line_break_chars() {
+        // Chars that were ropey line breaks under `unicode_lines` (LS,
+        // lone CR, FF) are content: they must not advance the
+        // tree-sitter row — only \n does. Chars: a LS b \r c \n d FF e;
+        // 'e' (char 8) is row 1, byte-col 2 (LS is 3 bytes, FF is 1).
+        let text = Rope::from_str("a\u{2028}b\rc\nd\u{0c}e");
+        let edit = input_edit_for_replace(&text, 8, 9, "x");
+
+        assert_eq!(edit.start_byte, 10);
+        assert_eq!(edit.start_point, tree_house::tree_sitter::Point { row: 1, col: 2 });
+        assert_eq!(edit.old_end_point, tree_house::tree_sitter::Point { row: 1, col: 3 });
+    }
+
+    #[test]
+    fn input_edit_multiline_endpoint_is_after_last_newline() {
+        let text = Rope::from_str("first\nsecond\nthird");
+        let edit = input_edit_for_replace(&text, 6, 12, "one\ntwo\nthree");
+
+        assert_eq!(edit.start_point, tree_house::tree_sitter::Point { row: 1, col: 0 });
+        assert_eq!(edit.old_end_point, tree_house::tree_sitter::Point { row: 1, col: 6 });
+        assert_eq!(edit.new_end_point, tree_house::tree_sitter::Point { row: 3, col: 5 });
+        assert_eq!(edit.new_end_byte - edit.start_byte, 13);
+    }
+
+    #[test]
+    fn empty_replace_is_a_noop() {
+        let mut buf = Buffer::from_str(0, "test", "hello");
+        buf.replace(2, 2, "");
+        assert_eq!(buf.text.to_string(), "hello");
+        assert_eq!(buf.edit_generation, 0);
+        assert!(!buf.modified);
+    }
+
+    #[test]
+    fn replace_updates_the_buffer_syntax_tree() {
+        let mut buf = Buffer::from_str(0, "test.rs", "fn main() { let value = 1; }\n");
+        buf.syntax = SyntaxState::new(crate::syntax::Language::Rust);
+        let syntax = buf.syntax.as_ref().unwrap();
+        syntax.highlight_rope(buf.text.slice(..), 0..buf.text.len_bytes(), 0);
+
+        let start = buf.text.to_string().find('1').unwrap();
+        buf.replace(start, start + 1, "call()");
+
+        let incremental = buf.syntax.as_ref().unwrap().highlight_rope(
+            buf.text.slice(..),
+            0..buf.text.len_bytes(),
+            buf.edit_generation,
+        );
+        let fresh = SyntaxState::new(crate::syntax::Language::Rust).unwrap();
+        let full = fresh.highlight_rope(buf.text.slice(..), 0..buf.text.len_bytes(), 0);
+        assert_eq!(
+            incremental
+                .iter()
+                .map(|span| (span.start, span.end, span.style))
+                .collect::<Vec<_>>(),
+            full.iter()
+                .map(|span| (span.start, span.end, span.style))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    fn span_signature(
+        spans: &[crate::syntax::StyledSpan],
+    ) -> Vec<(usize, usize, ratatui::style::Style)> {
+        spans
+            .iter()
+            .map(|span| (span.start, span.end, span.style))
+            .collect()
+    }
+
+    #[test]
+    fn incremental_syntax_matches_full_parse_across_mixed_edits() {
+        let source = "fn main() {\n    let greeting = \"hello\";\n    println!(\"{}\", greeting);\n}\n";
+        let mut buf = Buffer::from_str(0, "test.rs", source);
+        buf.syntax = SyntaxState::new(crate::syntax::Language::Rust);
+        buf.syntax.as_ref().unwrap().highlight_rope(
+            buf.text.slice(..),
+            0..buf.text.len_bytes(),
+            0,
+        );
+        let replacements = ["", "x", "λ", "\n", "/* note */", "\"text\""];
+        let mut random = 0x5eed_f00d_u64;
+
+        for step in 0..48 {
+            random = random.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let len = buf.text.len_chars();
+            let start = (random as usize) % (len + 1);
+            random = random.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let delete_len = (random as usize) % (len.saturating_sub(start).min(4) + 1);
+            random = random.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let replacement = replacements[(random as usize) % replacements.len()];
+            if delete_len == 0 && replacement.is_empty() {
+                continue;
+            }
+
+            buf.replace(start, start + delete_len, replacement);
+            let incremental = buf.syntax.as_ref().unwrap().highlight_rope(
+                buf.text.slice(..),
+                0..buf.text.len_bytes(),
+                buf.edit_generation,
+            );
+            let fresh = SyntaxState::new(crate::syntax::Language::Rust).unwrap();
+            let full = fresh.highlight_rope(buf.text.slice(..), 0..buf.text.len_bytes(), 0);
+            assert_eq!(
+                span_signature(&incremental),
+                span_signature(&full),
+                "incremental parse diverged at step {step} after replacing {start}..{} with {replacement:?}; source: {:?}",
+                start + delete_len,
+                buf.text.to_string(),
+            );
+        }
+    }
+
+    #[test]
+    fn incremental_markdown_injections_match_full_parse_after_edits() {
+        let source = "# Demo\n\n```rust\nfn answer() -> u32 { 42 }\n```\n\n*tail*\n";
+        let mut buf = Buffer::from_str(0, "test.md", source);
+        buf.syntax = SyntaxState::new(crate::syntax::Language::Markdown);
+        buf.syntax.as_ref().unwrap().highlight_rope(
+            buf.text.slice(..),
+            0..buf.text.len_bytes(),
+            0,
+        );
+
+        for (needle, replacement) in [
+            ("42", "compute()"),
+            ("rust", "javascript"),
+            ("*tail*", "**strong λ**"),
+        ] {
+            let text = buf.text.to_string();
+            let start_byte = text.find(needle).unwrap();
+            let start = buf.text.byte_to_char(start_byte);
+            let end = start + needle.chars().count();
+            buf.replace(start, end, replacement);
+
+            let incremental = buf.syntax.as_ref().unwrap().highlight_rope(
+                buf.text.slice(..),
+                0..buf.text.len_bytes(),
+                buf.edit_generation,
+            );
+            let fresh = SyntaxState::new(crate::syntax::Language::Markdown).unwrap();
+            let full = fresh.highlight_rope(buf.text.slice(..), 0..buf.text.len_bytes(), 0);
+            assert_eq!(span_signature(&incremental), span_signature(&full));
+        }
+    }
+
+    #[test]
+    fn edit_before_initial_parse_is_included_in_lazy_full_parse() {
+        let mut buf = Buffer::from_str(0, "test.rs", "fn old() {}\n");
+        buf.syntax = SyntaxState::new(crate::syntax::Language::Rust);
+        buf.replace(3, 6, "new_name");
+
+        let lazy = buf.syntax.as_ref().unwrap().highlight_rope(
+            buf.text.slice(..),
+            0..buf.text.len_bytes(),
+            buf.edit_generation,
+        );
+        let fresh = SyntaxState::new(crate::syntax::Language::Rust).unwrap();
+        let full = fresh.highlight_rope(buf.text.slice(..), 0..buf.text.len_bytes(), 0);
+        assert_eq!(span_signature(&lazy), span_signature(&full));
     }
 
     #[test]
@@ -569,7 +800,7 @@ mod tests {
         assert_eq!(buf.line_count(), 3);
         assert!(!buf.modified);
 
-        buf.insert(5, " there");
+        buf.replace(5, 5, " there");
         assert!(buf.modified);
         buf.save().unwrap();
         assert!(!buf.modified);
@@ -596,7 +827,7 @@ mod tests {
         assert!(buf.externally_modified());
 
         // Saving takes ownership of the file again.
-        buf.insert(0, "x");
+        buf.replace(0, 0, "x");
         buf.save().unwrap();
         assert!(!buf.externally_modified());
     }
@@ -614,7 +845,7 @@ mod tests {
         fs::write(&file, "hello").unwrap();
 
         let mut buf = Buffer::from_file(0, &file).unwrap();
-        buf.insert(0, "x");
+        buf.replace(0, 0, "x");
         buf.save().unwrap();
 
         let entries: Vec<_> = fs::read_dir(dir.path())
@@ -635,7 +866,7 @@ mod tests {
         fs::set_permissions(&file, fs::Permissions::from_mode(0o755)).unwrap();
 
         let mut buf = Buffer::from_file(0, &file).unwrap();
-        buf.insert(0, "#!/bin/sh\n");
+        buf.replace(0, 0, "#!/bin/sh\n");
         buf.save().unwrap();
 
         let mode = fs::metadata(&file).unwrap().permissions().mode() & 0o777;
@@ -654,7 +885,7 @@ mod tests {
         std::os::unix::fs::symlink(&target, &link).unwrap();
 
         let mut buf = Buffer::from_file(0, &link).unwrap();
-        buf.insert(0, "new ");
+        buf.replace(0, 0, "new ");
         buf.save().unwrap();
 
         assert!(
@@ -681,7 +912,7 @@ mod tests {
         std::os::unix::fs::symlink("missing.txt", &link).unwrap();
 
         let mut buf = Buffer::new_for_path(0, &link);
-        buf.insert(0, "hello");
+        buf.replace(0, 0, "hello");
         buf.save().unwrap();
 
         assert!(
@@ -706,7 +937,7 @@ mod tests {
         std::os::unix::fs::symlink("a.txt", &b).unwrap();
 
         let mut buf = Buffer::new_for_path(0, &a);
-        buf.insert(0, "x");
+        buf.replace(0, 0, "x");
         assert!(buf.save().is_err(), "a symlink loop must fail the save");
         assert!(
             fs::symlink_metadata(&a).unwrap().file_type().is_symlink(),
@@ -726,7 +957,7 @@ mod tests {
         fs::hard_link(&a, &b).unwrap();
 
         let mut buf = Buffer::from_file(0, &a).unwrap();
-        buf.insert(0, "new ");
+        buf.replace(0, 0, "new ");
         buf.save().unwrap();
 
         assert_eq!(
@@ -766,7 +997,7 @@ mod tests {
 
         // Saving through the link recaptures the mtime of the file
         // actually written.
-        buf.insert(0, "x");
+        buf.replace(0, 0, "x");
         buf.save().unwrap();
         assert!(!buf.externally_modified());
     }
@@ -791,6 +1022,80 @@ mod tests {
         fs::write(&file, "hello\r\nworld\r\n").unwrap();
         let buf = Buffer::from_file(0, &file).unwrap();
         assert_eq!(buf.line_ending, LineEnding::CrLf);
+    }
+
+    #[test]
+    fn crlf_file_loads_lf_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("crlf.txt");
+        fs::write(&file, "hello\r\nworld\r\n").unwrap();
+        let buf = Buffer::from_file(0, &file).unwrap();
+        assert_eq!(buf.line_ending, LineEnding::CrLf);
+        assert_eq!(buf.text.to_string(), "hello\nworld\n");
+        assert!(!buf.modified, "load-time conversion is not an edit");
+    }
+
+    #[test]
+    fn crlf_file_round_trips_byte_identical() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("crlf.txt");
+        fs::write(&file, "hello\r\nworld\r\n").unwrap();
+        let mut buf = Buffer::from_file(0, &file).unwrap();
+        buf.save().unwrap();
+        assert_eq!(fs::read_to_string(&file).unwrap(), "hello\r\nworld\r\n");
+    }
+
+    #[test]
+    fn edited_crlf_buffer_saves_crlf() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("crlf.txt");
+        fs::write(&file, "hello\r\nworld\r\n").unwrap();
+        let mut buf = Buffer::from_file(0, &file).unwrap();
+        // Positions are in the LF-only rope: "hello\nworld\n".
+        buf.replace(5, 5, " there");
+        buf.replace(17, 17, "\nmore");
+        buf.save().unwrap();
+        assert_eq!(
+            fs::read_to_string(&file).unwrap(),
+            "hello there\r\nworld\r\nmore\r\n"
+        );
+    }
+
+    #[test]
+    fn mixed_endings_normalize_on_save() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("mixed.txt");
+        fs::write(&file, "a\r\nb\nc\r\n").unwrap();
+        let mut buf = Buffer::from_file(0, &file).unwrap();
+        assert_eq!(buf.line_ending, LineEnding::CrLf);
+        assert_eq!(buf.text.to_string(), "a\nb\nc\n");
+        buf.save().unwrap();
+        // Intended normalization: mixed files save with one uniform ending.
+        assert_eq!(fs::read_to_string(&file).unwrap(), "a\r\nb\r\nc\r\n");
+    }
+
+    #[test]
+    fn lone_cr_is_content_and_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // In an LF file, a lone \r is left untouched in both directions.
+        let lf = dir.path().join("lf.txt");
+        fs::write(&lf, "a\rb\nc\n").unwrap();
+        let mut buf = Buffer::from_file(0, &lf).unwrap();
+        assert_eq!(buf.line_ending, LineEnding::Lf);
+        assert_eq!(buf.text.to_string(), "a\rb\nc\n");
+        buf.save().unwrap();
+        assert_eq!(fs::read_to_string(&lf).unwrap(), "a\rb\nc\n");
+
+        // In a CRLF file, only the \r of a \r\n pair is an encoding
+        // artifact; a lone \r survives load and save unchanged.
+        let crlf = dir.path().join("crlf.txt");
+        fs::write(&crlf, "a\rb\r\nc\r\n").unwrap();
+        let mut buf = Buffer::from_file(0, &crlf).unwrap();
+        assert_eq!(buf.line_ending, LineEnding::CrLf);
+        assert_eq!(buf.text.to_string(), "a\rb\nc\n");
+        buf.save().unwrap();
+        assert_eq!(fs::read_to_string(&crlf).unwrap(), "a\rb\r\nc\r\n");
     }
 
     #[test]

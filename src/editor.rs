@@ -426,18 +426,8 @@ impl Editor {
 
     // === Movement commands ===
 
-    /// True if `pos` sits between the `\r` and `\n` of a CRLF pair.
-    /// Point must never rest there; the pair is treated as one unit.
-    fn inside_crlf(&self, pos: usize) -> bool {
-        let buf = self.active_buffer();
-        pos > 0
-            && pos < buf.char_count()
-            && buf.text.char(pos - 1) == '\r'
-            && buf.text.char(pos) == '\n'
-    }
-
     /// Char index of the next grapheme-cluster boundary after `pos`.
-    /// Line endings (including CRLF pairs) count as one step.
+    /// Line endings count as one step (the rope is LF-only).
     fn next_grapheme_boundary(&self, pos: usize) -> usize {
         use unicode_segmentation::UnicodeSegmentation;
         let buf = self.active_buffer();
@@ -449,8 +439,7 @@ impl Editor {
         let line_len = buf.line_len_chars(line);
         if col >= line_len {
             // Stepping over the line ending.
-            let next = pos + 1;
-            return if self.inside_crlf(next) { next + 1 } else { next };
+            return pos + 1;
         }
         let line_start = buf.line_col_to_char(line, 0);
         let line_text: String = buf
@@ -479,8 +468,7 @@ impl Editor {
         let (line, col) = buf.char_to_line_col(pos);
         if col == 0 {
             // Stepping back over the previous line's ending.
-            let prev = pos - 1;
-            return if self.inside_crlf(prev) { prev - 1 } else { prev };
+            return pos - 1;
         }
         let line_start = buf.line_col_to_char(line, 0);
         let line_len = buf.line_len_chars(line);
@@ -760,12 +748,7 @@ impl Editor {
                 EditRecord::Replace => buf.history.record_replace(start, &deleted, text),
                 EditRecord::NoHistory => {}
             }
-            if end > start {
-                buf.remove(start, end);
-            }
-            if !text.is_empty() {
-                buf.insert(start, text);
-            }
+            buf.replace(start, end, text);
             let inserted = text.chars().count();
             let inserted_lines = buf.char_to_line_col(start + inserted).0 - first_line;
             let delta = crate::pane::EditDelta {
@@ -802,7 +785,6 @@ impl Editor {
     fn insert_newline(&mut self) {
         let pos = self.active_pane().point;
         let buf = self.active_buffer();
-        let le = buf.line_ending.as_str().to_string();
 
         // Get current line's leading whitespace (spaces only)
         let (line, _) = buf.char_to_line_col(pos);
@@ -824,7 +806,8 @@ impl Editor {
             }
         }
 
-        let insert_str = format!("{le}{indent}");
+        // The rope is LF-only; `LineEnding` only matters at save time.
+        let insert_str = format!("\n{indent}");
         self.apply_edit(pos, pos, &insert_str, EditRecord::Insert);
         let pane = self.active_pane_mut();
         pane.point = pos + insert_str.chars().count();
@@ -1254,20 +1237,16 @@ impl Editor {
     }
 
     /// Normalize text about to be pasted. The minibuffer is single-line, so
-    /// every line-break form becomes a space. Buffers get the breaks
-    /// converted to their own line ending (`Buffer::line_ending`, detected
-    /// at load and `Lf` for new buffers), so pasting CRLF text into an LF
-    /// file cannot smuggle in raw `\r` chars — which would render invisibly
-    /// and mix line endings.
+    /// every line-break form becomes a space. Buffers get every break form
+    /// unified to `\n` — the rope is LF-only regardless of the buffer's
+    /// save-time `LineEnding` — so pasting CRLF text cannot smuggle in raw
+    /// `\r` chars, which would render invisibly.
     pub(crate) fn normalized_paste(&self, text: &str) -> String {
         let unified = text.replace("\r\n", "\n").replace('\r', "\n");
         if self.minibuffer.is_active() {
             unified.replace('\n', " ")
         } else {
-            match self.active_buffer().line_ending {
-                crate::buffer::LineEnding::Lf => unified,
-                crate::buffer::LineEnding::CrLf => unified.replace('\n', "\r\n"),
-            }
+            unified
         }
     }
 

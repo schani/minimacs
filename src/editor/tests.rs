@@ -444,14 +444,25 @@ fn paste_converts_lone_cr_to_buffer_ending() {
 }
 
 #[test]
-fn paste_converts_lf_to_crlf_buffer_ending() {
+fn paste_stays_lf_in_crlf_buffer() {
+    // The rope is LF-only regardless of the buffer's save-time line
+    // ending; CRLF is produced at save, never stored.
     let mut editor = Editor::new();
     editor.current_buffer_mut().line_ending = crate::buffer::LineEnding::CrLf;
-    editor.clipboard = "a\nb".to_string();
+    editor.clipboard = "a\r\nb".to_string();
     editor.execute(Command::Paste);
-    assert_eq!(editor.buffer_text(), "a\r\nb");
-    // Point must land after the converted text, not the original.
-    assert_eq!(editor.point(), 4);
+    assert_eq!(editor.buffer_text(), "a\nb");
+    assert_eq!(editor.point(), 3);
+}
+
+#[test]
+fn insert_newline_inserts_lf_in_crlf_buffer() {
+    let mut editor = Editor::new_with_text("ab");
+    editor.current_buffer_mut().line_ending = crate::buffer::LineEnding::CrLf;
+    editor.pane_tree.focused_pane_mut().point = 1;
+    editor.execute(Command::InsertNewline);
+    assert_eq!(editor.buffer_text(), "a\nb");
+    assert_eq!(editor.point(), 2);
 }
 
 #[test]
@@ -2199,121 +2210,71 @@ fn snap_does_not_corrupt_preferred_column() {
     );
 }
 
-// === CRLF atomicity ===
+// CRLF pairs cannot occur in a rope (the file boundary converts them to
+// LF), so no CRLF-atomicity handling exists in movement or deletion.
 
-fn crlf_editor() -> Editor {
-    // "ab\r\ncd": chars are a(0) b(1) \r(2) \n(3) c(4) d(5)
-    Editor::new_with_text("ab\r\ncd")
-}
-
-#[test]
-fn forward_char_skips_over_crlf_pair() {
-    let mut editor = crlf_editor();
-    editor.pane_tree.focused_pane_mut().point = 2;
-    editor.execute(Command::ForwardChar);
-    assert_eq!(editor.point(), 4, "point must not land between \\r and \\n");
-}
+// === Ex-line-break chars are ordinary content (LF-only decision) ===
+//
+// With ropey's `unicode_lines` feature off, only `\n` is a line break;
+// lone CR, VT, FF, NEL, LS, PS are content like any other char.
 
 #[test]
-fn backward_char_skips_over_crlf_pair() {
-    let mut editor = crlf_editor();
-    editor.pane_tree.focused_pane_mut().point = 4;
-    editor.execute(Command::BackwardChar);
-    assert_eq!(editor.point(), 2);
-}
-
-#[test]
-fn delete_backward_removes_whole_crlf() {
-    let mut editor = crlf_editor();
-    editor.pane_tree.focused_pane_mut().point = 4;
-    editor.execute(Command::DeleteBackward);
-    assert_eq!(editor.buffer_text(), "abcd");
-    assert_eq!(editor.point(), 2);
-    editor.execute(Command::Undo);
-    assert_eq!(editor.buffer_text(), "ab\r\ncd");
-}
-
-#[test]
-fn delete_forward_removes_whole_crlf() {
-    let mut editor = crlf_editor();
-    editor.pane_tree.focused_pane_mut().point = 2;
-    editor.execute(Command::DeleteForward);
-    assert_eq!(editor.buffer_text(), "abcd");
-    assert_eq!(editor.point(), 2);
-}
-
-#[test]
-fn kill_line_at_eol_removes_whole_crlf() {
-    let mut editor = crlf_editor();
-    editor.pane_tree.focused_pane_mut().point = 2; // EOL of "ab"
-    editor.execute(Command::KillLine);
-    assert_eq!(editor.buffer_text(), "abcd");
-    assert_eq!(editor.clipboard, "\r\n");
-}
-
-// === Unicode line breaks (ropey's full break set) ===
-
-#[test]
-fn end_of_line_stops_before_form_feed_break() {
-    // FF is a line break for ropey: line 0 is "a", line 1 is "b".
+fn end_of_line_goes_past_form_feed() {
+    // FF is not a line break: "a\u{0c}b" is one line of three chars.
     let mut editor = Editor::new_with_text("a\u{0c}b\n");
     editor.execute(Command::EndOfLine);
-    assert_eq!(editor.point(), 1, "C-e must stop before the FF");
+    assert_eq!(editor.point(), 3, "C-e must go past the FF");
 }
 
 #[test]
-fn kill_line_at_eol_removes_form_feed_break() {
+fn kill_line_kills_through_form_feed() {
     let mut editor = Editor::new_with_text("a\u{0c}b\n");
-    editor.pane_tree.focused_pane_mut().point = 1; // EOL of line 0
     editor.execute(Command::KillLine);
-    assert_eq!(editor.buffer_text(), "ab\n");
-    assert_eq!(editor.clipboard, "\u{0c}");
+    assert_eq!(editor.buffer_text(), "\n");
+    assert_eq!(editor.clipboard, "a\u{0c}b");
 }
 
 #[test]
-fn end_of_line_stops_before_lone_cr_breaks() {
-    // Old-Mac style file: lone \r line breaks.
+fn end_of_line_goes_past_lone_cr() {
+    // Old-Mac style content: lone \r chars do not break lines.
     let mut editor = Editor::new_with_text("x\ry\r");
     editor.execute(Command::EndOfLine);
-    assert_eq!(editor.point(), 1);
+    assert_eq!(editor.point(), 4);
     editor.execute(Command::NextLine);
-    editor.execute(Command::EndOfLine);
-    assert_eq!(editor.point(), 3);
+    assert_eq!(editor.point(), 4, "there is no second line");
 }
 
 #[test]
-fn kill_line_at_eol_removes_lone_cr_break() {
+fn kill_line_kills_through_lone_cr() {
     let mut editor = Editor::new_with_text("x\ry\r");
-    editor.pane_tree.focused_pane_mut().point = 1; // EOL of line 0
     editor.execute(Command::KillLine);
-    assert_eq!(editor.buffer_text(), "xy\r");
-    assert_eq!(editor.clipboard, "\r");
+    assert_eq!(editor.buffer_text(), "");
+    assert_eq!(editor.clipboard, "x\ry\r");
 }
 
 #[test]
-fn end_of_line_stops_before_unicode_line_separator() {
+fn end_of_line_goes_past_unicode_line_separator() {
     let mut editor = Editor::new_with_text("ab\u{2028}cd");
     editor.execute(Command::EndOfLine);
-    assert_eq!(editor.point(), 2);
+    assert_eq!(editor.point(), 5);
 }
 
 #[test]
-fn kill_line_at_eol_removes_unicode_line_separator() {
+fn kill_line_kills_through_unicode_line_separator() {
     let mut editor = Editor::new_with_text("ab\u{2028}cd");
-    editor.pane_tree.focused_pane_mut().point = 2; // EOL of line 0
+    editor.pane_tree.focused_pane_mut().point = 2;
     editor.execute(Command::KillLine);
-    assert_eq!(editor.buffer_text(), "abcd");
-    assert_eq!(editor.clipboard, "\u{2028}");
+    assert_eq!(editor.buffer_text(), "ab");
+    assert_eq!(editor.clipboard, "\u{2028}cd");
 }
 
 #[test]
-fn next_line_clamps_column_before_form_feed_break() {
-    // Line 0 "hello" col 4; line 1 is "ab" ending in FF — clamping must
-    // stop before the FF, not on or after it.
+fn next_line_clamps_column_counting_form_feed_as_content() {
+    // Line 1 is "ab\u{0c}x" — four chars, the FF included.
     let mut editor = Editor::new_with_text("hello\nab\u{0c}x");
     editor.pane_tree.focused_pane_mut().point = 4;
     editor.execute(Command::NextLine);
-    assert_eq!(editor.point(), 8, "col must clamp before the FF");
+    assert_eq!(editor.point(), 10, "col 4 exists; the FF counts");
 }
 
 // === Non-ASCII (char-vs-byte) correctness ===

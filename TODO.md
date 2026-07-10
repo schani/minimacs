@@ -1,3 +1,132 @@
+- [ ] `M-<` and `M->` don't work with the "option" key on macOS/cmux. They do work with "ESC", but they should also work with "option"
+
+# LF-only line endings (product decision, 2026-07-10)
+
+**Decision:** minimacs only needs to support LF line endings correctly.
+In-memory text (the rope) is invariantly LF-only: CRLF is a *file encoding*
+handled at the load/save boundary (detected at load and converted to LF;
+converted back on save when the buffer's `LineEnding` is CrLf — the emacs
+model). Ropey's `unicode_lines` extras (lone CR, VT, FF, NEL, LS, PS) are
+**not** line breaks; they are ordinary characters. Consequences accepted:
+mixed-line-ending files are normalized to one ending on save; a lone `\r`
+(mac-classic files) is not a line break and renders as an ordinary char.
+Payoffs: ropey pinned to `default-features = false` (like Helix), ropey
+line rows become *exactly* tree-sitter Point rows for arbitrary content
+(the incremental-parsing row caveat disappears), and CRLF special-casing
+in movement/rendering/paste is deleted.
+
+Plan, in order (tests first for each step; one commit per step).
+**Done (2026-07-10)** — landed as five commits; the decision is recorded
+in ARCHITECTURE.md's Buffer section. Deep fuzz sweep after the flip
+(`--lang all --runs 8 --steps 400`): 92/104 runs clean, 12 with the known
+transient upstream error-recovery divergences (raw-probe-confirmed,
+self-healing), same picture as before the migration.
+
+- [x] Normalize at the file boundary. Tests first: loading a CRLF file
+      yields a rope containing no `\r\n` with `line_ending == CrLf`; save
+      writes CRLF back; pure-LF and pure-CRLF files round-trip
+      byte-identical; a mixed-endings file loads LF-only and saves
+      uniformly (intended normalization); the revert/external-reload path
+      normalizes too (verify all file reads share `Buffer::from_file`).
+      Implementation: `from_file` does `content.replace("\r\n", "\n")`
+      after detection; `save_as` converts `\n` → `\r\n` for CrLf buffers
+      at write time (lone `\r` content is left untouched in both
+      directions). Ropey stays on default features in this step.
+- [x] Simplify editing on the LF-only invariant. `insert_text`'s paste
+      conversion to the buffer ending goes away (unify to `\n` only,
+      editor.rs:1253-1264); RET always inserts `\n`; delete `inside_crlf`
+      and CRLF-pair atomicity in `next/prev_grapheme_boundary`
+      (editor.rs:429-454); drop CRLF from the direct-insertion test
+      matrices (buffer.rs:528, render.rs:1040) — CRLF can no longer occur
+      in a rope. `line_break_len_chars` keeps its CRLF arm until the next
+      step only if any test still constructs one directly; otherwise
+      simplify here.
+- [x] Flip ropey to `default-features = false, features = ["simd"]`.
+      Tests first: rewrite the ~15 unicode-line-break tests to assert the
+      *new* behavior — lone CR / VT / FF / NEL / LS / PS are ordinary
+      content: one ropey line, `C-e` moves past them, `C-k` kills through
+      them, rendering and mouse mapping treat them as width-bearing chars.
+      Then: `is_line_break_char` reduces to `\n`; `line_break_len_chars`
+      becomes a trailing-`\n` check (0 or 1); simplify its consumers
+      (`line_len_chars`, renderer line extraction, kill-line).
+- [x] Verify and document exact tree-sitter row agreement: with LF-only
+      ropey, `tree_sitter_point_at_char`'s rows equal tree-sitter Point
+      rows for *arbitrary* content — update its comment, and drop the
+      benign-divergence caveats from ARCHITECTURE.md and the fuzz-harness
+      notes. Run `syntax-fuzz` (default sweep + a deep
+      `--runs 16 --steps 500` pass) — the adverse alphabet (lone CR,
+      U+2028/2029, FF, CRLF fragments) stays: those chars are exactly the
+      ones that changed meaning, now stressing the content-not-break
+      paths. Add a fuzz oracle assertion if cheap: rope `len_lines` - 1
+      == count of `\n`.
+- [x] Docs sweep: rewrite ARCHITECTURE.md's line-break paragraph (Buffer
+      section), the grapheme-cluster CRLF-atomicity mention, and the
+      paste-normalization paragraph to describe the LF-only invariant;
+      check README/FUTURE for stale mentions. Decide/verify how
+      now-inline control chars (`\r`, FF, VT) render — passing them raw
+      to the terminal is acceptable per the decision, but note it as a
+      known limitation.
+
+# Parse-failure handling (from PR review, 2026-07-09)
+
+Problem: when `SyntaxState::ensure_syntax` fails — most plausibly by hitting
+`PARSE_TIMEOUT` (2s) on a pathological or very large file — nothing is cached,
+so every subsequent render retries the full parse: up to 2 seconds of
+synchronous stall per frame, forever, on exactly the files where the parser
+struggles. A repeatedly failing `Syntax::update` has the same shape (each
+failure drops the tree; the next render re-runs a full 2s-capped parse).
+
+Plan, in order (tests first for each step):
+
+- [ ] Make the parse timeout injectable for tests (e.g. a
+      `SyntaxState::with_timeout(lang, Duration)` constructor used by tests;
+      `new()` keeps `PARSE_TIMEOUT`). With `Duration::ZERO`, assert the
+      failure path: `highlight_rope` returns unstyled spans and does not
+      panic. This is pure test plumbing — no behavior change.
+- [ ] Poison the failed generation: on `ensure_syntax` failure, record the
+      requested `version` in a `failed_version: Cell<Option<usize>>`. While
+      `failed_version == Some(version)`, `highlight_rope` returns empty spans
+      without attempting to parse. An edit bumps the generation and clears the
+      poison, so retries happen at most once per edit — never per frame.
+      Tests: with a zero timeout, the parse is attempted exactly once per
+      generation (extend the existing `#[cfg(test)]` parse counters); cursor
+      movement and idle frames after a failure do not stall.
+- [ ] Give up after N consecutive failed generations (suggest N=3): set a
+      permanent `disabled` flag, show "syntax highlighting disabled (parse
+      timeout)" in the echo area once, and stop retrying entirely.
+      `redetect_syntax` (used by save-as) resets the flag, giving users an
+      explicit re-enable path. Tests: N failing edits disable it; the message
+      appears once; redetect re-arms.
+- [ ] Reconsider `PARSE_TIMEOUT`: 2s is far beyond an acceptable frame stall.
+      With the poison flag the retry storm is gone, but a single 2s stall per
+      edit on a pathological file is still bad. Suggest 500ms for the initial
+      parse and keeping `Syntax::update` at 500ms too; measure on the
+      syntax-bench 100k-line workload before choosing. Document the choice in
+      ARCHITECTURE.md.
+- [ ] (Future, complementary — already sketched in FUTURE.md) Move parsing to
+      a background thread so even the first parse of a huge file never blocks
+      input; the poison flag remains useful as the fallback for the
+      synchronous path.
+
+- [ ] Wire `syntax-fuzz` (and a small `syntax-bench --lines 500 --edits 50`
+      checksum run) into CI as a smoke check: e.g.
+      `syntax-fuzz --runs 2 --steps 120` on the default languages, treating
+      exit code 1 as failure. Known limitation to document: on heavily
+      corrupted buffers tree-sitter's incremental error recovery can
+      transiently produce different trees than a fresh parse (verified
+      upstream with the raw-tree probe), so CI should run with modest step
+      counts where the default languages are clean, and bumps to the pinned
+      grammar/tree-house versions should re-run the deep sweep.
+- [ ] Track the tree-sitter-md external-scanner overflow: the fuzz harness's
+      raw probe segfaulted inside `tree_sitter_markdown_external_scanner_serialize`
+      (memmove past the serialization buffer) during an incremental parse
+      from a stale tree with deeply nested block state. minimacs parses the
+      same grammar incrementally through tree-house, so the crash class is
+      reachable in the editor in principle (not reproduced through tree-house
+      in 16x500-step fuzz runs). Watch upstream tree-sitter-md for a scanner
+      fix and bump the pinned version; re-run `syntax-fuzz --lang markdown
+      --raw` afterwards to confirm.
+
 - [x] When switching buffers with `C-x b`, when the user just presses enter without picking a buffer, switch to the buffer that was last visited in that window.
 - [x] When switching to a buffer, point needs to go to where it was the last time the buffer was visited in that window.
 - [x] Find-file should start at the directory of the current buffer, not from where minimacs was started.
