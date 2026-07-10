@@ -159,11 +159,18 @@ fn main() -> Result<()> {
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableBracketedPaste, EnableMouseCapture)?;
 
-    // Enable kitty keyboard protocol so keys like Ctrl-/ are reported correctly.
-    // This is best-effort: terminals that don't support it will silently ignore it.
+    // Enable kitty keyboard protocol so keys like Ctrl-/ are reported
+    // correctly. REPORT_ALTERNATE_KEYS makes shifted keys arrive as the
+    // layout-correct shifted character (M-> as Alt+'>' instead of
+    // Alt+Shift+'.'); without it, Key::from_event falls back to a US-layout
+    // shift table. This is best-effort: terminals that don't support it
+    // will silently ignore it.
     let _ = execute!(
         stdout,
-        PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+        PushKeyboardEnhancementFlags(
+            KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+                | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
+        )
     );
 
     let backend = CrosstermBackend::new(stdout);

@@ -325,6 +325,15 @@ struct KeymapNode {
 `process_key()` walks the trie from the root using all pending keys and returns
 `Matched(Command)`, `Pending`, or `NotFound`.
 
+`Key` has no shift field: `Key::from_event` resolves a SHIFT modifier on a
+char key into the shifted character (`shifted_char`: Unicode uppercase for
+letters, a US-layout table for punctuation). Bindings name the shifted
+character (`M-<`, `C-_`), but kitty-protocol terminals without the "report
+alternate keys" flag deliver shifted keys as the *base* key plus SHIFT
+(Alt+Shift+`,` for M-<) — both forms must reach the same binding. `main()`
+also pushes `REPORT_ALTERNATE_KEYS`, so terminals that support it report the
+layout-correct shifted char and the US-layout table is only the fallback.
+
 ### Command
 
 A flat enum with no data except `InsertChar(char)`. All editor actions are
