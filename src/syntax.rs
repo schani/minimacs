@@ -648,6 +648,15 @@ impl SyntaxState {
         self.ensure_syntax(source)
     }
 
+    /// The raw tree-sitter grammar for `lang`, bypassing tree-house. Exposed
+    /// for the fuzz harness, which uses it to attribute incremental-parse
+    /// divergence to either tree-sitter core or tree-house's layer handling.
+    #[allow(dead_code)]
+    pub(crate) fn raw_grammar(lang: Language) -> Option<tree_house::tree_sitter::Grammar> {
+        let (language_fn, _, _, _) = language_config(lang);
+        tree_house::tree_sitter::Grammar::try_from(language_fn).ok()
+    }
+
     fn ensure_syntax(&self, source: RopeSlice<'_>) -> bool {
         if self.syntax.borrow().is_some() {
             return true;

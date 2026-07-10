@@ -61,6 +61,9 @@ src/
   history.rs        History -- undo/redo with edit grouping
   indent.rs         Shared indentation constants (INDENT_WIDTH = 4)
   syntax.rs         SyntaxState -- tree-sitter highlighting
+  syntax_bench.rs   syntax-bench performance harness (see below)
+  syntax_fuzz.rs    syntax-fuzz incremental-vs-fresh fuzz harness (see below)
+  bin/*.rs          Thin wrappers exposing the harnesses as cargo binaries
   event.rs          EventSource trait + Poll -- abstracts terminal vs test input
 ```
 
@@ -554,6 +557,23 @@ outside the timed region, checks final text across modes, and requires full and
 incremental highlight checksums to match before reporting the speedup. Its
 output also separates Rope mutation, parse/update, and highlight query time so
 whole-file parser work cannot be mistaken for rendering overhead.
+
+**Fuzz harness**: `cargo run --release --bin syntax-fuzz --` applies random
+edits through `Buffer::replace` and after every edit compares the persistent
+incremental tree's highlights against a fresh parse of the same text — over
+the whole file and over a random padded viewport window (the same path the
+renderer uses). Edits mix a plain alphabet with an adversarial one (CRLF and
+lone-CR splits, Unicode line separators, combining characters, fence/quote/
+comment tokens, multi-kilobyte pastes, whole-buffer replacement), and half the
+edits target structural hotspots (fences, quotes, comment openers) that
+uniform random positions rarely hit. Runs are deterministic from `--seed`.
+With `--raw`, a raw tree-sitter tree fed the same `InputEdit`s (no tree-house)
+attributes each divergence to tree-sitter core versus tree-house's layer
+handling; it is opt-in because the raw tree can reach states tree-house never
+does, where the tree-sitter-md block scanner segfaults in its C serialize
+function, and it is only an annotation because tree-sitter's incremental error
+recovery legitimately produces transiently different trees on ERROR-heavy
+buffers (`--keep-going` shows such divergences healing within a few edits).
 
 **Language injections**: `TreeHouseLoader` resolves injection names to any
 grammar minimacs ships. Markdown uses this both for fenced languages and for the
