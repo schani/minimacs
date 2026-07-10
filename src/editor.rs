@@ -426,18 +426,8 @@ impl Editor {
 
     // === Movement commands ===
 
-    /// True if `pos` sits between the `\r` and `\n` of a CRLF pair.
-    /// Point must never rest there; the pair is treated as one unit.
-    fn inside_crlf(&self, pos: usize) -> bool {
-        let buf = self.active_buffer();
-        pos > 0
-            && pos < buf.char_count()
-            && buf.text.char(pos - 1) == '\r'
-            && buf.text.char(pos) == '\n'
-    }
-
     /// Char index of the next grapheme-cluster boundary after `pos`.
-    /// Line endings (including CRLF pairs) count as one step.
+    /// Line endings count as one step (the rope is LF-only).
     fn next_grapheme_boundary(&self, pos: usize) -> usize {
         use unicode_segmentation::UnicodeSegmentation;
         let buf = self.active_buffer();
@@ -449,8 +439,7 @@ impl Editor {
         let line_len = buf.line_len_chars(line);
         if col >= line_len {
             // Stepping over the line ending.
-            let next = pos + 1;
-            return if self.inside_crlf(next) { next + 1 } else { next };
+            return pos + 1;
         }
         let line_start = buf.line_col_to_char(line, 0);
         let line_text: String = buf
@@ -479,8 +468,7 @@ impl Editor {
         let (line, col) = buf.char_to_line_col(pos);
         if col == 0 {
             // Stepping back over the previous line's ending.
-            let prev = pos - 1;
-            return if self.inside_crlf(prev) { prev - 1 } else { prev };
+            return pos - 1;
         }
         let line_start = buf.line_col_to_char(line, 0);
         let line_len = buf.line_len_chars(line);

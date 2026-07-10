@@ -2210,57 +2210,8 @@ fn snap_does_not_corrupt_preferred_column() {
     );
 }
 
-// === CRLF atomicity ===
-
-fn crlf_editor() -> Editor {
-    // "ab\r\ncd": chars are a(0) b(1) \r(2) \n(3) c(4) d(5)
-    Editor::new_with_text("ab\r\ncd")
-}
-
-#[test]
-fn forward_char_skips_over_crlf_pair() {
-    let mut editor = crlf_editor();
-    editor.pane_tree.focused_pane_mut().point = 2;
-    editor.execute(Command::ForwardChar);
-    assert_eq!(editor.point(), 4, "point must not land between \\r and \\n");
-}
-
-#[test]
-fn backward_char_skips_over_crlf_pair() {
-    let mut editor = crlf_editor();
-    editor.pane_tree.focused_pane_mut().point = 4;
-    editor.execute(Command::BackwardChar);
-    assert_eq!(editor.point(), 2);
-}
-
-#[test]
-fn delete_backward_removes_whole_crlf() {
-    let mut editor = crlf_editor();
-    editor.pane_tree.focused_pane_mut().point = 4;
-    editor.execute(Command::DeleteBackward);
-    assert_eq!(editor.buffer_text(), "abcd");
-    assert_eq!(editor.point(), 2);
-    editor.execute(Command::Undo);
-    assert_eq!(editor.buffer_text(), "ab\r\ncd");
-}
-
-#[test]
-fn delete_forward_removes_whole_crlf() {
-    let mut editor = crlf_editor();
-    editor.pane_tree.focused_pane_mut().point = 2;
-    editor.execute(Command::DeleteForward);
-    assert_eq!(editor.buffer_text(), "abcd");
-    assert_eq!(editor.point(), 2);
-}
-
-#[test]
-fn kill_line_at_eol_removes_whole_crlf() {
-    let mut editor = crlf_editor();
-    editor.pane_tree.focused_pane_mut().point = 2; // EOL of "ab"
-    editor.execute(Command::KillLine);
-    assert_eq!(editor.buffer_text(), "abcd");
-    assert_eq!(editor.clipboard, "\r\n");
-}
+// CRLF pairs cannot occur in a rope (the file boundary converts them to
+// LF), so no CRLF-atomicity handling exists in movement or deletion.
 
 // === Unicode line breaks (ropey's full break set) ===
 

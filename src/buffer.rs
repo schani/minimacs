@@ -285,11 +285,10 @@ impl Buffer {
 
     /// Snap a char position to the nearest grapheme-cluster boundary at or
     /// before it (emacs behavior). Identity for positions already on a
-    /// boundary; positions inside a line break (mid-CRLF) snap back to the
-    /// end of the line's text. Positions computed by column arithmetic
-    /// (line movement's column clamping, mouse-click mapping) must be
-    /// snapped so point never rests mid-cluster, where a backspace or
-    /// insert would split the cluster.
+    /// boundary. Positions computed by column arithmetic (line movement's
+    /// column clamping, mouse-click mapping) must be snapped so point
+    /// never rests mid-cluster, where a backspace or insert would split
+    /// the cluster.
     pub fn snap_to_grapheme_boundary(&self, pos: usize) -> usize {
         use unicode_segmentation::UnicodeSegmentation;
         let pos = pos.min(self.char_count());
@@ -297,8 +296,8 @@ impl Buffer {
         let line_len = self.line_len_chars(line);
         let line_start = self.line_col_to_char(line, 0);
         if col >= line_len {
-            // At the line's end (a boundary) or inside its line break
-            // (mid-CRLF): both resolve to the end of the line's text.
+            // At or past the line's end: resolve to the end of the
+            // line's text, before its line break.
             return line_start + line_len;
         }
         let line_text: String = self
@@ -584,15 +583,6 @@ mod tests {
             assert_eq!(buf.snap_to_grapheme_boundary(pos), 1, "pos {pos}");
         }
         assert_eq!(buf.snap_to_grapheme_boundary(6), 6);
-    }
-
-    #[test]
-    fn snap_to_grapheme_boundary_snaps_mid_crlf_before_break() {
-        // Position 2 sits between \r and \n; snap back to the line's end.
-        let buf = Buffer::from_str(0, "test", "a\r\nb");
-        assert_eq!(buf.snap_to_grapheme_boundary(2), 1);
-        assert_eq!(buf.snap_to_grapheme_boundary(1), 1);
-        assert_eq!(buf.snap_to_grapheme_boundary(3), 3);
     }
 
     #[test]
