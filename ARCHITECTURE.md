@@ -761,15 +761,19 @@ CRLF text cannot smuggle in raw `\r` chars.
 `C-s` / `C-r` starts an incremental search. The search state tracks:
 
 - The query string (built up character by character).
+- One contiguous snapshot of the buffer text, created when search starts.
 - The search direction (forward or backward).
 - The original point and scroll position (restored on `C-g`).
 - The current match position.
 
-As the user types, `isearch_update()` scans the buffer once and caches the
-char positions of all matches in `ISearchState::matches`, then jumps to the
-first match from the original position. `C-s`/`C-r` during search cycle to the
-next/previous match by walking the cached list — no rescan. Enter accepts the
-position. `C-g` restores the original position.
+Isearch owns input until it finishes, so the searched buffer cannot change;
+it flattens the Rope into `ISearchState::text_snapshot` once at startup rather
+than once per query edit. As the user types, `isearch_update()` scans that
+snapshot and caches the char positions of all matches in
+`ISearchState::matches`, then jumps to the first match from the original
+position. `C-s`/`C-r` during search cycle to the next/previous match by walking
+the cached list — no rescan. Enter accepts the position. `C-g` restores the
+original position.
 
 The prompt label is live, like emacs: it is recomputed from the search state
 (`isearch_sync_label`) after every query edit, cycle, and direction flip.

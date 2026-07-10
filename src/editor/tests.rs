@@ -1019,6 +1019,21 @@ fn isearch_forward_basic() {
 }
 
 #[test]
+fn isearch_snapshots_a_multi_chunk_buffer_once() {
+    let prefix = "λ".repeat(2_000);
+    let source = format!("{prefix} needle終");
+    let mut editor = Editor::new_with_text(&source);
+    assert!(editor.current_buffer().text.chunks().count() > 1);
+
+    editor.execute(Command::ISearchForward);
+    assert_eq!(editor.isearch.as_ref().unwrap().text_snapshot, source);
+
+    editor.isearch.as_mut().unwrap().query = "needle終".to_string();
+    editor.isearch_update();
+    assert_eq!(editor.point(), prefix.chars().count() + 1);
+}
+
+#[test]
 fn isearch_backward_basic() {
     let mut editor = Editor::new_with_text("hello world hello");
     // Start at end
