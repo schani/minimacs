@@ -380,9 +380,10 @@ fn input_edit_for_replace(
 }
 
 fn tree_sitter_point_at_char(text: &Rope, char_idx: usize) -> Point {
-    // Buffers loaded from disk and all normal editing paths use LF or CRLF,
-    // for which ropey's line index agrees with tree-sitter's point rows. The
-    // column is explicitly measured in UTF-8 bytes, not chars.
+    // With ropey pinned to `default-features = false`, only `\n` breaks
+    // lines — exactly tree-sitter's row semantics — so ropey's line index
+    // equals the Point row for arbitrary content. The column is
+    // explicitly measured in UTF-8 bytes, not chars.
     let row = text.char_to_line(char_idx);
     let line_start_char = text.line_to_char(row);
     let byte = text.char_to_byte(char_idx);
@@ -623,6 +624,20 @@ mod tests {
         assert_eq!(edit.start_point, tree_house::tree_sitter::Point { row: 0, col: 2 });
         assert_eq!(edit.old_end_point, tree_house::tree_sitter::Point { row: 0, col: 4 });
         assert_eq!(edit.new_end_point, tree_house::tree_sitter::Point { row: 1, col: 2 });
+    }
+
+    #[test]
+    fn input_edit_points_ignore_ex_line_break_chars() {
+        // Chars that were ropey line breaks under `unicode_lines` (LS,
+        // lone CR, FF) are content: they must not advance the
+        // tree-sitter row — only \n does. Chars: a LS b \r c \n d FF e;
+        // 'e' (char 8) is row 1, byte-col 2 (LS is 3 bytes, FF is 1).
+        let text = Rope::from_str("a\u{2028}b\rc\nd\u{0c}e");
+        let edit = input_edit_for_replace(&text, 8, 9, "x");
+
+        assert_eq!(edit.start_byte, 10);
+        assert_eq!(edit.start_point, tree_house::tree_sitter::Point { row: 1, col: 2 });
+        assert_eq!(edit.old_end_point, tree_house::tree_sitter::Point { row: 1, col: 3 });
     }
 
     #[test]

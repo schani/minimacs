@@ -227,9 +227,11 @@ const PLAIN_REPLACEMENTS: &[&str] = &[
     "fn f() {}",
 ];
 
-/// Adversarial edits: unusual line breaks, multi-byte and combining
-/// characters, and tokens that flip parse structure (fences, unbalanced
-/// quotes and comment delimiters).
+/// Adversarial edits: CR/CRLF fragments and ex-line-break chars (content,
+/// not breaks, since ropey is LF-only — inserting them stresses exactly
+/// the chars whose meaning the LF-only decision changed), multi-byte and
+/// combining characters, and tokens that flip parse structure (fences,
+/// unbalanced quotes and comment delimiters).
 const ADVERSE_REPLACEMENTS: &[&str] = &[
     "\r\n",
     "\r",
@@ -286,7 +288,10 @@ fn template_for(language: Language) -> &'static str {
 }
 
 /// Initial buffer contents: the language template, in CRLF form for half
-/// the draws so edits can split CRLF pairs into lone carriage returns.
+/// the draws. A real load would strip the \r (the rope is LF-only), so
+/// the CRLF variant deliberately goes below the file boundary: the \r
+/// chars are inline content the grammars must cope with, and edits can
+/// split the pairs into lone carriage returns.
 fn initial_source(language: Language, rng: &mut Rng) -> String {
     let template = template_for(language);
     if rng.chance(2) {
