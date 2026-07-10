@@ -108,7 +108,7 @@ Plan, in order (tests first for each step):
       input; the poison flag remains useful as the fallback for the
       synchronous path.
 
-- [ ] Wire `syntax-fuzz` (and a small `syntax-bench --lines 500 --edits 50`
+- [x] Wire `syntax-fuzz` (and a small `syntax-bench --lines 500 --edits 50`
       checksum run) into CI as a smoke check: e.g.
       `syntax-fuzz --runs 2 --steps 120` on the default languages, treating
       exit code 1 as failure. Known limitation to document: on heavily
@@ -117,6 +117,12 @@ Plan, in order (tests first for each step):
       upstream with the raw-tree probe), so CI should run with modest step
       counts where the default languages are clean, and bumps to the pinned
       grammar/tree-house versions should re-run the deep sweep.
+      (Done: `.github/workflows/ci.yml` runs on PRs and pushes to `main`; a
+      `syntax-smoke` job runs `syntax-fuzz --runs 2 --steps 120` and
+      `syntax-bench --lines 500 --edits 50` in release mode, with the
+      modest-step-count rationale documented in the workflow and README.
+      The main `test` job mirrors the pre-commit hook: build,
+      `cargo llvm-cov --fail-under-lines 90`, `clippy -D warnings`.)
 - [ ] Track the tree-sitter-md external-scanner overflow: the fuzz harness's
       raw probe segfaulted inside `tree_sitter_markdown_external_scanner_serialize`
       (memmove past the serialization buffer) during an incremental parse
