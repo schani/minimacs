@@ -22,6 +22,10 @@ pub enum RecenterPosition {
     Bottom,
 }
 
+fn is_word_char(ch: char) -> bool {
+    ch.is_alphanumeric() || ch == '_'
+}
+
 /// The editor's connection to the OS clipboard. One instance lives for the
 /// editor's lifetime: on X11 the selection is owned by the process that set
 /// it, and dropping the arboard handle right after a kill (as a per-call
@@ -506,23 +510,13 @@ impl Editor {
 
     fn forward_word(&mut self) {
         let buf = self.active_buffer();
-        let len = buf.char_count();
         let mut pos = self.active_pane().point;
+        let mut chars = buf.text.chars_at(pos).peekable();
 
-        // Skip non-word characters
-        while pos < len {
-            let ch = buf.text.char(pos);
-            if ch.is_alphanumeric() || ch == '_' {
-                break;
-            }
+        while chars.next_if(|ch| !is_word_char(*ch)).is_some() {
             pos += 1;
         }
-        // Skip word characters
-        while pos < len {
-            let ch = buf.text.char(pos);
-            if !ch.is_alphanumeric() && ch != '_' {
-                break;
-            }
+        while chars.next_if(|ch| is_word_char(*ch)).is_some() {
             pos += 1;
         }
 
@@ -534,21 +528,12 @@ impl Editor {
     fn backward_word(&mut self) {
         let buf = self.active_buffer();
         let mut pos = self.active_pane().point;
+        let mut chars = buf.text.chars_at(pos).reversed().peekable();
 
-        // Skip non-word characters backward
-        while pos > 0 {
-            let ch = buf.text.char(pos - 1);
-            if ch.is_alphanumeric() || ch == '_' {
-                break;
-            }
+        while chars.next_if(|ch| !is_word_char(*ch)).is_some() {
             pos -= 1;
         }
-        // Skip word characters backward
-        while pos > 0 {
-            let ch = buf.text.char(pos - 1);
-            if !ch.is_alphanumeric() && ch != '_' {
-                break;
-            }
+        while chars.next_if(|ch| is_word_char(*ch)).is_some() {
             pos -= 1;
         }
 
@@ -564,20 +549,12 @@ impl Editor {
             return;
         }
 
-        // Find the word boundary (same logic as backward_word)
         let mut pos = start;
-        while pos > 0 {
-            let ch = buf.text.char(pos - 1);
-            if ch.is_alphanumeric() || ch == '_' {
-                break;
-            }
+        let mut chars = buf.text.chars_at(pos).reversed().peekable();
+        while chars.next_if(|ch| !is_word_char(*ch)).is_some() {
             pos -= 1;
         }
-        while pos > 0 {
-            let ch = buf.text.char(pos - 1);
-            if !ch.is_alphanumeric() && ch != '_' {
-                break;
-            }
+        while chars.next_if(|ch| is_word_char(*ch)).is_some() {
             pos -= 1;
         }
 
@@ -791,8 +768,7 @@ impl Editor {
         let line_start = buf.line_col_to_char(line, 0);
         let line_len = buf.line_len_chars(line);
         let mut indent = String::new();
-        for i in 0..line_len {
-            let ch = buf.text.char(line_start + i);
+        for ch in buf.text.chars_at(line_start).take(line_len) {
             if ch == ' ' {
                 indent.push(' ');
             } else if ch == '\t' {
@@ -825,14 +801,12 @@ impl Editor {
 
         // Get current leading whitespace
         let line_len = buf.line_len_chars(line);
-        let mut ws_len = 0;
-        for i in 0..line_len {
-            if buf.text.char(line_start + i) == ' ' {
-                ws_len += 1;
-            } else {
-                break;
-            }
-        }
+        let ws_len = buf
+            .text
+            .chars_at(line_start)
+            .take(line_len)
+            .take_while(|ch| *ch == ' ')
+            .count();
         let old_ws: String = " ".repeat(ws_len);
         let new_ws = format!("{}{}", " ".repeat(INDENT_WIDTH), old_ws);
 
@@ -853,35 +827,20 @@ impl Editor {
         let (line, _) = buf.char_to_line_col(self.active_pane().point);
         let line_start = buf.line_col_to_char(line, 0);
 
-        // Count leading spaces (up to INDENT_WIDTH)
         let line_len = buf.line_len_chars(line);
-        let mut remove_count = 0;
-        for i in 0..line_len.min(INDENT_WIDTH) {
-            if buf.text.char(line_start + i) == ' ' {
-                remove_count += 1;
-            } else {
-                break;
-            }
-        }
+        let remaining_ws_len = buf
+            .text
+            .chars_at(line_start)
+            .take(line_len)
+            .take_while(|ch| *ch == ' ')
+            .count();
+        let remove_count = remaining_ws_len.min(INDENT_WIDTH);
 
         if remove_count == 0 {
             return;
         }
 
         // We remove these spaces, so new whitespace is empty for those chars
-        let remaining_ws_len = {
-            let buf = self.active_buffer();
-            let line_len = buf.line_len_chars(line);
-            let mut total = 0;
-            for i in 0..line_len {
-                if buf.text.char(line_start + i) == ' ' {
-                    total += 1;
-                } else {
-                    break;
-                }
-            }
-            total
-        };
         let new_ws: String = " ".repeat(remaining_ws_len - remove_count);
 
         let old_point = self.active_pane().point;

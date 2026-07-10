@@ -1,4 +1,3 @@
-use crate::buffer::Buffer;
 use crate::minibuffer::PromptKind;
 
 use super::Editor;
@@ -14,6 +13,9 @@ pub enum SearchDirection {
 #[derive(Debug)]
 pub struct ISearchState {
     pub query: String,
+    /// Contiguous snapshot made once when search starts. Isearch owns input
+    /// until it finishes, so the searched buffer cannot change underneath it.
+    pub text_snapshot: String,
     pub direction: SearchDirection,
     /// Position before search started (to restore on C-g).
     pub original_point: usize,
@@ -48,12 +50,17 @@ impl Editor {
             return;
         }
         let pane = self.pane_tree.focused_pane();
+        let original_point = pane.point;
+        let original_scroll_top = pane.scroll_top;
+        let original_scroll_row_offset = pane.scroll_row_offset;
+        let text_snapshot = self.current_buffer().text.to_string();
         self.isearch = Some(ISearchState {
             query: String::new(),
+            text_snapshot,
             direction,
-            original_point: pane.point,
-            original_scroll_top: pane.scroll_top,
-            original_scroll_row_offset: pane.scroll_row_offset,
+            original_point,
+            original_scroll_top,
+            original_scroll_row_offset,
             current_match: None,
             matches: Vec::new(),
             failing: false,
@@ -74,13 +81,12 @@ impl Editor {
         }
     }
 
-    /// Find the char positions of all occurrences of `query` in the buffer.
-    /// One O(buffer) scan; called only when the search query changes.
-    fn compute_matches_for_query(buf: &Buffer, query: &str) -> Vec<usize> {
+    /// Find the char positions of all occurrences of `query` in the search
+    /// snapshot. One O(buffer) scan; called only when the query changes.
+    fn compute_matches_for_query(text: &str, query: &str) -> Vec<usize> {
         if query.is_empty() {
             return Vec::new();
         }
-        let text: String = buf.text.chars().collect();
         let mut matches = Vec::new();
         let mut search_start = 0usize; // byte offset
         let mut char_offset = 0usize;
@@ -153,7 +159,10 @@ impl Editor {
             return;
         }
 
-        let matches = Self::compute_matches_for_query(self.current_buffer(), &query);
+        let matches = Self::compute_matches_for_query(
+            &self.isearch.as_ref().unwrap().text_snapshot,
+            &query,
+        );
         let query_len = query.chars().count();
         let found = match direction {
             SearchDirection::Forward => {

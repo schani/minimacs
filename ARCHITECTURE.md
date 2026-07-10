@@ -188,9 +188,11 @@ The single line-break authority is `buffer::line_break_len_chars(line)` —
 the renderer's line extraction (display, wrapping, mouse mapping, syntax
 styling), and kill-line's at-EOL break removal all use it.
 
-Saving is atomic: `Buffer::save()` writes to a temp file in the target's
-directory, copies the target's permissions, fsyncs, and renames over the
-target, so a crash or full disk mid-write cannot destroy the existing file.
+Saving is atomic: `Buffer::save()` streams the rope's chunks directly to a
+temp file in the target's directory (transcoding LF to CRLF chunk-by-chunk
+when needed), copies the target's permissions, fsyncs, and renames over the
+target. No contiguous whole-buffer `String` is allocated, and a crash or full
+disk mid-write cannot destroy the existing file.
 The bytes land on the *physical* file behind the buffer's *logical* path:
 `save_as` resolves symlink chains at write time (`resolve_write_target`,
 including dangling links — writing through `foo -> missing` creates
@@ -487,6 +489,8 @@ does not cancel a chord in progress.
    - Splits the pane rect into a text area and a 1-row mode line.
    - For each visible line: if syntax state exists, computes per-character
      styles from tree-sitter highlight spans; otherwise uses default style.
+     Visual-width and style scans iterate the line's `RopeSlice` directly,
+     without first collecting it into a temporary `Vec` or `String`.
    - Each line is expanded into `VisualCell`s, one per terminal column:
      literal tabs expand to spaces ending at the next `INDENT_WIDTH` tab stop;
      double-width chars (CJK, emoji) contribute their cell plus an empty
@@ -757,15 +761,19 @@ CRLF text cannot smuggle in raw `\r` chars.
 `C-s` / `C-r` starts an incremental search. The search state tracks:
 
 - The query string (built up character by character).
+- One contiguous snapshot of the buffer text, created when search starts.
 - The search direction (forward or backward).
 - The original point and scroll position (restored on `C-g`).
 - The current match position.
 
-As the user types, `isearch_update()` scans the buffer once and caches the
-char positions of all matches in `ISearchState::matches`, then jumps to the
-first match from the original position. `C-s`/`C-r` during search cycle to the
-next/previous match by walking the cached list — no rescan. Enter accepts the
-position. `C-g` restores the original position.
+Isearch owns input until it finishes, so the searched buffer cannot change;
+it flattens the Rope into `ISearchState::text_snapshot` once at startup rather
+than once per query edit. As the user types, `isearch_update()` scans that
+snapshot and caches the char positions of all matches in
+`ISearchState::matches`, then jumps to the first match from the original
+position. `C-s`/`C-r` during search cycle to the next/previous match by walking
+the cached list — no rescan. Enter accepts the position. `C-g` restores the
+original position.
 
 The prompt label is live, like emacs: it is recomputed from the search state
 (`isearch_sync_label`) after every query edit, cycle, and direction flip.
