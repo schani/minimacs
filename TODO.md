@@ -1,3 +1,65 @@
+- [ ] `M-<` and `M->` don't work with the "option" key on macOS/cmux. They do work with "ESC", but they should also work with "option"
+
+# Parse-failure handling (from PR review, 2026-07-09)
+
+Problem: when `SyntaxState::ensure_syntax` fails — most plausibly by hitting
+`PARSE_TIMEOUT` (2s) on a pathological or very large file — nothing is cached,
+so every subsequent render retries the full parse: up to 2 seconds of
+synchronous stall per frame, forever, on exactly the files where the parser
+struggles. A repeatedly failing `Syntax::update` has the same shape (each
+failure drops the tree; the next render re-runs a full 2s-capped parse).
+
+Plan, in order (tests first for each step):
+
+- [ ] Make the parse timeout injectable for tests (e.g. a
+      `SyntaxState::with_timeout(lang, Duration)` constructor used by tests;
+      `new()` keeps `PARSE_TIMEOUT`). With `Duration::ZERO`, assert the
+      failure path: `highlight_rope` returns unstyled spans and does not
+      panic. This is pure test plumbing — no behavior change.
+- [ ] Poison the failed generation: on `ensure_syntax` failure, record the
+      requested `version` in a `failed_version: Cell<Option<usize>>`. While
+      `failed_version == Some(version)`, `highlight_rope` returns empty spans
+      without attempting to parse. An edit bumps the generation and clears the
+      poison, so retries happen at most once per edit — never per frame.
+      Tests: with a zero timeout, the parse is attempted exactly once per
+      generation (extend the existing `#[cfg(test)]` parse counters); cursor
+      movement and idle frames after a failure do not stall.
+- [ ] Give up after N consecutive failed generations (suggest N=3): set a
+      permanent `disabled` flag, show "syntax highlighting disabled (parse
+      timeout)" in the echo area once, and stop retrying entirely.
+      `redetect_syntax` (used by save-as) resets the flag, giving users an
+      explicit re-enable path. Tests: N failing edits disable it; the message
+      appears once; redetect re-arms.
+- [ ] Reconsider `PARSE_TIMEOUT`: 2s is far beyond an acceptable frame stall.
+      With the poison flag the retry storm is gone, but a single 2s stall per
+      edit on a pathological file is still bad. Suggest 500ms for the initial
+      parse and keeping `Syntax::update` at 500ms too; measure on the
+      syntax-bench 100k-line workload before choosing. Document the choice in
+      ARCHITECTURE.md.
+- [ ] (Future, complementary — already sketched in FUTURE.md) Move parsing to
+      a background thread so even the first parse of a huge file never blocks
+      input; the poison flag remains useful as the fallback for the
+      synchronous path.
+
+- [ ] Wire `syntax-fuzz` (and a small `syntax-bench --lines 500 --edits 50`
+      checksum run) into CI as a smoke check: e.g.
+      `syntax-fuzz --runs 2 --steps 120` on the default languages, treating
+      exit code 1 as failure. Known limitation to document: on heavily
+      corrupted buffers tree-sitter's incremental error recovery can
+      transiently produce different trees than a fresh parse (verified
+      upstream with the raw-tree probe), so CI should run with modest step
+      counts where the default languages are clean, and bumps to the pinned
+      grammar/tree-house versions should re-run the deep sweep.
+- [ ] Track the tree-sitter-md external-scanner overflow: the fuzz harness's
+      raw probe segfaulted inside `tree_sitter_markdown_external_scanner_serialize`
+      (memmove past the serialization buffer) during an incremental parse
+      from a stale tree with deeply nested block state. minimacs parses the
+      same grammar incrementally through tree-house, so the crash class is
+      reachable in the editor in principle (not reproduced through tree-house
+      in 16x500-step fuzz runs). Watch upstream tree-sitter-md for a scanner
+      fix and bump the pinned version; re-run `syntax-fuzz --lang markdown
+      --raw` afterwards to confirm.
+
 - [x] When switching buffers with `C-x b`, when the user just presses enter without picking a buffer, switch to the buffer that was last visited in that window.
 - [x] When switching to a buffer, point needs to go to where it was the last time the buffer was visited in that window.
 - [x] Find-file should start at the directory of the current buffer, not from where minimacs was started.
