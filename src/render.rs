@@ -226,18 +226,22 @@ fn tab_width_at(visual_col: usize) -> usize {
     INDENT_WIDTH - (visual_col % INDENT_WIDTH)
 }
 
+fn advance_visual_col(visual_col: usize, ch: char) -> usize {
+    if ch == '\t' {
+        visual_col + tab_width_at(visual_col)
+    } else {
+        visual_col + char_width(ch)
+    }
+}
+
 fn visual_width_for_chars(line_chars: &[char]) -> usize {
-    line_chars.iter().fold(0, |visual_col, ch| {
-        if *ch == '\t' {
-            visual_col + tab_width_at(visual_col)
-        } else {
-            visual_col + char_width(*ch)
-        }
-    })
+    line_chars.iter().copied().fold(0, advance_visual_col)
 }
 
 pub(crate) fn line_visual_width(buf: &Buffer, line_idx: usize) -> usize {
-    visual_width_for_chars(&line_chars_without_ending(buf, line_idx))
+    let line = buf.text.line(line_idx);
+    let keep = line.len_chars() - crate::buffer::line_break_len_chars(line);
+    line.chars().take(keep).fold(0, advance_visual_col)
 }
 
 fn visual_col_for_buffer_col(line_chars: &[char], buffer_col: usize) -> usize {
@@ -632,10 +636,9 @@ fn compute_syntax_char_styles(
         let line_byte_start = buf.text.line_to_byte(line_idx) - first_visible_byte;
         let line = buf.text.line(line_idx);
         let keep = line.len_chars() - crate::buffer::line_break_len_chars(line);
-        let line_text: String = line.chars().take(keep).collect();
 
         let mut byte_offset = line_byte_start;
-        for (col, ch) in line_text.chars().enumerate() {
+        for (col, ch) in line.chars().take(keep).enumerate() {
             let style = byte_styles.get(byte_offset).copied().unwrap_or_default();
             if style != Style::default() {
                 result.insert((line_idx, col), style);
@@ -1012,6 +1015,14 @@ mod tests {
     fn visual_width_counts_combining_marks_as_zero() {
         let chars: Vec<char> = "ae\u{301}b".chars().collect();
         assert_eq!(visual_width_for_chars(&chars), 3);
+    }
+
+    #[test]
+    fn line_visual_width_crosses_rope_chunks() {
+        let prefix = "a".repeat(2_000);
+        let buf = Buffer::from_str(0, "test", &format!("{prefix}\t你e\u{301}\n"));
+        assert!(buf.text.line(0).chunks().count() > 1);
+        assert_eq!(line_visual_width(&buf, 0), 2_000 + 4 + 2 + 1);
     }
 
     #[test]

@@ -489,6 +489,8 @@ does not cancel a chord in progress.
    - Splits the pane rect into a text area and a 1-row mode line.
    - For each visible line: if syntax state exists, computes per-character
      styles from tree-sitter highlight spans; otherwise uses default style.
+     Visual-width and style scans iterate the line's `RopeSlice` directly,
+     without first collecting it into a temporary `Vec` or `String`.
    - Each line is expanded into `VisualCell`s, one per terminal column:
      literal tabs expand to spaces ending at the next `INDENT_WIDTH` tab stop;
      double-width chars (CJK, emoji) contribute their cell plus an empty
