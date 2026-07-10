@@ -1,5 +1,67 @@
 - [ ] `M-<` and `M->` don't work with the "option" key on macOS/cmux. They do work with "ESC", but they should also work with "option"
 
+# LF-only line endings (product decision, 2026-07-10)
+
+**Decision:** minimacs only needs to support LF line endings correctly.
+In-memory text (the rope) is invariantly LF-only: CRLF is a *file encoding*
+handled at the load/save boundary (detected at load and converted to LF;
+converted back on save when the buffer's `LineEnding` is CrLf — the emacs
+model). Ropey's `unicode_lines` extras (lone CR, VT, FF, NEL, LS, PS) are
+**not** line breaks; they are ordinary characters. Consequences accepted:
+mixed-line-ending files are normalized to one ending on save; a lone `\r`
+(mac-classic files) is not a line break and renders as an ordinary char.
+Payoffs: ropey pinned to `default-features = false` (like Helix), ropey
+line rows become *exactly* tree-sitter Point rows for arbitrary content
+(the incremental-parsing row caveat disappears), and CRLF special-casing
+in movement/rendering/paste is deleted.
+
+Plan, in order (tests first for each step; one commit per step):
+
+- [ ] Normalize at the file boundary. Tests first: loading a CRLF file
+      yields a rope containing no `\r\n` with `line_ending == CrLf`; save
+      writes CRLF back; pure-LF and pure-CRLF files round-trip
+      byte-identical; a mixed-endings file loads LF-only and saves
+      uniformly (intended normalization); the revert/external-reload path
+      normalizes too (verify all file reads share `Buffer::from_file`).
+      Implementation: `from_file` does `content.replace("\r\n", "\n")`
+      after detection; `save_as` converts `\n` → `\r\n` for CrLf buffers
+      at write time (lone `\r` content is left untouched in both
+      directions). Ropey stays on default features in this step.
+- [ ] Simplify editing on the LF-only invariant. `insert_text`'s paste
+      conversion to the buffer ending goes away (unify to `\n` only,
+      editor.rs:1253-1264); RET always inserts `\n`; delete `inside_crlf`
+      and CRLF-pair atomicity in `next/prev_grapheme_boundary`
+      (editor.rs:429-454); drop CRLF from the direct-insertion test
+      matrices (buffer.rs:528, render.rs:1040) — CRLF can no longer occur
+      in a rope. `line_break_len_chars` keeps its CRLF arm until the next
+      step only if any test still constructs one directly; otherwise
+      simplify here.
+- [ ] Flip ropey to `default-features = false, features = ["simd"]`.
+      Tests first: rewrite the ~15 unicode-line-break tests to assert the
+      *new* behavior — lone CR / VT / FF / NEL / LS / PS are ordinary
+      content: one ropey line, `C-e` moves past them, `C-k` kills through
+      them, rendering and mouse mapping treat them as width-bearing chars.
+      Then: `is_line_break_char` reduces to `\n`; `line_break_len_chars`
+      becomes a trailing-`\n` check (0 or 1); simplify its consumers
+      (`line_len_chars`, renderer line extraction, kill-line).
+- [ ] Verify and document exact tree-sitter row agreement: with LF-only
+      ropey, `tree_sitter_point_at_char`'s rows equal tree-sitter Point
+      rows for *arbitrary* content — update its comment, and drop the
+      benign-divergence caveats from ARCHITECTURE.md and the fuzz-harness
+      notes. Run `syntax-fuzz` (default sweep + a deep
+      `--runs 16 --steps 500` pass) — the adverse alphabet (lone CR,
+      U+2028/2029, FF, CRLF fragments) stays: those chars are exactly the
+      ones that changed meaning, now stressing the content-not-break
+      paths. Add a fuzz oracle assertion if cheap: rope `len_lines` - 1
+      == count of `\n`.
+- [ ] Docs sweep: rewrite ARCHITECTURE.md's line-break paragraph (Buffer
+      section), the grapheme-cluster CRLF-atomicity mention, and the
+      paste-normalization paragraph to describe the LF-only invariant;
+      check README/FUTURE for stale mentions. Decide/verify how
+      now-inline control chars (`\r`, FF, VT) render — passing them raw
+      to the terminal is acceptable per the decision, but note it as a
+      known limitation.
+
 # Parse-failure handling (from PR review, 2026-07-09)
 
 Problem: when `SyntaxState::ensure_syntax` fails — most plausibly by hitting

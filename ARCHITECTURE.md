@@ -178,6 +178,20 @@ styling), and kill-line's at-EOL break removal all use it, so movement
 lines. This is display/movement only — `LineEnding` (what `RET` inserts and
 paste normalizes to) remains LF-vs-CRLF.
 
+**Decision (2026-07-10): LF-only line endings.** Only LF needs to be
+supported correctly. The target state (migration plan in TODO.md) is an
+LF-only rope invariant: CRLF becomes a file *encoding* converted to LF at
+load and back at save (`LineEnding` survives as the save-time choice), and
+ropey's `unicode_lines` extras stop being line breaks — ropey gets pinned
+to `default-features = false` (as Helix does). This deletes the CRLF
+special cases in movement/paste/grapheme stepping, shrinks
+`line_break_len_chars` to a trailing-`\n` check, and makes ropey line rows
+exactly equal tree-sitter Point rows for arbitrary content, removing the
+row-divergence caveat in the incremental-parsing path. Accepted tradeoffs:
+mixed-ending files are normalized on save; lone `\r` (mac-classic) is
+ordinary content, not a line break. The paragraph above describes the
+pre-migration behavior and gets rewritten as the plan lands.
+
 Saving is atomic: `Buffer::save()` writes to a temp file in the target's
 directory, copies the target's permissions, fsyncs, and renames over the
 target, so a crash or full disk mid-write cannot destroy the existing file.
