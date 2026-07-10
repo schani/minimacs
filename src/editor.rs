@@ -797,7 +797,6 @@ impl Editor {
     fn insert_newline(&mut self) {
         let pos = self.active_pane().point;
         let buf = self.active_buffer();
-        let le = buf.line_ending.as_str().to_string();
 
         // Get current line's leading whitespace (spaces only)
         let (line, _) = buf.char_to_line_col(pos);
@@ -819,7 +818,8 @@ impl Editor {
             }
         }
 
-        let insert_str = format!("{le}{indent}");
+        // The rope is LF-only; `LineEnding` only matters at save time.
+        let insert_str = format!("\n{indent}");
         self.apply_edit(pos, pos, &insert_str, EditRecord::Insert);
         let pane = self.active_pane_mut();
         pane.point = pos + insert_str.chars().count();
@@ -1249,20 +1249,16 @@ impl Editor {
     }
 
     /// Normalize text about to be pasted. The minibuffer is single-line, so
-    /// every line-break form becomes a space. Buffers get the breaks
-    /// converted to their own line ending (`Buffer::line_ending`, detected
-    /// at load and `Lf` for new buffers), so pasting CRLF text into an LF
-    /// file cannot smuggle in raw `\r` chars — which would render invisibly
-    /// and mix line endings.
+    /// every line-break form becomes a space. Buffers get every break form
+    /// unified to `\n` — the rope is LF-only regardless of the buffer's
+    /// save-time `LineEnding` — so pasting CRLF text cannot smuggle in raw
+    /// `\r` chars, which would render invisibly.
     pub(crate) fn normalized_paste(&self, text: &str) -> String {
         let unified = text.replace("\r\n", "\n").replace('\r', "\n");
         if self.minibuffer.is_active() {
             unified.replace('\n', " ")
         } else {
-            match self.active_buffer().line_ending {
-                crate::buffer::LineEnding::Lf => unified,
-                crate::buffer::LineEnding::CrLf => unified.replace('\n', "\r\n"),
-            }
+            unified
         }
     }
 

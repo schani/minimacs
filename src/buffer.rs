@@ -1,5 +1,6 @@
 use anyhow::{bail, Result};
 use ropey::{Rope, RopeSlice};
+use std::borrow::Cow;
 use std::fs;
 use std::path::{Path, PathBuf};
 use tree_house::tree_sitter::{InputEdit, Point};
@@ -9,19 +10,12 @@ use crate::syntax::{self, SyntaxState};
 
 pub type BufferId = usize;
 
+/// The file's on-disk line-break encoding, detected at load and applied
+/// at save. In-memory text is always LF-only regardless of this value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LineEnding {
     Lf,
     CrLf,
-}
-
-impl LineEnding {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            LineEnding::Lf => "\n",
-            LineEnding::CrLf => "\r\n",
-        }
-    }
 }
 
 /// True for chars ropey treats as line breaks (with its default
@@ -135,11 +129,13 @@ impl Buffer {
             Err(_) => bail!("File is not valid UTF-8: {}", path.display()),
         };
 
-        // Detect line ending
-        let line_ending = if content.contains("\r\n") {
-            LineEnding::CrLf
+        // Detect line ending. The rope is invariantly LF-only: CRLF is a
+        // file *encoding*, stripped here and reproduced by `save_as`.
+        // A lone \r is not a line ending and passes through as content.
+        let (line_ending, content) = if content.contains("\r\n") {
+            (LineEnding::CrLf, Cow::Owned(content.replace("\r\n", "\n")))
         } else {
-            LineEnding::Lf
+            (LineEnding::Lf, Cow::Borrowed(content))
         };
 
         let name = path
@@ -153,7 +149,7 @@ impl Buffer {
 
         Ok(Self {
             id,
-            text: Rope::from_str(content),
+            text: Rope::from_str(&content),
             path: Some(path.to_path_buf()),
             name,
             modified: false,
@@ -187,7 +183,14 @@ impl Buffer {
     pub fn save_as(&mut self, path: &Path) -> Result<()> {
         use std::io::Write;
 
-        let content: String = self.text.to_string();
+        // The rope is LF-only (see `from_file`); a CrLf buffer gets its
+        // line ending re-applied at write time. Only \n chars are
+        // rewritten, so a content \r is untouched — even one directly
+        // before a \n, which loads from and saves back to "\r\r\n".
+        let content: String = match self.line_ending {
+            LineEnding::Lf => self.text.to_string(),
+            LineEnding::CrLf => self.text.to_string().replace('\n', "\r\n"),
+        };
         let physical = resolve_write_target(path)?;
 
         if has_other_hard_links(&physical) {
@@ -1033,6 +1036,80 @@ mod tests {
         fs::write(&file, "hello\r\nworld\r\n").unwrap();
         let buf = Buffer::from_file(0, &file).unwrap();
         assert_eq!(buf.line_ending, LineEnding::CrLf);
+    }
+
+    #[test]
+    fn crlf_file_loads_lf_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("crlf.txt");
+        fs::write(&file, "hello\r\nworld\r\n").unwrap();
+        let buf = Buffer::from_file(0, &file).unwrap();
+        assert_eq!(buf.line_ending, LineEnding::CrLf);
+        assert_eq!(buf.text.to_string(), "hello\nworld\n");
+        assert!(!buf.modified, "load-time conversion is not an edit");
+    }
+
+    #[test]
+    fn crlf_file_round_trips_byte_identical() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("crlf.txt");
+        fs::write(&file, "hello\r\nworld\r\n").unwrap();
+        let mut buf = Buffer::from_file(0, &file).unwrap();
+        buf.save().unwrap();
+        assert_eq!(fs::read_to_string(&file).unwrap(), "hello\r\nworld\r\n");
+    }
+
+    #[test]
+    fn edited_crlf_buffer_saves_crlf() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("crlf.txt");
+        fs::write(&file, "hello\r\nworld\r\n").unwrap();
+        let mut buf = Buffer::from_file(0, &file).unwrap();
+        // Positions are in the LF-only rope: "hello\nworld\n".
+        buf.replace(5, 5, " there");
+        buf.replace(17, 17, "\nmore");
+        buf.save().unwrap();
+        assert_eq!(
+            fs::read_to_string(&file).unwrap(),
+            "hello there\r\nworld\r\nmore\r\n"
+        );
+    }
+
+    #[test]
+    fn mixed_endings_normalize_on_save() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("mixed.txt");
+        fs::write(&file, "a\r\nb\nc\r\n").unwrap();
+        let mut buf = Buffer::from_file(0, &file).unwrap();
+        assert_eq!(buf.line_ending, LineEnding::CrLf);
+        assert_eq!(buf.text.to_string(), "a\nb\nc\n");
+        buf.save().unwrap();
+        // Intended normalization: mixed files save with one uniform ending.
+        assert_eq!(fs::read_to_string(&file).unwrap(), "a\r\nb\r\nc\r\n");
+    }
+
+    #[test]
+    fn lone_cr_is_content_and_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // In an LF file, a lone \r is left untouched in both directions.
+        let lf = dir.path().join("lf.txt");
+        fs::write(&lf, "a\rb\nc\n").unwrap();
+        let mut buf = Buffer::from_file(0, &lf).unwrap();
+        assert_eq!(buf.line_ending, LineEnding::Lf);
+        assert_eq!(buf.text.to_string(), "a\rb\nc\n");
+        buf.save().unwrap();
+        assert_eq!(fs::read_to_string(&lf).unwrap(), "a\rb\nc\n");
+
+        // In a CRLF file, only the \r of a \r\n pair is an encoding
+        // artifact; a lone \r survives load and save unchanged.
+        let crlf = dir.path().join("crlf.txt");
+        fs::write(&crlf, "a\rb\r\nc\r\n").unwrap();
+        let mut buf = Buffer::from_file(0, &crlf).unwrap();
+        assert_eq!(buf.line_ending, LineEnding::CrLf);
+        assert_eq!(buf.text.to_string(), "a\rb\nc\n");
+        buf.save().unwrap();
+        assert_eq!(fs::read_to_string(&crlf).unwrap(), "a\rb\r\nc\r\n");
     }
 
     #[test]

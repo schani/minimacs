@@ -444,14 +444,25 @@ fn paste_converts_lone_cr_to_buffer_ending() {
 }
 
 #[test]
-fn paste_converts_lf_to_crlf_buffer_ending() {
+fn paste_stays_lf_in_crlf_buffer() {
+    // The rope is LF-only regardless of the buffer's save-time line
+    // ending; CRLF is produced at save, never stored.
     let mut editor = Editor::new();
     editor.current_buffer_mut().line_ending = crate::buffer::LineEnding::CrLf;
-    editor.clipboard = "a\nb".to_string();
+    editor.clipboard = "a\r\nb".to_string();
     editor.execute(Command::Paste);
-    assert_eq!(editor.buffer_text(), "a\r\nb");
-    // Point must land after the converted text, not the original.
-    assert_eq!(editor.point(), 4);
+    assert_eq!(editor.buffer_text(), "a\nb");
+    assert_eq!(editor.point(), 3);
+}
+
+#[test]
+fn insert_newline_inserts_lf_in_crlf_buffer() {
+    let mut editor = Editor::new_with_text("ab");
+    editor.current_buffer_mut().line_ending = crate::buffer::LineEnding::CrLf;
+    editor.pane_tree.focused_pane_mut().point = 1;
+    editor.execute(Command::InsertNewline);
+    assert_eq!(editor.buffer_text(), "a\nb");
+    assert_eq!(editor.point(), 2);
 }
 
 #[test]
