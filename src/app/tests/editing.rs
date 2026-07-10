@@ -25,6 +25,32 @@ fn navigation_with_ctrl_keys() {
 }
 
 #[test]
+fn meta_angle_brackets_move_to_buffer_ends_in_kitty_form() {
+    // Option-as-meta under the kitty keyboard protocol without alternate-key
+    // reporting delivers M-> as the base key '.' with ALT|SHIFT (and M-< as
+    // ',' with ALT|SHIFT), not as the shifted character.
+    let alt_shift = |c: char| {
+        Event::Key(KeyEvent::new(
+            KeyCode::Char(c),
+            KeyModifiers::ALT | KeyModifiers::SHIFT,
+        ))
+    };
+    let (mut app, mut events) =
+        test_app_with_text(40, 10, "hello\nworld", vec![alt_shift('.')]);
+    app.run_until_idle(&mut events).unwrap();
+    assert_eq!(app.editor.point(), 11, "M-> must move point to buffer end");
+
+    let (mut app, mut events) = test_app_with_text(
+        40,
+        10,
+        "hello\nworld",
+        vec![key(KeyCode::End), alt_shift(',')],
+    );
+    app.run_until_idle(&mut events).unwrap();
+    assert_eq!(app.editor.point(), 0, "M-< must move point to buffer beginning");
+}
+
+#[test]
 fn cx_cc_quits() {
     let events = vec![ctrl('x'), ctrl('c')];
     let (mut app, mut events) = test_app(40, 10, events);

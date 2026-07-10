@@ -14,8 +14,19 @@ pub struct Key {
 
 impl Key {
     pub fn from_event(event: KeyEvent) -> Self {
+        // Emacs-style bindings name the shifted character (M-<, C-_), but
+        // terminals speaking the kitty keyboard protocol without the
+        // "report alternate keys" flag report shifted keys as the *base*
+        // key plus SHIFT (Alt+Shift+, instead of Alt+<). Fold SHIFT into
+        // the char so both forms reach the same binding.
+        let code = match event.code {
+            KeyCode::Char(c) if event.modifiers.contains(KeyModifiers::SHIFT) => {
+                KeyCode::Char(shifted_char(c))
+            }
+            code => code,
+        };
         Self {
-            code: event.code,
+            code,
             ctrl: event.modifiers.contains(KeyModifiers::CONTROL),
             alt: event.modifiers.contains(KeyModifiers::ALT),
         }
@@ -49,6 +60,44 @@ impl Key {
             _ => s.push('?'),
         }
         s
+    }
+}
+
+/// The character SHIFT produces for a base key. Letters uppercase per
+/// Unicode (when that yields a single char); punctuation follows the US
+/// layout — the same pragmatic single-layout choice as the C-7/C--
+/// undo-variant bindings in `default_keymap`. Characters that are already
+/// shifted (or unknown) pass through unchanged.
+fn shifted_char(c: char) -> char {
+    match c {
+        '`' => '~',
+        '1' => '!',
+        '2' => '@',
+        '3' => '#',
+        '4' => '$',
+        '5' => '%',
+        '6' => '^',
+        '7' => '&',
+        '8' => '*',
+        '9' => '(',
+        '0' => ')',
+        '-' => '_',
+        '=' => '+',
+        '[' => '{',
+        ']' => '}',
+        '\\' => '|',
+        ';' => ':',
+        '\'' => '"',
+        ',' => '<',
+        '.' => '>',
+        '/' => '?',
+        c => {
+            let mut upper = c.to_uppercase();
+            match (upper.next(), upper.next()) {
+                (Some(u), None) => u,
+                _ => c,
+            }
+        }
     }
 }
 
@@ -258,7 +307,8 @@ pub fn default_keymap() -> KeymapNode {
     // Many terminals send C-/ as Ctrl-7 (byte 0x1F, shared key on US keyboards)
     root.bind(&[ctrl('7')], Command::Undo);
     // Kitty keyboard protocol sends C-_ as base key '-' with Ctrl+Shift;
-    // Key::from_event strips Shift, so we need ctrl('-')
+    // Key::from_event resolves that to ctrl('_'). Keep ctrl('-') for
+    // terminals that drop the Shift modifier entirely.
     root.bind(&[ctrl('-')], Command::Undo);
     // Redo on C-M-_ (emacs undo-redo), with the same terminal variants
     root.bind(&[ctrl_alt('/')], Command::Redo);
@@ -467,7 +517,7 @@ mod tests {
     fn ctrl_underscore_undo_all_variants() {
         // Ctrl-_ should be Undo regardless of how the terminal reports it.
         // Legacy terminals: ctrl('_') or ctrl('7')
-        // Kitty keyboard protocol: Ctrl+Shift+- reports as ctrl('-') with SHIFT stripped
+        // Kitty keyboard protocol: Ctrl+Shift+- resolves to ctrl('_')
         let keymap = default_keymap();
 
         let mut state = KeymapState::new(keymap.clone());
@@ -485,13 +535,87 @@ mod tests {
         }
 
         // Kitty protocol: terminal sends base key '-' with Ctrl+Shift,
-        // Key::from_event strips Shift, leaving ctrl('-')
+        // which Key::from_event resolves to ctrl('_')
         let mut state = KeymapState::new(keymap.clone());
         let event = KeyEvent::new(KeyCode::Char('-'), KeyModifiers::CONTROL | KeyModifiers::SHIFT);
         match state.process_key(event) {
             KeymapResult::Matched(cmd) => assert_eq!(cmd, Command::Undo),
             other => panic!("Expected Matched(Undo) for ctrl('-') (Kitty protocol), got {:?}", other),
         }
+    }
+
+    // M-< / M-> must work when the terminal reports the kitty-protocol
+    // form: the *base* key with SHIFT unresolved (Alt+Shift+, instead of
+    // Alt+<). Terminals speaking the kitty protocol without the "report
+    // alternate keys" flag (e.g. option-as-meta on macOS/cmux) send
+    // exactly this.
+    #[test]
+    fn meta_angle_brackets_from_kitty_base_keys() {
+        let mut state = KeymapState::new(default_keymap());
+        let event = KeyEvent::new(
+            KeyCode::Char(','),
+            KeyModifiers::ALT | KeyModifiers::SHIFT,
+        );
+        match state.process_key(event) {
+            KeymapResult::Matched(cmd) => assert_eq!(cmd, Command::BufferBeginning),
+            other => panic!("Expected Matched(BufferBeginning) for Alt+Shift+',', got {other:?}"),
+        }
+
+        let mut state = KeymapState::new(default_keymap());
+        let event = KeyEvent::new(
+            KeyCode::Char('.'),
+            KeyModifiers::ALT | KeyModifiers::SHIFT,
+        );
+        match state.process_key(event) {
+            KeymapResult::Matched(cmd) => assert_eq!(cmd, Command::BufferEnd),
+            other => panic!("Expected Matched(BufferEnd) for Alt+Shift+'.', got {other:?}"),
+        }
+    }
+
+    // Terminals that resolve shift themselves may report the shifted char
+    // with or without a leftover SHIFT modifier; both must keep working.
+    #[test]
+    fn meta_angle_brackets_pre_shifted() {
+        for modifiers in [KeyModifiers::ALT, KeyModifiers::ALT | KeyModifiers::SHIFT] {
+            let mut state = KeymapState::new(default_keymap());
+            match state.process_key(KeyEvent::new(KeyCode::Char('<'), modifiers)) {
+                KeymapResult::Matched(cmd) => assert_eq!(cmd, Command::BufferBeginning),
+                other => panic!(
+                    "Expected Matched(BufferBeginning) for '<' with {modifiers:?}, got {other:?}"
+                ),
+            }
+            let mut state = KeymapState::new(default_keymap());
+            match state.process_key(KeyEvent::new(KeyCode::Char('>'), modifiers)) {
+                KeymapResult::Matched(cmd) => assert_eq!(cmd, Command::BufferEnd),
+                other => panic!(
+                    "Expected Matched(BufferEnd) for '>' with {modifiers:?}, got {other:?}"
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn from_event_resolves_shift_into_char_keys() {
+        let shifted = |c: char| {
+            Key::from_event(KeyEvent::new(KeyCode::Char(c), KeyModifiers::SHIFT)).code
+        };
+        // US-layout punctuation
+        assert_eq!(shifted(','), KeyCode::Char('<'));
+        assert_eq!(shifted('.'), KeyCode::Char('>'));
+        assert_eq!(shifted('/'), KeyCode::Char('?'));
+        assert_eq!(shifted('-'), KeyCode::Char('_'));
+        // Letters uppercase (including non-ASCII)
+        assert_eq!(shifted('a'), KeyCode::Char('A'));
+        assert_eq!(shifted('ö'), KeyCode::Char('Ö'));
+        // Already-shifted chars pass through unchanged
+        assert_eq!(shifted('<'), KeyCode::Char('<'));
+        assert_eq!(shifted('!'), KeyCode::Char('!'));
+        // Non-char keys are untouched by SHIFT
+        let key = Key::from_event(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
+        assert_eq!(key.code, KeyCode::Left);
+        // Without SHIFT, chars are untouched
+        let key = Key::from_event(KeyEvent::new(KeyCode::Char(','), KeyModifiers::ALT));
+        assert_eq!(key.code, KeyCode::Char(','));
     }
 
     #[test]
