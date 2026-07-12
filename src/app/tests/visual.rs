@@ -1,5 +1,53 @@
 use super::*;
 
+/// Manual performance benchmark for the long-line rendering path. Kept out
+/// of normal test runs because timing assertions are machine-dependent:
+///
+/// cargo test --release benchmark_five_megabyte_single_line -- --ignored --nocapture
+#[test]
+#[ignore = "manual performance benchmark"]
+fn benchmark_five_megabyte_single_line() {
+    use std::time::Instant;
+
+    const BYTES: usize = 5 * 1024 * 1024;
+    const ITERATIONS: u32 = 5;
+    let prefix = "{\"data\":\"";
+    let suffix = "\"}";
+    let text = format!(
+        "{prefix}{}{suffix}",
+        "a".repeat(BYTES - prefix.len() - suffix.len())
+    );
+    assert_eq!(text.len(), BYTES);
+    assert!(!text.contains('\n'));
+
+    let (mut app, mut events) = test_app_with_text(120, 40, &text, vec![]);
+    let cold_start = Instant::now();
+    app.run_until_idle(&mut events).unwrap();
+    let cold_start = cold_start.elapsed();
+
+    let repeated_start = Instant::now();
+    for _ in 0..ITERATIONS {
+        app.render().unwrap();
+    }
+    let repeated_start = repeated_start.elapsed() / ITERATIONS;
+
+    let end = app.editor.current_buffer().char_count();
+    app.editor.pane_tree.focused_pane_mut().point = end;
+    let end_layout = Instant::now();
+    app.editor.ensure_cursor_visible();
+    let end_layout = end_layout.elapsed();
+
+    let repeated_end = Instant::now();
+    for _ in 0..ITERATIONS {
+        app.render().unwrap();
+    }
+    let repeated_end = repeated_end.elapsed() / ITERATIONS;
+
+    eprintln!(
+        "5 MiB single line: cold-start={cold_start:.2?}, repeated-start={repeated_start:.2?}, end-layout={end_layout:.2?}, repeated-end={repeated_end:.2?}"
+    );
+}
+
 #[test]
 fn literal_tab_at_line_start_displays_as_spaces_to_tab_stop() {
     let (mut app, mut events) = test_app_with_text(20, 6, "\tfoo", vec![]);
