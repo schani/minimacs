@@ -21,6 +21,8 @@ fn benchmark_five_megabyte_single_line() {
     assert!(!text.contains('\n'));
 
     let (mut app, mut events) = test_app_with_text(120, 40, &text, vec![]);
+    app.editor.buffers[0].syntax =
+        crate::syntax::SyntaxState::new(crate::syntax::Language::Json);
     let cold_start = Instant::now();
     app.run_until_idle(&mut events).unwrap();
     let cold_start = cold_start.elapsed();

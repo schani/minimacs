@@ -205,8 +205,9 @@ pub fn render(frame: &mut Frame, editor: &Editor) {
 #[derive(Clone)]
 struct VisualCell {
     text: String,
-    buffer_col: usize,
     buffer_char_pos: usize,
+    buffer_byte_start: usize,
+    buffer_byte_end: usize,
 }
 
 /// Terminal column width of a char (0 for combining marks, 2 for CJK/emoji).
@@ -368,8 +369,10 @@ fn visible_visual_rows(
     let line = buf.text.line(line_idx);
     let keep = line.len_chars() - crate::buffer::line_break_len_chars(line);
     let line_start_char = buf.text.line_to_char(line_idx);
+    let line_start_byte = buf.text.line_to_byte(line_idx);
     let mut chars = line.chars().take(keep).enumerate();
     let mut visual_col = 0usize;
+    let mut byte_offset = line_start_byte;
     let mut carry = Vec::new();
     let mut input_exhausted = false;
     let mut row_index = 0usize;
@@ -387,13 +390,17 @@ fn visible_visual_rows(
                 break;
             };
             let buffer_char_pos = line_start_char + buffer_col;
+            let buffer_byte_start = byte_offset;
+            let buffer_byte_end = buffer_byte_start + ch.len_utf8();
+            byte_offset = buffer_byte_end;
             if ch == '\t' {
                 let width = tab_width_at(visual_col);
                 for _ in 0..width {
                     cells.push(VisualCell {
                         text: " ".to_string(),
-                        buffer_col,
                         buffer_char_pos,
+                        buffer_byte_start,
+                        buffer_byte_end,
                     });
                 }
                 visual_col += width;
@@ -404,28 +411,39 @@ fn visible_visual_rows(
                     // Combining marks belong to the preceding glyph. The
                     // one-cell lookahead keeps that glyph available here
                     // even when it sits at the wrap boundary.
-                    if let Some(prev) = cells.iter_mut().rev().find(|c| !c.text.is_empty()) {
-                        prev.text.push(ch);
+                    if let Some(index) = cells.iter().rposition(|cell| !cell.text.is_empty()) {
+                        cells[index].text.push(ch);
+                        let previous_char = cells[index].buffer_char_pos;
+                        for cell in cells
+                            .iter_mut()
+                            .rev()
+                            .take_while(|cell| cell.buffer_char_pos == previous_char)
+                        {
+                            cell.buffer_byte_end = buffer_byte_end;
+                        }
                     }
                 }
                 2 => {
                     cells.push(VisualCell {
                         text: ch.to_string(),
-                        buffer_col,
                         buffer_char_pos,
+                        buffer_byte_start,
+                        buffer_byte_end,
                     });
                     cells.push(VisualCell {
                         text: String::new(),
-                        buffer_col,
                         buffer_char_pos,
+                        buffer_byte_start,
+                        buffer_byte_end,
                     });
                     visual_col += 2;
                 }
                 _ => {
                     cells.push(VisualCell {
                         text: ch.to_string(),
-                        buffer_col,
                         buffer_char_pos,
+                        buffer_byte_start,
+                        buffer_byte_end,
                     });
                     visual_col += 1;
                 }
@@ -487,13 +505,13 @@ fn render_pane_text(
     // only when that line wraps taller than the space above the cursor).
     let row_offset = clamped_row_offset(pane, buf, text_width);
 
-    // Compute per-character syntax styles for visible buffer lines
-    let syntax_styles = compute_syntax_char_styles(buf, scroll_top, max_visual_rows);
-
-    let mut output_lines: Vec<Line> = Vec::new();
+    // First lay out only the visible visual rows. Their exact byte range is
+    // then used for syntax highlighting, so a single giant buffer line does
+    // not make the style path allocate or scan the whole line.
+    let mut visible_rows: Vec<(usize, VisualRow)> = Vec::new();
     let mut line_idx = scroll_top;
 
-    while output_lines.len() < max_visual_rows && line_idx < total_lines {
+    while visible_rows.len() < max_visual_rows && line_idx < total_lines {
         let skip_rows = if line_idx == scroll_top {
             row_offset
         } else {
@@ -504,10 +522,22 @@ fn render_pane_text(
             line_idx,
             text_width,
             skip_rows,
-            max_visual_rows - output_lines.len(),
+            max_visual_rows - visible_rows.len(),
         );
 
         for row in visible.rows {
+            visible_rows.push((line_idx, row));
+        }
+
+        if !visible.exhausted {
+            break;
+        }
+        line_idx += 1;
+    }
+
+    let syntax_spans = compute_visible_syntax_spans(buf, &visible_rows);
+    let mut output_lines: Vec<Line> = Vec::with_capacity(max_visual_rows);
+    for (line_idx, row) in visible_rows {
             let mut spans = Vec::new();
             if !row.cells.is_empty() {
                 build_styled_spans(
@@ -519,7 +549,7 @@ fn render_pane_text(
                     region,
                     search_matches,
                     current_match,
-                    &syntax_styles,
+                    &syntax_spans,
                 );
             }
             if row.continues {
@@ -529,12 +559,6 @@ fn render_pane_text(
                 ));
             }
             output_lines.push(Line::from(spans));
-        }
-
-        if !visible.exhausted {
-            break;
-        }
-        line_idx += 1;
     }
 
     // Fill remaining rows with ~
@@ -569,11 +593,11 @@ fn build_styled_spans(
     visual_cells: &[VisualCell],
     start: usize,
     end: usize,
-    line_idx: usize,
+    _line_idx: usize,
     region: Option<(usize, usize)>,
     search_matches: &[(usize, usize)],
     current_match: Option<usize>,
-    syntax_styles: &Option<std::collections::HashMap<(usize, usize), Style>>,
+    syntax_spans: &[crate::syntax::StyledSpan],
 ) {
     let segment = &visual_cells[start..end];
     if segment.is_empty() {
@@ -586,7 +610,6 @@ fn build_styled_spans(
     let char_styles: Vec<Style> = segment
         .iter()
         .map(|cell| {
-            let col = cell.buffer_col;
             let char_pos = cell.buffer_char_pos;
 
             let in_region = region
@@ -605,10 +628,8 @@ fn build_styled_spans(
                     Style::default().bg(Color::Rgb(168, 172, 148)).fg(Color::Black)
                 } else if is_other_match {
                     Style::default().bg(Color::Rgb(248, 201, 171)).fg(Color::Black)
-                } else if let Some(ref syn) = syntax_styles {
-                    syn.get(&(line_idx, col)).copied().unwrap_or_default()
                 } else {
-                    Style::default()
+                    syntax_style_at_byte(syntax_spans, cell.buffer_byte_start)
                 }
             }
         })
@@ -631,82 +652,35 @@ fn build_styled_spans(
     }
 }
 
-/// Compute per-character syntax styles for visible lines.
-/// Returns a map from (line_idx, col) -> Style, or None if no syntax.
-///
-/// The persistent tree covers the whole buffer; only a padded byte window
-/// around the visible lines is queried for highlight captures.
-fn compute_syntax_char_styles(
+/// Return the syntax spans intersecting the cells actually laid out for the
+/// viewport. Unlike the old byte-vector + `(line, col)` hash map, memory and
+/// post-parse work are proportional to visible captures, not line length.
+fn compute_visible_syntax_spans(
     buf: &Buffer,
-    scroll_top: usize,
-    visible_lines: usize,
-) -> Option<std::collections::HashMap<(usize, usize), Style>> {
-    let syntax = buf.syntax.as_ref()?;
-    let total_lines = buf.line_count();
-    let first_visible = scroll_top;
-    let last_visible = (scroll_top + visible_lines).min(total_lines);
-    if first_visible >= last_visible {
-        return None;
-    }
-
-    let first_visible_byte = buf.text.line_to_byte(first_visible);
-    let last_byte = if last_visible < total_lines {
-        buf.text.line_to_byte(last_visible)
-    } else {
-        buf.text.len_bytes()
+    rows: &[(usize, VisualRow)],
+) -> Vec<crate::syntax::StyledSpan> {
+    let Some(syntax) = buf.syntax.as_ref() else {
+        return Vec::new();
     };
-
-    let highlighted_spans = syntax.highlight_rope(
+    let first = rows.iter().find_map(|(_, row)| row.cells.first());
+    let last = rows.iter().rev().find_map(|(_, row)| row.cells.last());
+    let (Some(first), Some(last)) = (first, last) else {
+        return Vec::new();
+    };
+    syntax.highlight_rope(
         buf.text.slice(..),
-        first_visible_byte..last_byte,
+        first.buffer_byte_start..last.buffer_byte_end,
         buf.edit_generation,
-    );
+    )
+}
 
-    // Build a byte-to-style lookup only for the visible portion. Spans are
-    // non-overlapping and sorted, so binary-search to the first span that
-    // reaches the viewport and stop at the first one past it — the frame
-    // cost is bounded by the viewport, not the file size.
-    let visible_len = last_byte - first_visible_byte;
-    let mut byte_styles = vec![Style::default(); visible_len];
-    let begin = highlighted_spans.partition_point(|ss| ss.end <= first_visible_byte);
-    for ss in highlighted_spans[begin..].iter() {
-        if ss.start >= last_byte {
-            break;
-        }
-        // Clip span to the visible byte range
-        let span_start = ss.start.max(first_visible_byte);
-        let span_end = ss.end.min(last_byte);
-        if span_start >= span_end {
-            continue;
-        }
-        for item in byte_styles
-            .iter_mut()
-            .take(span_end - first_visible_byte)
-            .skip(span_start - first_visible_byte)
-        {
-            *item = ss.style;
-        }
-    }
-
-    // Map each visible line's chars to styles
-    let mut result = std::collections::HashMap::new();
-
-    for line_idx in first_visible..last_visible {
-        let line_byte_start = buf.text.line_to_byte(line_idx) - first_visible_byte;
-        let line = buf.text.line(line_idx);
-        let keep = line.len_chars() - crate::buffer::line_break_len_chars(line);
-
-        let mut byte_offset = line_byte_start;
-        for (col, ch) in line.chars().take(keep).enumerate() {
-            let style = byte_styles.get(byte_offset).copied().unwrap_or_default();
-            if style != Style::default() {
-                result.insert((line_idx, col), style);
-            }
-            byte_offset += ch.len_utf8();
-        }
-    }
-
-    Some(result)
+fn syntax_style_at_byte(spans: &[crate::syntax::StyledSpan], byte: usize) -> Style {
+    let index = spans.partition_point(|span| span.end <= byte);
+    spans
+        .get(index)
+        .filter(|span| span.start <= byte && byte < span.end)
+        .map(|span| span.style)
+        .unwrap_or_default()
 }
 
 /// Join the mode line's left and right parts, padding with spaces so the
@@ -1118,6 +1092,21 @@ mod tests {
     }
 
     #[test]
+    fn syntax_style_lookup_uses_half_open_span_boundaries() {
+        let styled = Style::default().fg(Color::Red);
+        let spans = vec![crate::syntax::StyledSpan {
+            start: 2,
+            end: 5,
+            style: styled,
+        }];
+
+        assert_eq!(syntax_style_at_byte(&spans, 1), Style::default());
+        assert_eq!(syntax_style_at_byte(&spans, 2), styled);
+        assert_eq!(syntax_style_at_byte(&spans, 4), styled);
+        assert_eq!(syntax_style_at_byte(&spans, 5), Style::default());
+    }
+
+    #[test]
     fn line_visual_width_crosses_rope_chunks() {
         let prefix = "a".repeat(2_000);
         let buf = Buffer::from_str(0, "test", &format!("{prefix}\t你e\u{301}\n"));
@@ -1337,45 +1326,53 @@ Some *emphasis* here.\n";
         let mut buf = Buffer::from_str(0, "test.md", markdown);
         buf.syntax = SyntaxState::new(Language::Markdown);
 
-        // Case 1: scroll_top=0, see everything — get styles for the heading on line 10
-        let styles_full = compute_syntax_char_styles(&buf, 0, 20);
+        let syntax = buf.syntax.as_ref().unwrap();
+        // Case 1: scroll_top=0, see everything.
+        let styles_full = syntax.highlight_rope(
+            buf.text.slice(..),
+            0..buf.text.len_bytes(),
+            buf.edit_generation,
+        );
 
-        // Case 2: scroll_top=6, viewport starts inside the code block
-        let styles_scrolled = compute_syntax_char_styles(&buf, 6, 20);
+        // Case 2: viewport starts inside the code block.
+        let scrolled_start = buf.text.line_to_byte(6);
+        let styles_scrolled = syntax.highlight_rope(
+            buf.text.slice(..),
+            scrolled_start..buf.text.len_bytes(),
+            buf.edit_generation,
+        );
 
         // Line 10 is "# After Code Block" — the '#' and heading text should have
         // the heading style (bold + blue) regardless of scroll position.
         let heading_line = 10;
+        let heading_start = buf.text.line_to_byte(heading_line);
+        let heading_end = buf.text.line_to_byte(heading_line + 1);
 
         // With full context (scroll_top=0), the heading should be styled
-        let full_styles = styles_full.expect("should have syntax styles with full context");
-        let has_heading_style_full = full_styles
+        let has_heading_style_full = styles_full
             .iter()
-            .any(|((line, _col), style)| {
-                *line == heading_line
-                    && style.add_modifier.contains(Modifier::BOLD)
+            .any(|span| {
+                span.end > heading_start
+                    && span.start < heading_end
+                    && span.style.add_modifier.contains(Modifier::BOLD)
             });
         assert!(
             has_heading_style_full,
-            "Heading on line {} should be bold when fully visible. Styles: {:?}",
-            heading_line,
-            full_styles.iter().filter(|((l, _), _)| *l == heading_line).collect::<Vec<_>>()
+            "Heading on line {heading_line} should be bold when fully visible"
         );
 
         // With scrolled context (scroll_top=6, inside code block), the heading
         // should STILL be styled the same way.
-        let scrolled_styles = styles_scrolled.expect("should have syntax styles when scrolled");
-        let has_heading_style_scrolled = scrolled_styles
+        let has_heading_style_scrolled = styles_scrolled
             .iter()
-            .any(|((line, _col), style)| {
-                *line == heading_line
-                    && style.add_modifier.contains(Modifier::BOLD)
+            .any(|span| {
+                span.end > heading_start
+                    && span.start < heading_end
+                    && span.style.add_modifier.contains(Modifier::BOLD)
             });
         assert!(
             has_heading_style_scrolled,
-            "Heading on line {} should be bold even when viewport starts inside code block. Styles: {:?}",
-            heading_line,
-            scrolled_styles.iter().filter(|((l, _), _)| *l == heading_line).collect::<Vec<_>>()
+            "Heading on line {heading_line} should be bold even when viewport starts inside code block"
         );
     }
 
