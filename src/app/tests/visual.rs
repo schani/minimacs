@@ -7,7 +7,7 @@ use super::*;
 #[test]
 #[ignore = "manual performance benchmark"]
 fn benchmark_five_megabyte_single_line() {
-    use std::time::Instant;
+    use std::time::{Duration, Instant};
 
     const BYTES: usize = 5 * 1024 * 1024;
     const ITERATIONS: u32 = 5;
@@ -45,8 +45,25 @@ fn benchmark_five_megabyte_single_line() {
     }
     let repeated_end = repeated_end.elapsed() / ITERATIONS;
 
+    let mut backward_command = Duration::ZERO;
+    let mut backward_interaction = Duration::ZERO;
+    for _ in 0..ITERATIONS {
+        app.editor.pane_tree.focused_pane_mut().point = end;
+        let command = Instant::now();
+        app.editor.execute(crate::command::Command::BackwardChar);
+        backward_command += command.elapsed();
+
+        app.editor.pane_tree.focused_pane_mut().point = end;
+        let interaction = Instant::now();
+        app.editor.execute(crate::command::Command::BackwardChar);
+        app.render().unwrap();
+        backward_interaction += interaction.elapsed();
+    }
+    let backward_command = backward_command / ITERATIONS;
+    let backward_interaction = backward_interaction / ITERATIONS;
+
     eprintln!(
-        "5 MiB single line: cold-start={cold_start:.2?}, repeated-start={repeated_start:.2?}, end-layout={end_layout:.2?}, repeated-end={repeated_end:.2?}"
+        "5 MiB single line: cold-start={cold_start:.2?}, repeated-start={repeated_start:.2?}, end-layout={end_layout:.2?}, repeated-end={repeated_end:.2?}, backward-command={backward_command:.2?}, backward-interaction={backward_interaction:.2?}"
     );
 }
 
