@@ -12,9 +12,11 @@ focus changes) skip the render entirely — an idle minimacs does no drawing
 work, even with the mouse waving over it. Rendered cells and syntax-style
 lookups are bounded by the viewport rather than the length of a wrapped line.
 Printable ASCII lines also use direct Rope indexing for cursor and viewport
-jumps. Unicode, tabs, and control characters use a memory-bounded streaming
-fallback whose time is linear in the prefix being skipped. ratatui diffs the
-terminal output.
+jumps; an eight-entry, edit-generation-keyed per-buffer cache remembers that
+line classification across the several geometry queries in one interaction.
+Unicode, tabs, and control characters use a memory-bounded streaming fallback
+whose time is linear in the prefix being skipped. ratatui diffs the terminal
+output.
 
 ```
 Terminal input (crossterm)
@@ -155,13 +157,15 @@ other panes' points are adjusted there too.
 `C-f`/`C-b` and Backspace/`C-d` move and delete by **grapheme cluster**
 (`unicode-segmentation`): combining sequences and emoji ZWJ sequences are one
 step (`next_grapheme_boundary` / `prev_grapheme_boundary`), and line endings
-are a single `\n`. Positions computed by column arithmetic — line
-movement's column clamping (`C-n`/`C-p`, page up/down) and mouse-click
-mapping — are snapped to the nearest cluster boundary at or before the raw
-column (`Buffer::snap_to_grapheme_boundary`), so point never rests
-mid-cluster, where a Backspace would orphan a combining mark and typing
-would split the cluster. Only the landing point is snapped; the remembered
-goal column (`preferred_column`) keeps the unsnapped value, so moving
+are a single `\n`. These queries use `GraphemeCursor` directly over Rope
+chunks, requesting adjacent chunks and Unicode pre-context only when needed;
+they never flatten or scan the complete buffer line. Positions computed by
+column arithmetic — line movement's column clamping (`C-n`/`C-p`, page
+up/down) and mouse-click mapping — are snapped to the nearest cluster boundary
+at or before the raw column (`Buffer::snap_to_grapheme_boundary`), so point
+never rests mid-cluster, where a Backspace would orphan a combining mark and
+typing would split the cluster. Only the landing point is snapped; the
+remembered goal column (`preferred_column`) keeps the unsnapped value, so moving
 through a cluster-bearing line and back restores the original column.
 
 ### Buffer
@@ -493,7 +497,10 @@ does not cancel a chord in progress.
      mouse reverse-mapping, and visible-row extraction. For printable ASCII it
      computes deep wrapped positions directly from Rope character offsets. For
      Unicode, tabs, and control characters it streams from the line start but
-     retains only one visual row at a time.
+     retains only one visual row at a time. `Buffer::line_is_printable_ascii`
+     caches the eight most recently queried line classifications, keyed by the
+     buffer edit generation; stale results cannot match after an edit and age
+     out without explicit invalidation.
    - Only visible rows are expanded into `VisualCell`s, one per terminal column:
      literal tabs expand to spaces ending at the next `INDENT_WIDTH` tab stop;
      double-width chars (CJK, emoji) contribute their cell plus an empty
@@ -591,8 +598,8 @@ whole-file parser work cannot be mistaken for rendering overhead.
 **Long-line render benchmark**: the ignored
 `benchmark_five_megabyte_single_line` integration test renders an exact 5 MiB
 single-line JSON buffer in a 120x40 test terminal with syntax highlighting,
-then measures repeated renders at the beginning and far end. Run it in release
-mode:
+then measures repeated renders at the beginning and far end, cursor-left
+command handling, and cursor-left plus redraw. Run it in release mode:
 
 ```sh
 cargo test --release benchmark_five_megabyte_single_line -- --ignored --nocapture
@@ -600,9 +607,9 @@ cargo test --release benchmark_five_megabyte_single_line -- --ignored --nocaptur
 
 It is a manual regression benchmark rather than a CI threshold because
 wall-clock timing is machine-dependent. Measurements after the
-viewport-streaming work made a separate wrap-checkpoint cache unnecessary; the
-cache's invalidation state would not improve the direct printable-ASCII path
-used by minified JSON.
+viewport-streaming work made a separate visual-position checkpoint cache
+unnecessary; the generation-keyed line-class cache is enough for the direct
+printable-ASCII path used by minified JSON.
 
 **Fuzz harness**: `cargo run --release --bin syntax-fuzz --` applies random
 edits through `Buffer::replace` and after every edit compares the persistent

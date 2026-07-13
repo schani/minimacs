@@ -76,8 +76,14 @@ self-healing), same picture as before the migration.
       cursor, scrolling, and mouse geometry in `VisualLineLayout`; directly
       index printable ASCII lines and keep the Unicode/tab fallback
       memory-bounded. Far-end repeated rendering measured under 9ms on the
-      development machine, so no checkpoint cache or invalidation state was
-      added.
+      development machine, so no visual-position checkpoint cache was added.
+- [x] Remove the remaining cursor-left stall: movement and deletion now use
+      `GraphemeCursor` directly across Rope chunks instead of copying and
+      scanning the complete line. Cache the eight most recent printable-ASCII
+      line classifications by `(edit_generation, line)` so repeated geometry
+      queries do not re-prove that an unchanged 5 MiB line is ASCII. On the
+      development machine, cursor-left command handling fell from 78.4ms to
+      3.5µs and cursor-left plus redraw from 87.0ms to 0.53ms.
 
 # Parse-failure handling (from PR review, 2026-07-09)
 

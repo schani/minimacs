@@ -100,7 +100,9 @@ incremental error recovery can transiently differ from a fresh parse
 ### Long-line render benchmark
 
 An ignored integration benchmark renders a syntax-highlighted, exact 5 MiB
-single-line JSON buffer at both the beginning and far end of the line:
+single-line JSON buffer at both the beginning and far end of the line. It also
+measures cursor-left command handling and the complete cursor-left-plus-redraw
+interaction:
 
 ```sh
 cargo test --release benchmark_five_megabyte_single_line -- --ignored --nocapture

@@ -1,6 +1,8 @@
 use anyhow::{bail, Result};
 use ropey::{str_utils::byte_to_char_idx, Rope, RopeSlice};
 use std::borrow::Cow;
+use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -11,6 +13,15 @@ use crate::history::History;
 use crate::syntax::{self, SyntaxState};
 
 pub type BufferId = usize;
+
+const LINE_CLASS_CACHE_CAPACITY: usize = 8;
+
+#[derive(Clone, Copy)]
+struct CachedLineClass {
+    generation: usize,
+    line_idx: usize,
+    printable_ascii: bool,
+}
 
 /// The file's on-disk line-break encoding, detected at load and applied
 /// at save. In-memory text is always LF-only regardless of this value.
@@ -119,6 +130,11 @@ pub struct Buffer {
     pub history: History,
     pub syntax: Option<SyntaxState>,
     pub edit_generation: usize,
+    /// Small generation-keyed cache for the line classification used by
+    /// display geometry. It avoids rescanning a giant unchanged line for each
+    /// cursor, scroll, and render calculation without adding edit invalidation
+    /// rules; stale generations simply stop matching and age out.
+    line_class_cache: RefCell<VecDeque<CachedLineClass>>,
     /// Modification time of the file when we last loaded or saved it.
     /// Used to detect external changes before clobbering them on save.
     disk_mtime: Option<std::time::SystemTime>,
@@ -136,6 +152,7 @@ impl Buffer {
             history: History::new(),
             syntax: None,
             edit_generation: 0,
+            line_class_cache: RefCell::new(VecDeque::with_capacity(LINE_CLASS_CACHE_CAPACITY)),
             disk_mtime: None,
         }
     }
@@ -157,6 +174,7 @@ impl Buffer {
             history: History::new(),
             syntax: syntax_state,
             edit_generation: 0,
+            line_class_cache: RefCell::new(VecDeque::with_capacity(LINE_CLASS_CACHE_CAPACITY)),
             disk_mtime: None,
         }
     }
@@ -172,6 +190,7 @@ impl Buffer {
             history: History::new(),
             syntax: None,
             edit_generation: 0,
+            line_class_cache: RefCell::new(VecDeque::with_capacity(LINE_CLASS_CACHE_CAPACITY)),
             disk_mtime: None,
         }
     }
@@ -218,6 +237,7 @@ impl Buffer {
             history: History::new(),
             syntax: syntax_state,
             edit_generation: 0,
+            line_class_cache: RefCell::new(VecDeque::with_capacity(LINE_CLASS_CACHE_CAPACITY)),
             disk_mtime: fs::metadata(path).and_then(|m| m.modified()).ok(),
         })
     }
@@ -372,6 +392,44 @@ impl Buffer {
     pub fn line_len_chars(&self, line_idx: usize) -> usize {
         let line = self.text.line(line_idx);
         line.len_chars() - line_break_len_chars(line)
+    }
+
+    /// Whether a line can use constant-width, one-byte display geometry.
+    /// Results are cached because a single command can ask the renderer the
+    /// same question several times, and proving it for a multi-megabyte line
+    /// is otherwise the dominant cost after local grapheme navigation.
+    pub(crate) fn line_is_printable_ascii(&self, line_idx: usize) -> bool {
+        let line_idx = line_idx.min(self.line_count().saturating_sub(1));
+        {
+            let mut cache = self.line_class_cache.borrow_mut();
+            if let Some(position) = cache.iter().position(|entry| {
+                entry.generation == self.edit_generation && entry.line_idx == line_idx
+            }) {
+                let entry = cache
+                    .remove(position)
+                    .expect("position came from the same cache");
+                cache.push_back(entry);
+                return entry.printable_ascii;
+            }
+        }
+
+        let line = self.text.line(line_idx);
+        let line_len = line.len_chars() - line_break_len_chars(line);
+        let printable_ascii = line
+            .slice(..line_len)
+            .chunks()
+            .all(|chunk| chunk.bytes().all(|byte| (b' '..=b'~').contains(&byte)));
+
+        let mut cache = self.line_class_cache.borrow_mut();
+        if cache.len() == LINE_CLASS_CACHE_CAPACITY {
+            cache.pop_front();
+        }
+        cache.push_back(CachedLineClass {
+            generation: self.edit_generation,
+            line_idx,
+            printable_ascii,
+        });
+        printable_ascii
     }
 
     /// Atomically replace chars in `[start, end)` and return the corresponding
@@ -691,6 +749,25 @@ mod tests {
         assert_eq!(buf.next_grapheme_boundary(3), 3);
         assert_eq!(buf.next_grapheme_boundary(usize::MAX), 3);
         assert_eq!(buf.prev_grapheme_boundary(usize::MAX), 2);
+    }
+
+    #[test]
+    fn printable_ascii_line_cache_reuses_a_generation() {
+        let buf = Buffer::from_str(0, "test", "plain ascii");
+        assert!(buf.line_is_printable_ascii(0));
+        assert!(buf.line_is_printable_ascii(0));
+        assert_eq!(buf.line_class_cache.borrow().len(), 1);
+    }
+
+    #[test]
+    fn printable_ascii_line_cache_does_not_survive_an_edit_generation() {
+        let mut buf = Buffer::from_str(0, "test", "plain ascii");
+        assert!(buf.line_is_printable_ascii(0));
+        buf.replace(0, 1, "é");
+        assert!(!buf.line_is_printable_ascii(0));
+        let cache = buf.line_class_cache.borrow();
+        assert_eq!(cache.len(), 2);
+        assert_ne!(cache[0].generation, cache[1].generation);
     }
 
     #[test]

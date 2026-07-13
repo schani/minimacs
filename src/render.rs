@@ -365,11 +365,7 @@ impl<'a> VisualLineLayout<'a> {
     fn new(buf: &'a Buffer, line_idx: usize, text_width: usize) -> Self {
         let line = buf.text.line(line_idx);
         let line_len = line.len_chars() - crate::buffer::line_break_len_chars(line);
-        let plain_ascii = text_width > 1
-            && line
-                .slice(..line_len)
-                .chunks()
-                .all(|chunk| chunk.bytes().all(|byte| (b' '..=b'~').contains(&byte)));
+        let plain_ascii = text_width > 1 && buf.line_is_printable_ascii(line_idx);
         Self {
             buf,
             line_idx,
