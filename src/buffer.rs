@@ -1023,6 +1023,50 @@ mod tests {
     }
 
     #[test]
+    fn successful_save_commits_pending_history_before_marking_clean() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.txt");
+        fs::write(&file, "old").unwrap();
+
+        let mut buf = Buffer::from_file(0, &file).unwrap();
+        buf.history.record_insert(0, "x");
+        buf.replace(0, 0, "x");
+        buf.save().unwrap();
+
+        assert!(
+            buf.history.is_clean(),
+            "the exact undo-history version written to disk must be clean"
+        );
+        assert!(buf.history.undo().is_some());
+        buf.update_modified();
+        assert!(
+            buf.modified,
+            "undoing saved contents must make the buffer modified"
+        );
+    }
+
+    #[test]
+    fn failed_save_does_not_commit_pending_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing_parent = dir.path().join("missing");
+        let file = missing_parent.join("test.txt");
+        let mut buf = Buffer::new_for_path(0, &file);
+
+        buf.history.record_insert(0, "a");
+        buf.replace(0, 0, "a");
+        assert!(buf.save().is_err());
+
+        buf.history.record_insert(1, "b");
+        buf.replace(1, 1, "b");
+        let group = buf.history.undo().unwrap();
+        assert_eq!(
+            group.edits.len(),
+            2,
+            "a failed save must not split the pending edit group"
+        );
+    }
+
+    #[test]
     fn externally_modified_detection() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("test.txt");

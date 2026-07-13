@@ -1,6 +1,56 @@
 use super::*;
 
 #[test]
+fn quit_save_after_mouse_focus_marks_saved_undo_version_clean() {
+    let dir = tempfile::tempdir().unwrap();
+    let file_a = dir.path().join("a.txt");
+    let file_b = dir.path().join("b.txt");
+    std::fs::write(&file_a, "aaa").unwrap();
+    std::fs::write(&file_b, "bbb").unwrap();
+
+    // Put A in the left pane and B in the right pane. Unlike a keyboard
+    // command, mouse focus does not commit the edit group of the pane it
+    // leaves, which is the important part of this reproduction.
+    let mut editor = Editor::new();
+    editor.open_file(&file_a).unwrap();
+    editor.execute(crate::command::Command::SplitHorizontal);
+    editor.execute(crate::command::Command::CycleFocus);
+    editor.open_file(&file_b).unwrap();
+    editor.execute(crate::command::Command::CycleFocus);
+
+    let events = vec![
+        char_key('A'),
+        mouse_click(25, 0),
+        char_key('B'),
+        ctrl('x'),
+        ctrl('c'),
+        char_key('y'),
+        key(KeyCode::Enter),
+        char_key('q'),
+        key(KeyCode::Enter),
+        mouse_click(0, 0),
+        ctrl('/'),
+    ];
+    let backend = TestBackend::new(40, 10);
+    let terminal = Terminal::new(backend).unwrap();
+    let mut app = App::new(terminal, editor);
+    let mut events = TestEventSource::new(events);
+    app.run_until_idle(&mut events).unwrap();
+
+    assert!(!app.editor.should_quit, "q cancels while handling B");
+    assert_eq!(std::fs::read_to_string(&file_a).unwrap(), "Aaaa");
+    assert_eq!(
+        app.editor.current_buffer().path.as_deref(),
+        Some(std::fs::canonicalize(&file_a).unwrap().as_path())
+    );
+    assert_eq!(app.editor.buffer_text(), "aaa", "undo removes A's saved edit");
+    assert!(
+        app.editor.current_buffer().modified,
+        "after undo, A differs from its saved contents and must be modified"
+    );
+}
+
+#[test]
 fn mouse_click_places_cursor() {
     // 3-line text. Click on line 2, column 2.
     let text = "hello\nworld\nfoo";
