@@ -129,9 +129,9 @@ fn background_syntax_completion_is_applied_without_an_input_event() {
     }
 
     let syntax = app.editor.buffers[0].syntax.as_ref().unwrap();
-    assert!(syntax
-        .cached_background_spans(0..2, app.editor.buffers[0].edit_generation)
-        .is_some_and(|spans| !spans.is_empty()));
+    let cached = syntax.background_spans(0..2, app.editor.buffers[0].edit_generation);
+    assert!(cached.exact);
+    assert!(!cached.spans.is_empty());
 }
 
 // Shared mouse-event helpers (used by the visual, input_state, and mouse

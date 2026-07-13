@@ -601,9 +601,10 @@ worker occupation rather than a UI frame, and retaining it avoids rejecting
 valid very large parses.
 
 At render time, a cache miss submits the current Rope snapshot, edit batch, and
-visible byte range to the worker and renders that frame without syntax spans.
-The worker runs tree-house's range highlighter only for a padded byte window
-around the viewport and converts its events into absolute
+visible byte range. While that job runs, the renderer keeps any overlapping
+exact or provisional cached spans instead of flashing the whole viewport back
+to unstyled text. The worker runs tree-house's range highlighter for an 8 KiB-
+padded window and publishes that complete window as absolute
 `StyledSpan { start, end, style }` ranges. On a later poll the app accepts a
 current completion and redraws. The renderer clips those spans to
 the byte interval covered by the materialized visible cells and walks the
@@ -613,9 +614,12 @@ entry for every character in a long line.
 **Caching**: the worker's highlight cache stores `edit_generation`, the padded
 absolute byte range, and its spans. The UI retains up to eight completed
 viewport windows per generation so disjoint panes viewing one buffer do not
-evict each other. A replacement clears the UI windows. The padding is currently
-8 KiB on each side of the viewport, which keeps typical highlight queries small
-while absorbing nearby scrolling.
+evict each other. On replacement, cached byte ranges and unaffected spans are
+rebased through the `InputEdit`; a capture intersecting the edit is split around
+the changed bytes. These windows are marked provisional, displayed immediately,
+and refreshed by the versioned worker result. The inserted/replaced bytes remain
+unstyled until that exact result arrives. Padding keeps typical highlight
+queries small while making ordinary scrolling an exact cache hit.
 
 **Performance harness**: `cargo run --release --bin syntax-bench --` generates a
 deterministic Rust buffer and applies the same fixed-width visible edit under
@@ -629,8 +633,8 @@ outside the timed region, checks final text across modes, and requires full and
 incremental highlight checksums to match before reporting the speedup. Its
 output also separates Rope mutation, UI dispatch, parse/update, and highlight
 query time. The background checksum must match the synchronous incremental
-result, and its dispatch column measures the main-thread cost independently of
-worker completion latency.
+result, and its dispatch column measures Rope snapshotting, provisional-cache
+rebasing, and mailbox submission independently of worker completion latency.
 
 **Long-line render benchmark**: the ignored
 `benchmark_five_megabyte_single_line` integration test renders an exact 5 MiB

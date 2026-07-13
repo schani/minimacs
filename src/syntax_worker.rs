@@ -219,21 +219,21 @@ fn process_job(documents: &mut HashMap<usize, WorkerDocument>, job: SyntaxJob) -
         document.generation = job.generation;
     }
 
-    let spans = documents
+    let (completed_range, spans) = documents
         .get(&job.key)
         .map(|document| {
-            document.syntax.highlight_rope(
+            document.syntax.highlight_rope_window(
                 job.source.slice(..),
                 job.requested.clone(),
                 job.generation,
             )
         })
-        .unwrap_or_default();
+        .unwrap_or((job.requested.clone(), Vec::new()));
 
     SyntaxCompletion {
         key: job.key,
         generation: job.generation,
-        requested: job.requested,
+        requested: completed_range,
         spans,
         disabled: documents
             .get(&job.key)
@@ -364,14 +364,10 @@ mod tests {
             },
             1,
         ));
-        assert_eq!(
-            syntax
-                .cached_background_spans(0..2, 1)
-                .expect("current cache")[0]
-                .style,
-            style
-        );
-        assert!(syntax.cached_background_spans(0..2, 0).is_none());
+        let current = syntax.background_spans(0..2, 1);
+        assert!(current.exact);
+        assert_eq!(current.spans[0].style, style);
+        assert!(syntax.background_spans(0..2, 0).spans.is_empty());
         assert!(syntax.take_disabled_message());
         assert!(!syntax.take_disabled_message());
     }
@@ -455,7 +451,151 @@ mod tests {
             ));
         }
 
-        assert!(syntax.cached_background_spans(0..10, 0).is_some());
-        assert!(syntax.cached_background_spans(100..110, 0).is_some());
+        assert!(syntax.background_spans(0..10, 0).exact);
+        assert!(syntax.background_spans(100..110, 0).exact);
+    }
+
+    #[test]
+    fn scrolling_keeps_overlapping_cached_spans_while_requesting_the_remainder() {
+        let syntax = SyntaxState::new(Language::Rust).unwrap();
+        let key = syntax.background_key();
+        let style = Style::default().fg(Color::Blue);
+        assert!(syntax.accept_background_completion(
+            SyntaxCompletion {
+                key,
+                generation: 0,
+                requested: 0..100,
+                spans: vec![StyledSpan {
+                    start: 60,
+                    end: 70,
+                    style,
+                }],
+                disabled: false,
+            },
+            0,
+        ));
+
+        let cached = syntax.background_spans(50..150, 0);
+
+        assert!(!cached.exact);
+        assert_eq!(cached.spans.len(), 1);
+        assert_eq!((cached.spans[0].start, cached.spans[0].end), (60, 70));
+    }
+
+    #[test]
+    fn edits_rebase_unaffected_spans_and_keep_them_provisional() {
+        let syntax = SyntaxState::new(Language::Rust).unwrap();
+        let key = syntax.background_key();
+        let before = Style::default().fg(Color::Blue);
+        let replaced = Style::default().fg(Color::Red);
+        let after = Style::default().fg(Color::Green);
+        assert!(syntax.accept_background_completion(
+            SyntaxCompletion {
+                key,
+                generation: 0,
+                requested: 0..10,
+                spans: vec![
+                    StyledSpan {
+                        start: 0,
+                        end: 2,
+                        style: before,
+                    },
+                    StyledSpan {
+                        start: 3,
+                        end: 6,
+                        style: replaced,
+                    },
+                    StyledSpan {
+                        start: 7,
+                        end: 10,
+                        style: after,
+                    },
+                ],
+                disabled: false,
+            },
+            0,
+        ));
+
+        syntax.note_background_edit(
+            1,
+            InputEdit {
+                start_byte: 3,
+                old_end_byte: 6,
+                new_end_byte: 5,
+                start_point: Point { row: 0, col: 3 },
+                old_end_point: Point { row: 0, col: 6 },
+                new_end_point: Point { row: 0, col: 5 },
+            },
+        );
+        let cached = syntax.background_spans(0..9, 1);
+
+        assert!(!cached.exact);
+        assert_eq!(cached.spans.len(), 2);
+        assert_eq!(
+            cached
+                .spans
+                .iter()
+                .map(|span| (span.start, span.end, span.style))
+                .collect::<Vec<_>>(),
+            vec![(0, 2, before), (6, 9, after)]
+        );
+    }
+
+    #[test]
+    fn editing_inside_a_long_capture_preserves_both_unaffected_sides() {
+        let syntax = SyntaxState::new(Language::Rust).unwrap();
+        let key = syntax.background_key();
+        let style = Style::default().fg(Color::Green);
+        assert!(syntax.accept_background_completion(
+            SyntaxCompletion {
+                key,
+                generation: 0,
+                requested: 0..100,
+                spans: vec![StyledSpan {
+                    start: 0,
+                    end: 100,
+                    style,
+                }],
+                disabled: false,
+            },
+            0,
+        ));
+
+        syntax.note_background_edit(
+            1,
+            InputEdit {
+                start_byte: 50,
+                old_end_byte: 50,
+                new_end_byte: 51,
+                start_point: Point { row: 0, col: 50 },
+                old_end_point: Point { row: 0, col: 50 },
+                new_end_point: Point { row: 0, col: 51 },
+            },
+        );
+        let cached = syntax.background_spans(0..101, 1);
+
+        assert_eq!(
+            cached
+                .spans
+                .iter()
+                .map(|span| (span.start, span.end, span.style))
+                .collect::<Vec<_>>(),
+            vec![(0, 50, style), (51, 101, style)]
+        );
+    }
+
+    #[test]
+    fn worker_completion_publishes_its_padded_highlight_window() {
+        let source = " ".repeat(100_000);
+        let visible = 50_000..50_100;
+        let mut documents = HashMap::new();
+
+        let completion = process_job(&mut documents, job(91, 0, &source, visible.clone()));
+
+        assert!(completion.requested.start < visible.start);
+        assert!(completion.requested.end > visible.end);
+        assert!(
+            completion.requested.end - completion.requested.start <= visible.len() + 2 * 8 * 1024
+        );
     }
 }

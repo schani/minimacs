@@ -540,6 +540,12 @@ struct BackgroundHighlightCache {
     version: usize,
     range: Range<usize>,
     spans: Vec<StyledSpan>,
+    exact: bool,
+}
+
+pub(crate) struct BackgroundSpans {
+    pub(crate) spans: Vec<StyledSpan>,
+    pub(crate) exact: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -649,7 +655,9 @@ impl SyntaxState {
         edit: tree_house::tree_sitter::InputEdit,
     ) {
         let mut background = self.background.borrow_mut();
-        background.caches.clear();
+        for cache in &mut background.caches {
+            rebase_background_cache(cache, generation, &edit);
+        }
         background
             .pending_edits
             .push(BackgroundEdit { generation, edit });
@@ -676,25 +684,41 @@ impl SyntaxState {
         (base, edits)
     }
 
-    pub(crate) fn cached_background_spans(
+    pub(crate) fn background_spans(
         &self,
         requested: Range<usize>,
         generation: usize,
-    ) -> Option<Vec<StyledSpan>> {
+    ) -> BackgroundSpans {
         let background = self.background.borrow();
-        let cache = background.caches.iter().rev().find(|cache| {
+        let exact = background.caches.iter().rev().find(|cache| {
             cache.version == generation
+                && cache.exact
                 && cache.range.start <= requested.start
                 && cache.range.end >= requested.end
-        })?;
-        Some(
-            cache
-                .spans
+        });
+        let cache = exact.or_else(|| {
+            background
+                .caches
                 .iter()
-                .filter(|span| span.end > requested.start && span.start < requested.end)
-                .cloned()
-                .collect(),
-        )
+                .rev()
+                .filter(|cache| cache.version == generation)
+                .max_by_key(|cache| overlap_len(&cache.range, &requested))
+                .filter(|cache| overlap_len(&cache.range, &requested) > 0)
+        });
+        let spans = cache
+            .map(|cache| {
+                cache
+                    .spans
+                    .iter()
+                    .filter(|span| span.end > requested.start && span.start < requested.end)
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default();
+        BackgroundSpans {
+            spans,
+            exact: exact.is_some(),
+        }
     }
 
     pub(crate) fn is_disabled(&self) -> bool {
@@ -739,6 +763,7 @@ impl SyntaxState {
             version: completion.generation,
             range: completion.requested,
             spans: completion.spans,
+            exact: true,
         });
         true
     }
@@ -833,6 +858,29 @@ impl SyntaxState {
             .unwrap_or_default()
     }
 
+    /// Highlight a viewport and return the complete padded cache window that
+    /// was populated for it. Background consumers can publish that window to
+    /// the UI without asking the highlighter to pad and query a second time.
+    pub(crate) fn highlight_rope_window(
+        &self,
+        source: RopeSlice<'_>,
+        requested: Range<usize>,
+        version: usize,
+    ) -> (Range<usize>, Vec<StyledSpan>) {
+        let requested = clamp_range(requested, source.len_bytes());
+        let _ = self.highlight_rope(source, requested.clone(), version);
+        self.cache
+            .borrow()
+            .as_ref()
+            .filter(|cache| {
+                cache.version == version
+                    && cache.range.start <= requested.start
+                    && cache.range.end >= requested.end
+            })
+            .map(|cache| (cache.range.clone(), cache.spans.clone()))
+            .unwrap_or((requested, Vec::new()))
+    }
+
     /// Ensure the whole Rope has a parse tree without running highlight
     /// queries. This is exposed separately for the performance harness.
     #[allow(dead_code)]
@@ -903,6 +951,86 @@ impl SyntaxState {
 fn clamp_range(range: Range<usize>, len: usize) -> Range<usize> {
     let start = range.start.min(len);
     start..range.end.min(len).max(start)
+}
+
+fn overlap_len(left: &Range<usize>, right: &Range<usize>) -> usize {
+    left.end
+        .min(right.end)
+        .saturating_sub(left.start.max(right.start))
+}
+
+fn rebase_background_cache(
+    cache: &mut BackgroundHighlightCache,
+    generation: usize,
+    edit: &tree_house::tree_sitter::InputEdit,
+) {
+    let start = edit.start_byte as usize;
+    let old_end = edit.old_end_byte as usize;
+    let new_end = edit.new_end_byte as usize;
+    cache.range = rebase_cached_range(cache.range.clone(), start, old_end, new_end);
+    let old_spans = std::mem::take(&mut cache.spans);
+    cache.spans.reserve(old_spans.len());
+    for mut span in old_spans {
+        let overlaps_edit = if start == old_end {
+            span.start < start && span.end > start
+        } else {
+            span.start < old_end && span.end > start
+        };
+        if overlaps_edit {
+            if span.start < start {
+                cache.spans.push(StyledSpan {
+                    start: span.start,
+                    end: start,
+                    style: span.style,
+                });
+            }
+            if span.end > old_end {
+                cache.spans.push(StyledSpan {
+                    start: new_end,
+                    end: shift_after_edit(span.end, old_end, new_end),
+                    style: span.style,
+                });
+            }
+            continue;
+        }
+        if span.start >= old_end {
+            span.start = shift_after_edit(span.start, old_end, new_end);
+            span.end = shift_after_edit(span.end, old_end, new_end);
+        }
+        cache.spans.push(span);
+    }
+    cache.version = generation;
+    cache.exact = false;
+}
+
+fn rebase_cached_range(
+    range: Range<usize>,
+    start: usize,
+    old_end: usize,
+    new_end: usize,
+) -> Range<usize> {
+    if range.end <= start {
+        return range;
+    }
+    if range.start >= old_end {
+        return shift_after_edit(range.start, old_end, new_end)
+            ..shift_after_edit(range.end, old_end, new_end);
+    }
+    let rebased_start = range.start.min(start);
+    let rebased_end = if range.end <= old_end {
+        new_end
+    } else {
+        shift_after_edit(range.end, old_end, new_end)
+    };
+    rebased_start..rebased_end.max(rebased_start)
+}
+
+fn shift_after_edit(position: usize, old_end: usize, new_end: usize) -> usize {
+    if new_end >= old_end {
+        position.saturating_add(new_end - old_end)
+    } else {
+        position.saturating_sub(old_end - new_end)
+    }
 }
 
 fn padded_range(source: RopeSlice<'_>, requested: Range<usize>) -> Range<usize> {

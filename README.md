@@ -74,10 +74,10 @@ Use `--mode full`, `--mode incremental`, `--mode background`, or `--mode none`
 to run one strategy.
 The default `all` mode also verifies that every strategy produces identical
 final text and that full, incremental, and background parsing produce identical
-highlight checksums. It reports background dispatch separately so UI-thread
-cost is not confused with worker completion latency. Run `syntax-bench --help`
-for all options. Release mode is important
-for representative timings.
+highlight checksums. It reports background dispatch—including provisional
+highlight-cache rebasing—separately so UI-thread cost is not confused with
+worker completion latency. Run `syntax-bench --help` for all options. Release
+mode is important for representative timings.
 
 ### Syntax fuzz harness
 

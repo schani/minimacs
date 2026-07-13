@@ -918,22 +918,20 @@ fn compute_visible_syntax_spans(
         return Vec::new();
     };
     let requested = first.buffer_byte_start..last.buffer_byte_end;
-    if let Some(spans) =
-        syntax.cached_background_spans(requested.clone(), buf.edit_generation)
-    {
-        return spans;
+    let cached = syntax.background_spans(requested.clone(), buf.edit_generation);
+    if !cached.exact {
+        let (base_generation, edits) = syntax.background_update_for(buf.edit_generation);
+        syntax_worker.submit(SyntaxJob {
+            key: syntax.background_key(),
+            language: syntax.language,
+            base_generation,
+            generation: buf.edit_generation,
+            source: buf.text.clone(),
+            edits,
+            requested,
+        });
     }
-    let (base_generation, edits) = syntax.background_update_for(buf.edit_generation);
-    syntax_worker.submit(SyntaxJob {
-        key: syntax.background_key(),
-        language: syntax.language,
-        base_generation,
-        generation: buf.edit_generation,
-        source: buf.text.clone(),
-        edits,
-        requested,
-    });
-    Vec::new()
+    cached.spans
 }
 
 fn syntax_style_at_byte(spans: &[crate::syntax::StyledSpan], byte: usize) -> Style {

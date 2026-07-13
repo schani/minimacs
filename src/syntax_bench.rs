@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use ropey::Rope;
 use tree_house::tree_sitter::{InputEdit, Point};
 
-use crate::syntax::{BackgroundEdit, Language, StyledSpan, SyntaxState};
+use crate::syntax::{Language, StyledSpan, SyntaxState};
 use crate::syntax_worker::{SyntaxJob, SyntaxWorker};
 
 const DEFAULT_LINES: usize = 10_000;
@@ -191,9 +191,11 @@ fn run_mode(mode: BenchMode, workload: &Workload, edits: usize) -> RunResult {
         None
     };
     let background = matches!(mode, BenchMode::Background).then(SyntaxWorker::new);
-    if let Some(worker) = background.as_ref() {
+    let background_state = matches!(mode, BenchMode::Background)
+        .then(|| SyntaxState::new(Language::Rust).expect("Rust syntax configuration"));
+    if let (Some(worker), Some(state)) = (background.as_ref(), background_state.as_ref()) {
         worker.submit(SyntaxJob {
-            key: 1,
+            key: state.background_key(),
             language: Language::Rust,
             base_generation: None,
             generation: 0,
@@ -201,7 +203,8 @@ fn run_mode(mode: BenchMode, workload: &Workload, edits: usize) -> RunResult {
             edits: Vec::new(),
             requested: workload.viewport.clone(),
         });
-        black_box(wait_for_completion(worker, 1, 0));
+        let completion = wait_for_completion(worker, state.background_key(), 0);
+        assert!(state.accept_background_completion(completion, 0));
     }
 
     let mut highlight_results = Vec::with_capacity(edits);
@@ -249,21 +252,33 @@ fn run_mode(mode: BenchMode, workload: &Workload, edits: usize) -> RunResult {
             }
             BenchMode::Background => {
                 let worker = background.as_ref().unwrap();
+                let state = background_state.as_ref().unwrap();
                 let dispatch_started = Instant::now();
+                state.note_background_edit(generation, edit);
+                let (base_generation, edits) = state.background_update_for(generation);
                 worker.submit(SyntaxJob {
-                    key: 1,
+                    key: state.background_key(),
                     language: Language::Rust,
-                    base_generation: Some(generation - 1),
+                    base_generation,
                     generation,
                     source: rope.clone(),
-                    edits: vec![BackgroundEdit { generation, edit }],
+                    edits,
                     requested: workload.viewport.clone(),
                 });
                 dispatch_elapsed += dispatch_started.elapsed();
                 let wait_started = Instant::now();
-                let completion = wait_for_completion(worker, 1, generation);
+                let completion = wait_for_completion(worker, state.background_key(), generation);
                 parse_elapsed += wait_started.elapsed();
-                completion.spans
+                let spans = completion
+                    .spans
+                    .iter()
+                    .filter(|span| {
+                        span.end > workload.viewport.start && span.start < workload.viewport.end
+                    })
+                    .cloned()
+                    .collect();
+                assert!(state.accept_background_completion(completion, generation));
+                spans
             }
         };
         // Keep the spans alive so highlighting cannot be optimized away;
