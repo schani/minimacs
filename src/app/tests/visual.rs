@@ -253,6 +253,31 @@ fn wide_chars_wrap_by_visual_width() {
 }
 
 #[test]
+fn wide_glyph_wrap_boundary_is_atomic_through_the_app() {
+    // Exact regression for a five-cell continued-row budget: the third
+    // double-width glyph cannot straddle the marker boundary. Four CJK
+    // glyphs render as 2 + marker, then 2; C-e lands after the final glyph.
+    let events = vec![ctrl('e')];
+    let (mut app, mut events) = test_app_with_text(6, 5, "你你你你", events);
+    app.run_until_idle(&mut events).unwrap();
+
+    let screen = capture_screen(&app.terminal);
+    let rows = screen.lines().take(2).collect::<Vec<_>>();
+    let first: String = rows[0].chars().filter(|ch| *ch != ' ').collect();
+    let second: String = rows[1].chars().filter(|ch| *ch != ' ').collect();
+    assert_eq!(first, "你你\\");
+    assert_eq!(second, "你你");
+    assert!(
+        rows[1].starts_with('你'),
+        "second row must start with a glyph, not its empty continuation cell: {:?}",
+        rows[1]
+    );
+
+    let pos = app.terminal.get_cursor_position().unwrap();
+    assert_eq!((pos.x, pos.y), (4, 1));
+}
+
+#[test]
 fn cursor_at_eol_of_full_last_wrap_segment_stays_on_that_row() {
     // Terminal 10 wide: text_width=10, chars-per-segment=9.
     // An 18-char line renders as rows [0..9)+'\' and [9..18).
