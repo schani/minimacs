@@ -153,6 +153,18 @@ fn mouse_click_wrapped_line_with_tab_uses_visual_column() {
 }
 
 #[test]
+fn mouse_click_maps_atomic_wide_wrap_row_to_third_glyph() {
+    // Width 6 reserves the fifth content cell rather than splitting the
+    // third CJK glyph. The second visual row therefore begins at buffer
+    // column 2, and clicking its first cell must land there.
+    let events = vec![mouse_click(0, 1)];
+    let (mut app, mut events) = test_app_with_text(6, 5, "你你你你", events);
+    app.run_until_idle(&mut events).unwrap();
+
+    assert_eq!(app.editor.point(), 2);
+}
+
+#[test]
 fn mouse_click_below_content_goes_to_end() {
     let text = "hello";
     // Click on row 5, well below the single line of content
