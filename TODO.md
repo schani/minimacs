@@ -109,19 +109,23 @@ Plan, in order (tests first for each step):
       Tests: with a zero timeout, the parse is attempted exactly once per
       generation (extend the existing `#[cfg(test)]` parse counters); cursor
       movement and idle frames after a failure do not stall.
-- [ ] Give up after N consecutive failed generations (suggest N=3): set a
+- [x] Give up after N consecutive failed generations (N=3): set a
       permanent `disabled` flag, show "syntax highlighting disabled (parse
       timeout)" in the echo area once, and stop retrying entirely.
       `redetect_syntax` (used by save-as) resets the flag, giving users an
       explicit re-enable path. Tests: N failing edits disable it; the message
       appears once; redetect re-arms.
-- [ ] Reconsider `PARSE_TIMEOUT`: 2s is far beyond an acceptable frame stall.
+- [x] Reconsider `PARSE_TIMEOUT`: 2s is far beyond an acceptable frame stall.
       With the poison flag the retry storm is gone, but a single 2s stall per
       edit on a pathological file is still bad. Suggest 500ms for the initial
       parse and keeping `Syntax::update` at 500ms too; measure on the
       syntax-bench 100k-line workload before choosing. Document the choice in
-      ARCHITECTURE.md.
-- [ ] (Future, complementary — already sketched in FUTURE.md) Move parsing to
+      ARCHITECTURE.md. (Done: parsing is off the UI thread, so the 2s value
+      bounds worker occupation instead of a frame stall. It remains 2s to avoid
+      rejecting valid large parses; the bounded mailbox prevents backlog. The
+      100k-line/5.9MB release workload completed at 229.59ms/edit in background
+      mode with checksums matching full and incremental parsing.)
+- [x] (Future, complementary — already sketched in FUTURE.md) Move parsing to
       a background thread so even the first parse of a huge file never blocks
       input; the poison flag remains useful as the fallback for the
       synchronous path.

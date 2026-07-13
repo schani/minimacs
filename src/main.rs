@@ -10,6 +10,7 @@ mod minibuffer;
 mod pane;
 mod render;
 mod syntax;
+mod syntax_worker;
 
 use std::io;
 use std::path::PathBuf;

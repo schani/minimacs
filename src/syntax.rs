@@ -1,7 +1,9 @@
 use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
+use std::collections::VecDeque;
 use std::ops::Range;
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -57,7 +59,9 @@ const HIGHLIGHT_NAMES: &[&str] = &[
 ];
 
 const PARSE_TIMEOUT: Duration = Duration::from_secs(2);
+const MAX_CONSECUTIVE_FAILED_GENERATIONS: u8 = 3;
 const HIGHLIGHT_CACHE_PADDING: usize = 8 * 1024;
+const BACKGROUND_CACHE_WINDOWS: usize = 8;
 
 /// A styled span: byte range + style.
 #[derive(Debug, Clone)]
@@ -65,6 +69,14 @@ pub struct StyledSpan {
     pub start: usize,
     pub end: usize,
     pub style: Style,
+}
+
+pub(crate) struct SyntaxCompletion {
+    pub(crate) key: usize,
+    pub(crate) generation: usize,
+    pub(crate) requested: Range<usize>,
+    pub(crate) spans: Vec<StyledSpan>,
+    pub(crate) disabled: bool,
 }
 
 /// Maps a highlight name index to a ratatui Style.
@@ -524,13 +536,39 @@ struct HighlightCache {
     spans: Vec<StyledSpan>,
 }
 
+struct BackgroundHighlightCache {
+    version: usize,
+    range: Range<usize>,
+    spans: Vec<StyledSpan>,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct BackgroundEdit {
+    pub(crate) generation: usize,
+    pub(crate) edit: tree_house::tree_sitter::InputEdit,
+}
+
+#[derive(Default)]
+struct BackgroundState {
+    confirmed_generation: Option<usize>,
+    pending_edits: Vec<BackgroundEdit>,
+    caches: VecDeque<BackgroundHighlightCache>,
+    disabled_reported: bool,
+}
+
+static NEXT_BACKGROUND_KEY: AtomicUsize = AtomicUsize::new(1);
+
 /// Holds a parsed tree and highlight config for a buffer.
 pub struct SyntaxState {
     pub language: Language,
+    background_key: usize,
+    background: RefCell<BackgroundState>,
     syntax: RefCell<Option<TreeHouseSyntax>>,
     cache: RefCell<Option<HighlightCache>>,
     parse_timeout: Duration,
     failed_version: Cell<Option<usize>>,
+    consecutive_failed_generations: Cell<u8>,
+    disabled: Cell<bool>,
     #[cfg(test)]
     full_parse_count: Cell<usize>,
     #[cfg(test)]
@@ -557,10 +595,14 @@ impl SyntaxState {
 
         Some(SyntaxState {
             language: lang,
+            background_key: NEXT_BACKGROUND_KEY.fetch_add(1, Ordering::Relaxed),
+            background: RefCell::new(BackgroundState::default()),
             syntax: RefCell::new(None),
             cache: RefCell::new(None),
             parse_timeout,
             failed_version: Cell::new(None),
+            consecutive_failed_generations: Cell::new(0),
+            disabled: Cell::new(false),
             #[cfg(test)]
             full_parse_count: Cell::new(0),
             #[cfg(test)]
@@ -594,6 +636,124 @@ impl SyntaxState {
         source: RopeSlice<'_>,
         edit: tree_house::tree_sitter::InputEdit,
     ) {
+        self.apply_edits(source, std::slice::from_ref(&edit));
+    }
+
+    pub(crate) fn background_key(&self) -> usize {
+        self.background_key
+    }
+
+    pub(crate) fn note_background_edit(
+        &self,
+        generation: usize,
+        edit: tree_house::tree_sitter::InputEdit,
+    ) {
+        let mut background = self.background.borrow_mut();
+        background.caches.clear();
+        background
+            .pending_edits
+            .push(BackgroundEdit { generation, edit });
+    }
+
+    pub(crate) fn background_update_for(
+        &self,
+        generation: usize,
+    ) -> (Option<usize>, Vec<BackgroundEdit>) {
+        let background = self.background.borrow();
+        let base = background.confirmed_generation;
+        let edits = base
+            .map(|base| {
+                background
+                    .pending_edits
+                    .iter()
+                    .filter(|versioned| {
+                        versioned.generation > base && versioned.generation <= generation
+                    })
+                    .copied()
+                    .collect()
+            })
+            .unwrap_or_default();
+        (base, edits)
+    }
+
+    pub(crate) fn cached_background_spans(
+        &self,
+        requested: Range<usize>,
+        generation: usize,
+    ) -> Option<Vec<StyledSpan>> {
+        let background = self.background.borrow();
+        let cache = background.caches.iter().rev().find(|cache| {
+            cache.version == generation
+                && cache.range.start <= requested.start
+                && cache.range.end >= requested.end
+        })?;
+        Some(
+            cache
+                .spans
+                .iter()
+                .filter(|span| span.end > requested.start && span.start < requested.end)
+                .cloned()
+                .collect(),
+        )
+    }
+
+    pub(crate) fn is_disabled(&self) -> bool {
+        self.disabled.get()
+    }
+
+    pub(crate) fn take_disabled_message(&self) -> bool {
+        if !self.disabled.get() {
+            return false;
+        }
+        let mut background = self.background.borrow_mut();
+        if background.disabled_reported {
+            return false;
+        }
+        background.disabled_reported = true;
+        true
+    }
+
+    pub(crate) fn accept_background_completion(
+        &self,
+        completion: SyntaxCompletion,
+        current_generation: usize,
+    ) -> bool {
+        if completion.key != self.background_key
+            || completion.generation != current_generation
+        {
+            return false;
+        }
+        let mut background = self.background.borrow_mut();
+        self.disabled.set(completion.disabled);
+        background.confirmed_generation = Some(completion.generation);
+        background
+            .pending_edits
+            .retain(|versioned| versioned.generation > completion.generation);
+        background
+            .caches
+            .retain(|cache| cache.version == completion.generation);
+        if background.caches.len() == BACKGROUND_CACHE_WINDOWS {
+            background.caches.pop_front();
+        }
+        background.caches.push_back(BackgroundHighlightCache {
+            version: completion.generation,
+            range: completion.requested,
+            spans: completion.spans,
+        });
+        true
+    }
+
+    /// Apply a sequence of edits to one source snapshot in a single parser
+    /// update. The edits are ordered and use the coordinates in effect when
+    /// each corresponding UI edit occurred.
+    pub(crate) fn apply_edits(
+        &self,
+        source: RopeSlice<'_>,
+        edits: &[tree_house::tree_sitter::InputEdit],
+    ) {
+        if edits.is_empty() {
+            return;
+        }
         *self.cache.borrow_mut() = None;
         let mut syntax = self.syntax.borrow_mut();
         let Some(parsed) = syntax.as_mut() else {
@@ -604,7 +764,7 @@ impl SyntaxState {
             return;
         };
         if parsed
-            .update(source, self.parse_timeout, &[edit], loader)
+            .update(source, self.parse_timeout, edits, loader)
             .is_err()
         {
             *syntax = None;
@@ -625,14 +785,24 @@ impl SyntaxState {
         version: usize,
     ) -> Vec<StyledSpan> {
         let requested = clamp_range(requested, source.len_bytes());
+        if self.disabled.get() {
+            return Vec::new();
+        }
         if self.failed_version.get() == Some(version) {
             return Vec::new();
         }
         if !self.cache_is_valid(version, requested.clone()) {
             if !self.ensure_syntax(source) {
                 self.failed_version.set(Some(version));
+                let failures = self.consecutive_failed_generations.get() + 1;
+                self.consecutive_failed_generations.set(failures);
+                if failures >= MAX_CONSECUTIVE_FAILED_GENERATIONS {
+                    self.disabled.set(true);
+                }
                 return Vec::new();
             }
+            self.failed_version.set(None);
+            self.consecutive_failed_generations.set(0);
             let window = padded_range(source, requested.clone());
             let Ok(loader) = tree_house_loader() else {
                 return Vec::new();
@@ -715,12 +885,12 @@ impl SyntaxState {
     }
 
     #[cfg(test)]
-    fn full_parse_count(&self) -> usize {
+    pub(crate) fn full_parse_count(&self) -> usize {
         self.full_parse_count.get()
     }
 
     #[cfg(test)]
-    fn incremental_update_count(&self) -> usize {
+    pub(crate) fn incremental_update_count(&self) -> usize {
         self.incremental_update_count.get()
     }
 
@@ -1145,6 +1315,61 @@ mod tests {
             .highlight_rope(source.slice(..), 0..source.len_bytes(), 1)
             .is_empty());
         assert_eq!(state.parse_attempt_count(), 2);
+    }
+
+    #[test]
+    fn three_consecutive_failed_generations_disable_parsing() {
+        let state = SyntaxState::with_timeout(Language::Rust, Duration::ZERO).unwrap();
+        let source = Rope::from_str(&"fn main() {}\n".repeat(10_000));
+
+        for generation in 0..3 {
+            assert!(state
+                .highlight_rope(
+                    source.slice(..),
+                    0..source.len_bytes(),
+                    generation,
+                )
+                .is_empty());
+        }
+
+        assert!(state.is_disabled());
+        state.highlight_rope(source.slice(..), 0..source.len_bytes(), 3);
+        assert_eq!(state.parse_attempt_count(), 3);
+    }
+
+    #[test]
+    fn multiple_worker_edits_are_applied_in_one_incremental_update() {
+        use tree_house::tree_sitter::{InputEdit, Point};
+
+        let state = SyntaxState::new(Language::Rust).unwrap();
+        let original = Rope::from_str("fn main() {}\n");
+        state.highlight_rope(original.slice(..), 0..original.len_bytes(), 0);
+
+        let final_source = Rope::from_str("fn xymain() {}\n");
+        let edits = [
+            InputEdit {
+                start_byte: 3,
+                old_end_byte: 3,
+                new_end_byte: 4,
+                start_point: Point { row: 0, col: 3 },
+                old_end_point: Point { row: 0, col: 3 },
+                new_end_point: Point { row: 0, col: 4 },
+            },
+            InputEdit {
+                start_byte: 4,
+                old_end_byte: 4,
+                new_end_byte: 5,
+                start_point: Point { row: 0, col: 4 },
+                old_end_point: Point { row: 0, col: 4 },
+                new_end_point: Point { row: 0, col: 5 },
+            },
+        ];
+
+        state.apply_edits(final_source.slice(..), &edits);
+        state.highlight_rope(final_source.slice(..), 0..final_source.len_bytes(), 2);
+
+        assert_eq!(state.incremental_update_count(), 1);
+        assert_eq!(state.full_parse_count(), 1);
     }
 
     #[test]

@@ -4,12 +4,15 @@ This document describes the internal architecture of minimacs.
 
 ## Overview
 
-minimacs is a synchronous, single-threaded terminal text editor. There is no
-async runtime. The event loop polls for terminal events with a 100ms timeout;
+minimacs has a synchronous main/UI thread and one lazily started background
+syntax thread. There is no async runtime. The event loop polls for terminal
+events with a 100ms timeout;
 when an event arrives it is processed and the UI re-renders. Poll timeouts
 and events that cannot have changed state (bare mouse motion, key releases,
 focus changes) skip the render entirely — an idle minimacs does no drawing
-work, even with the mouse waving over it. Rendered cells and syntax-style
+work, even with the mouse waving over it. A completed background highlight is
+the other redraw trigger, so syntax appears without requiring more input.
+Rendered cells and syntax-style
 lookups are bounded by the viewport rather than the length of a wrapped line.
 Printable ASCII lines also use direct Rope indexing for cursor and viewport
 jumps; an eight-entry, edit-generation-keyed per-buffer cache remembers that
@@ -34,6 +37,8 @@ Terminal input (crossterm)
        |
        v
    Render (render.rs) ──> ratatui ──> Terminal output
+       |
+       +──> coalescing syntax jobs ──> one syntax worker thread
 ```
 
 ## Module Map
@@ -65,6 +70,7 @@ src/
   history.rs        History -- undo/redo with edit grouping
   indent.rs         Shared indentation constants (INDENT_WIDTH = 4)
   syntax.rs         SyntaxState -- tree-sitter highlighting
+  syntax_worker.rs  Single-thread parser executor and coalescing mailbox
   syntax_bench.rs   syntax-bench performance harness (see below)
   syntax_fuzz.rs    syntax-fuzz incremental-vs-fresh fuzz harness (see below)
   bin/*.rs          Thin wrappers exposing the harnesses as cargo binaries
@@ -83,12 +89,14 @@ main ──> app ──> editor ──> buffer
                     +──> minibuffer
                     +──> command
               app ──> render ──> editor (read-only)
+               |         |
+               +─────────+──> syntax_worker ──> syntax
               app ──> keymap
               app ──> event
 ```
 
 All rendering reads from `Editor` without mutating it. The `render()` function
-takes `&Editor` and produces a frame.
+takes `&Editor` plus the syntax worker handle and produces a frame.
 
 ## Key Data Structures
 
@@ -134,9 +142,9 @@ lengths (`String::len()`) must never be mixed in. `apply_edit`:
 3. Calls `Buffer::replace`, which performs deletion and insertion as one atomic
    rope edit, advances `edit_generation` exactly once, and computes the
    tree-sitter `InputEdit` in UTF-8 byte offsets/byte columns for the syntax
-   layer. After mutating the Rope, the buffer applies that edit to its persistent
-   tree-house syntax tree; if the incremental update fails, the syntax state is
-   discarded and rebuilt lazily on the next render.
+   layer. The buffer records that edit with its generation for the background
+   worker. The synchronous parser path used by the fuzz and benchmark harnesses
+   receives the same edit.
 4. Calls `Pane::adjust_for_edit` on every pane viewing the buffer (or on the
    minibuffer pane for the minibuffer buffer), keeping point, mark, scroll
    position, and saved per-buffer view states valid. Positions at or before
@@ -562,46 +570,67 @@ recognized language gets a `SyntaxState` backed by the tree-house highlighter.
 once and maps injection names to those configurations; no dynamic grammar
 libraries are required.
 
-`SyntaxState` owns a persistent tree-house `Syntax` whose root and injection
-layers parse the entire Rope, preserving context-dependent constructs such as
-Markdown fenced code blocks. The initial parse is lazy. Every subsequent
-`Buffer::replace()` supplies one atomic `InputEdit` and the updated Rope to
-`Syntax::update()`, so tree-sitter can reuse unchanged subtrees. The edit's
+The app owns one lazily started `SyntaxWorker`. That thread exclusively owns a
+persistent tree-house `Syntax` per highlighted buffer; parser state is never
+shared behind a UI-thread mutex. Its root and injection layers parse the entire
+Rope, preserving context-dependent constructs such as Markdown fenced code
+blocks. The initial parse is lazy. Every subsequent `Buffer::replace()` records
+one atomic, generation-tagged `InputEdit`, so the worker can feed ordered edit
+batches to `Syntax::update()` and reuse unchanged subtrees. The edit's
 `Point` rows are exact for arbitrary content: with ropey pinned to
 `default-features = false`, its line index counts exactly the `\n` chars
 tree-sitter counts. Parsing reads
 the Rope directly through tree-house's `RopeSlice` input instead of copying a
-buffer prefix into a temporary byte vector. A failed or timed-out incremental
-update drops the tree and falls back to a fresh lazy parse.
-If that fresh parse fails, the failed edit generation is remembered: further
-highlight requests for the same generation return unstyled spans without
-retrying, and the next edit generation gets one new attempt.
+buffer prefix into a temporary byte vector. Submitting a Rope snapshot is an
+O(1) clone of its shared chunks.
 
-At render time, `highlight_rope()` runs tree-house's range highlighter only for
-a padded byte window around the viewport and converts its events into absolute
-`StyledSpan { start, end, style }` ranges. The renderer clips those spans to
+The worker has a bounded coalescing mailbox: at most one pending snapshot and
+one completed result exist per syntax-state key. Newer work replaces older
+pending work for that key. If the worker already reached an intermediate
+generation from a coalesced batch, it applies only the remaining suffix rather
+than rebuilding. Jobs and completions carry the syntax-state key and edit
+generation; the UI rejects stale results. This gives rapid typing backpressure
+without cancellation machinery or additional parser threads.
+
+A failed or timed-out incremental update drops the tree and falls back to a
+fresh parse. A failed generation is attempted only once. Three consecutive
+failed generations permanently disable that syntax state and show one
+minibuffer message; save-as language redetection creates a new state and
+re-enables highlighting. The parser timeout remains two seconds: it now bounds
+worker occupation rather than a UI frame, and retaining it avoids rejecting
+valid very large parses.
+
+At render time, a cache miss submits the current Rope snapshot, edit batch, and
+visible byte range to the worker and renders that frame without syntax spans.
+The worker runs tree-house's range highlighter only for a padded byte window
+around the viewport and converts its events into absolute
+`StyledSpan { start, end, style }` ranges. On a later poll the app accepts a
+current completion and redraws. The renderer clips those spans to
 the byte interval covered by the materialized visible cells and walks the
 sorted spans while building terminal spans. It does not construct a style
 entry for every character in a long line.
 
-**Caching**: the highlight cache stores `edit_generation`, the padded absolute
-byte range, and its spans. Requests contained by that range reuse the captures,
-so ordinary nearby scrolling does not rerun highlight queries. A replacement
-updates the parse tree and clears the capture cache; cursor movement and idle
-frames reuse both. The padding is currently 8 KiB on each side of the viewport,
-which keeps typical highlight queries small while absorbing nearby scrolling.
+**Caching**: the worker's highlight cache stores `edit_generation`, the padded
+absolute byte range, and its spans. The UI retains up to eight completed
+viewport windows per generation so disjoint panes viewing one buffer do not
+evict each other. A replacement clears the UI windows. The padding is currently
+8 KiB on each side of the viewport, which keeps typical highlight queries small
+while absorbing nearby scrolling.
 
 **Performance harness**: `cargo run --release --bin syntax-bench --` generates a
 deterministic Rust buffer and applies the same fixed-width visible edit under
-three strategies: Rope editing without parsing, a new full parse after every
-edit, and the editor's persistent incremental tree plus viewport highlighting.
+four strategies: Rope editing without parsing, a new full parse after every
+edit, the persistent incremental tree plus viewport highlighting, and the
+single background worker.
 Grammar/query initialization and the incremental tree's initial parse happen
 before timing, modeling edits to an already-open buffer. The harness keeps
 highlight results alive to prevent optimization but computes their checksums
 outside the timed region, checks final text across modes, and requires full and
 incremental highlight checksums to match before reporting the speedup. Its
-output also separates Rope mutation, parse/update, and highlight query time so
-whole-file parser work cannot be mistaken for rendering overhead.
+output also separates Rope mutation, UI dispatch, parse/update, and highlight
+query time. The background checksum must match the synchronous incremental
+result, and its dispatch column measures the main-thread cost independently of
+worker completion latency.
 
 **Long-line render benchmark**: the ignored
 `benchmark_five_megabyte_single_line` integration test renders an exact 5 MiB

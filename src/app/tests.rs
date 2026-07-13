@@ -109,6 +109,31 @@ fn render_with_content() {
     insta::assert_snapshot!(screen);
 }
 
+#[test]
+fn background_syntax_completion_is_applied_without_an_input_event() {
+    use std::time::{Duration, Instant};
+
+    let (mut app, _) = test_app_with_text(40, 10, "fn main() {}\n", vec![]);
+    app.editor.buffers[0].syntax =
+        crate::syntax::SyntaxState::new(crate::syntax::Language::Rust);
+    app.update_viewport();
+    app.render().unwrap();
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !app.apply_syntax_completions() {
+        assert!(
+            Instant::now() < deadline,
+            "background syntax completion timed out"
+        );
+        std::thread::yield_now();
+    }
+
+    let syntax = app.editor.buffers[0].syntax.as_ref().unwrap();
+    assert!(syntax
+        .cached_background_spans(0..2, app.editor.buffers[0].edit_generation)
+        .is_some_and(|spans| !spans.is_empty()));
+}
+
 // Shared mouse-event helpers (used by the visual, input_state, and mouse
 // topic modules).
 fn mouse_click(x: u16, y: u16) -> Event {

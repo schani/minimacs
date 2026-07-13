@@ -490,6 +490,9 @@ impl Buffer {
         }
         self.modified = true;
         self.edit_generation += 1;
+        if let Some(syntax) = self.syntax.as_ref() {
+            syntax.note_background_edit(self.edit_generation, edit);
+        }
         Some(edit)
     }
 
@@ -973,6 +976,52 @@ mod tests {
                 .map(|span| (span.start, span.end, span.style))
                 .collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn replace_records_versioned_background_syntax_edits() {
+        let mut buf = Buffer::from_str(0, "test.rs", "fn main() {}\n");
+        buf.syntax = SyntaxState::new(crate::syntax::Language::Rust);
+        let syntax = buf.syntax.as_ref().unwrap();
+        let key = syntax.background_key();
+        assert!(syntax.accept_background_completion(
+            crate::syntax::SyntaxCompletion {
+                key,
+                generation: 0,
+                requested: 0..buf.text.len_bytes(),
+                spans: Vec::new(),
+                disabled: false,
+            },
+            0,
+        ));
+
+        buf.replace(3, 7, "renamed");
+
+        let (base, edits) = buf.syntax.as_ref().unwrap().background_update_for(1);
+        assert_eq!(base, Some(0));
+        assert_eq!(edits.len(), 1);
+    }
+
+    #[test]
+    fn redetect_syntax_rearms_a_disabled_background_state() {
+        let mut buf = Buffer::new_for_path(0, Path::new("test.rs"));
+        let syntax = buf.syntax.as_ref().unwrap();
+        let key = syntax.background_key();
+        assert!(syntax.accept_background_completion(
+            crate::syntax::SyntaxCompletion {
+                key,
+                generation: 0,
+                requested: 0..0,
+                spans: Vec::new(),
+                disabled: true,
+            },
+            0,
+        ));
+        assert!(syntax.is_disabled());
+
+        buf.redetect_syntax();
+
+        assert!(!buf.syntax.as_ref().unwrap().is_disabled());
     }
 
     fn span_signature(

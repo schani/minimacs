@@ -6,6 +6,7 @@ use ratatui::Terminal;
 use crate::editor::Editor;
 use crate::event::{EventSource, Poll};
 use crate::render;
+use crate::syntax_worker::SyntaxWorker;
 
 mod input;
 mod mouse;
@@ -16,6 +17,7 @@ pub struct App<B: Backend> {
     pub editor: Editor,
     pub terminal: Terminal<B>,
     input: InputState,
+    syntax_worker: SyntaxWorker,
     /// Number of `render()` calls, so tests can assert that discarded
     /// events (mouse motion, key releases, focus changes) skip the redraw.
     #[cfg(test)]
@@ -31,6 +33,7 @@ where
             editor,
             terminal,
             input: InputState::new(),
+            syntax_worker: SyntaxWorker::new(),
             #[cfg(test)]
             renders: 0,
         }
@@ -45,7 +48,12 @@ where
                 Poll::Event(event) => event,
                 // Timeouts deliver no event; nothing can have changed, so
                 // skip the re-render instead of redrawing ~10×/s while idle.
-                Poll::Timeout => continue,
+                Poll::Timeout => {
+                    if self.apply_syntax_completions() {
+                        self.render()?;
+                    }
+                    continue;
+                }
                 // The terminal is gone (tty hangup): no further input can
                 // arrive, so exit instead of spinning on a dead source.
                 // We can't prompt about unsaved buffers — there is no input
@@ -54,6 +62,7 @@ where
                 Poll::Closed => anyhow::bail!("event source closed"),
             };
             let state_changed = self.dispatch_event(event);
+            let syntax_changed = self.apply_syntax_completions();
             if self.editor.should_quit {
                 break;
             }
@@ -62,7 +71,7 @@ where
             // changes) change nothing, so skip the redraw. Any-motion mouse
             // tracking (mode 1003) floods `Moved` events on bare movement;
             // rendering each one is a render storm.
-            if state_changed {
+            if state_changed || syntax_changed {
                 self.update_viewport();
                 self.render()?;
             }
@@ -180,9 +189,36 @@ where
         }
         let editor = &self.editor;
         self.terminal.draw(|frame| {
-            render::render(frame, editor);
+            render::render(frame, editor, &self.syntax_worker);
         })?;
         Ok(())
+    }
+
+    fn apply_syntax_completions(&mut self) -> bool {
+        let mut changed = false;
+        for completion in self.syntax_worker.take_completions() {
+            let Some(buffer) = self.editor.buffers.iter().find(|buffer| {
+                buffer
+                    .syntax
+                    .as_ref()
+                    .is_some_and(|syntax| syntax.background_key() == completion.key)
+            }) else {
+                continue;
+            };
+            let syntax = buffer
+                .syntax
+                .as_ref()
+                .expect("matching syntax state disappeared");
+            let accepted =
+                syntax.accept_background_completion(completion, buffer.edit_generation);
+            if accepted && syntax.take_disabled_message() {
+                self.editor.minibuffer.show_message(
+                    "Syntax highlighting disabled (parse timeout)".to_string(),
+                );
+            }
+            changed |= accepted;
+        }
+        changed
     }
 }
 
