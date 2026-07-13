@@ -43,7 +43,11 @@ fn quit_save_after_mouse_focus_marks_saved_undo_version_clean() {
         app.editor.current_buffer().path.as_deref(),
         Some(std::fs::canonicalize(&file_a).unwrap().as_path())
     );
-    assert_eq!(app.editor.buffer_text(), "aaa", "undo removes A's saved edit");
+    assert_eq!(
+        app.editor.buffer_text(),
+        "aaa",
+        "undo removes A's saved edit"
+    );
     assert!(
         app.editor.current_buffer().modified,
         "after undo, A differs from its saved contents and must be modified"

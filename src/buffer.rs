@@ -297,6 +297,11 @@ impl Buffer {
         // path would also work — fs::metadata follows symlinks — but be
         // explicit.)
         self.disk_mtime = fs::metadata(&physical).and_then(|m| m.modified()).ok();
+        // Saving may target a buffer other than the active one (notably
+        // during quit), so command dispatch cannot be relied on to have
+        // committed this buffer's pending edit group. Advance history to
+        // the exact version whose bytes were written before marking it clean.
+        self.history.commit();
         self.history.mark_clean();
         self.modified = false;
         Ok(())
