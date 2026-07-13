@@ -326,58 +326,148 @@ pub(crate) fn buffer_col_for_visual_col(buf: &Buffer, line_idx: usize, target_vi
     line_chars.len()
 }
 
-fn expand_tabs_for_display(line_chars: &[char], line_start_char: usize) -> Vec<VisualCell> {
-    let mut cells: Vec<VisualCell> = Vec::new();
-    let mut visual_col = 0;
+struct VisualRow {
+    cells: Vec<VisualCell>,
+    continues: bool,
+}
 
-    for (buffer_col, ch) in line_chars.iter().copied().enumerate() {
-        let buffer_char_pos = line_start_char + buffer_col;
-        if ch == '\t' {
-            let width = tab_width_at(visual_col);
-            for _ in 0..width {
-                cells.push(VisualCell {
-                    text: " ".to_string(),
-                    buffer_col,
-                    buffer_char_pos,
-                });
-            }
-            visual_col += width;
-            continue;
-        }
-        match char_width(ch) {
-            0 => {
-                // Combining mark: render it inside the preceding cell's
-                // column. An orphan mark at line start is dropped (width 0).
-                if let Some(prev) = cells.iter_mut().rev().find(|c| !c.text.is_empty()) {
-                    prev.text.push(ch);
-                }
-            }
-            2 => {
-                cells.push(VisualCell {
-                    text: ch.to_string(),
-                    buffer_col,
-                    buffer_char_pos,
-                });
-                // Continuation column of the double-width char.
-                cells.push(VisualCell {
-                    text: String::new(),
-                    buffer_col,
-                    buffer_char_pos,
-                });
-                visual_col += 2;
-            }
-            _ => {
-                cells.push(VisualCell {
-                    text: ch.to_string(),
-                    buffer_col,
-                    buffer_char_pos,
-                });
-                visual_col += 1;
-            }
-        }
+struct VisibleVisualRows {
+    rows: Vec<VisualRow>,
+    /// True when the returned rows include the end of the buffer line. If
+    /// false, the viewport filled while more wrapped rows remained.
+    exhausted: bool,
+}
+
+/// Stream just the requested visual rows of one buffer line. The old render
+/// path expanded the complete line into individually allocated cells before
+/// selecting the viewport; a multi-megabyte minified line therefore cost
+/// multi-megabyte work on every frame even at its beginning.
+fn visible_visual_rows(
+    buf: &Buffer,
+    line_idx: usize,
+    text_width: usize,
+    skip_rows: usize,
+    max_rows: usize,
+) -> VisibleVisualRows {
+    if max_rows == 0 {
+        return VisibleVisualRows {
+            rows: Vec::new(),
+            exhausted: false,
+        };
+    }
+    if text_width == 0 {
+        return VisibleVisualRows {
+            rows: vec![VisualRow {
+                cells: Vec::new(),
+                continues: false,
+            }],
+            exhausted: true,
+        };
     }
 
-    cells
+    let line = buf.text.line(line_idx);
+    let keep = line.len_chars() - crate::buffer::line_break_len_chars(line);
+    let line_start_char = buf.text.line_to_char(line_idx);
+    let mut chars = line.chars().take(keep).enumerate();
+    let mut visual_col = 0usize;
+    let mut carry = Vec::new();
+    let mut input_exhausted = false;
+    let mut row_index = 0usize;
+    let mut rows = Vec::with_capacity(max_rows);
+
+    loop {
+        let mut cells = std::mem::take(&mut carry);
+
+        // Read one cell beyond the physical row width. That lookahead tells
+        // us whether a width-filling row is final (and may use every column)
+        // or continued (and must reserve the last column for '\\').
+        while cells.len() <= text_width && !input_exhausted {
+            let Some((buffer_col, ch)) = chars.next() else {
+                input_exhausted = true;
+                break;
+            };
+            let buffer_char_pos = line_start_char + buffer_col;
+            if ch == '\t' {
+                let width = tab_width_at(visual_col);
+                for _ in 0..width {
+                    cells.push(VisualCell {
+                        text: " ".to_string(),
+                        buffer_col,
+                        buffer_char_pos,
+                    });
+                }
+                visual_col += width;
+                continue;
+            }
+            match char_width(ch) {
+                0 => {
+                    // Combining marks belong to the preceding glyph. The
+                    // one-cell lookahead keeps that glyph available here
+                    // even when it sits at the wrap boundary.
+                    if let Some(prev) = cells.iter_mut().rev().find(|c| !c.text.is_empty()) {
+                        prev.text.push(ch);
+                    }
+                }
+                2 => {
+                    cells.push(VisualCell {
+                        text: ch.to_string(),
+                        buffer_col,
+                        buffer_char_pos,
+                    });
+                    cells.push(VisualCell {
+                        text: String::new(),
+                        buffer_col,
+                        buffer_char_pos,
+                    });
+                    visual_col += 2;
+                }
+                _ => {
+                    cells.push(VisualCell {
+                        text: ch.to_string(),
+                        buffer_col,
+                        buffer_char_pos,
+                    });
+                    visual_col += 1;
+                }
+            }
+        }
+
+        let continues = !input_exhausted || cells.len() > text_width;
+        if continues {
+            let content_width = if text_width > 1 { text_width - 1 } else { 1 };
+            let mut split = content_width.min(cells.len());
+            // A double-width glyph is represented by a text cell followed
+            // by an empty continuation cell. If the boundary falls between
+            // them, move the complete glyph to the next row.
+            if text_width > 1
+                && split > 0
+                && split < cells.len()
+                && cells[split].text.is_empty()
+                && cells[split - 1].buffer_char_pos == cells[split].buffer_char_pos
+            {
+                split -= 1;
+            }
+            carry = cells.split_off(split);
+        }
+
+        if row_index >= skip_rows {
+            rows.push(VisualRow { cells, continues });
+            if rows.len() == max_rows {
+                return VisibleVisualRows {
+                    rows,
+                    exhausted: !continues,
+                };
+            }
+        }
+
+        if !continues {
+            return VisibleVisualRows {
+                rows,
+                exhausted: true,
+            };
+        }
+        row_index += 1;
+    }
 }
 
 fn render_pane_text(
@@ -404,77 +494,46 @@ fn render_pane_text(
     let mut line_idx = scroll_top;
 
     while output_lines.len() < max_visual_rows && line_idx < total_lines {
-        let line_start_char = buf.text.line_to_char(line_idx);
-        let line_chars = line_chars_without_ending(buf, line_idx);
-        let visual_cells = expand_tabs_for_display(&line_chars, line_start_char);
-
-        if text_width == 0 {
-            output_lines.push(Line::from(Span::raw(String::new())));
-            line_idx += 1;
-            continue;
-        }
-
-        if visual_cells.len() <= text_width {
-            // Line fits in one visual row — no wrapping needed
-            let mut spans = Vec::new();
-
-            if !visual_cells.is_empty() {
-                build_styled_spans(
-                    &mut spans,
-                    &visual_cells,
-                    0,
-                    visual_cells.len(),
-                    line_idx,
-                    region,
-                    search_matches,
-                    current_match,
-                    &syntax_styles,
-                );
-            }
-
-            output_lines.push(Line::from(spans));
+        let skip_rows = if line_idx == scroll_top {
+            row_offset
         } else {
-            // Line needs wrapping. For the top line, skip the wrap segments
-            // scrolled off above the viewport.
-            let chars_per_segment = (text_width - 1).max(1);
-            let skip_rows = if line_idx == scroll_top {
-                row_offset
-            } else {
-                0
-            };
-            let mut offset = skip_rows * chars_per_segment;
+            0
+        };
+        let visible = visible_visual_rows(
+            buf,
+            line_idx,
+            text_width,
+            skip_rows,
+            max_visual_rows - output_lines.len(),
+        );
 
-            while offset < visual_cells.len() && output_lines.len() < max_visual_rows {
-                let remaining = visual_cells.len() - offset;
-                let is_last = remaining <= text_width;
-                let segment_len = if is_last { remaining } else { chars_per_segment };
-
-                let mut spans = Vec::new();
-
+        for row in visible.rows {
+            let mut spans = Vec::new();
+            if !row.cells.is_empty() {
                 build_styled_spans(
                     &mut spans,
-                    &visual_cells,
-                    offset,
-                    offset + segment_len,
+                    &row.cells,
+                    0,
+                    row.cells.len(),
                     line_idx,
                     region,
                     search_matches,
                     current_match,
                     &syntax_styles,
                 );
-
-                if !is_last {
-                    spans.push(Span::styled(
-                        "\\",
-                        Style::default().fg(Color::Rgb(35, 120, 147)),
-                    ));
-                }
-
-                output_lines.push(Line::from(spans));
-                offset += segment_len;
             }
+            if row.continues {
+                spans.push(Span::styled(
+                    "\\",
+                    Style::default().fg(Color::Rgb(35, 120, 147)),
+                ));
+            }
+            output_lines.push(Line::from(spans));
         }
 
+        if !visible.exhausted {
+            break;
+        }
         line_idx += 1;
     }
 
@@ -1015,6 +1074,47 @@ mod tests {
     fn visual_width_counts_combining_marks_as_zero() {
         let chars: Vec<char> = "ae\u{301}b".chars().collect();
         assert_eq!(visual_width_for_chars(&chars), 3);
+    }
+
+    #[test]
+    fn visible_rows_materialize_only_the_viewport_of_a_huge_line() {
+        let source = "x".repeat(5 * 1024 * 1024);
+        let buf = Buffer::from_str(0, "huge", &source);
+        let rows = visible_visual_rows(&buf, 0, 120, 0, 38);
+
+        assert_eq!(rows.rows.len(), 38);
+        assert!(!rows.exhausted);
+        assert!(
+            rows.rows.iter().map(|row| row.cells.len()).sum::<usize>() <= 120 * 38,
+            "the renderer must not materialize the rest of the 5 MiB line"
+        );
+    }
+
+    #[test]
+    fn visible_rows_do_not_split_a_wide_glyph_at_the_wrap_marker() {
+        // Width 6 gives five content cells on continued rows. The third CJK
+        // glyph would straddle that boundary if wrapping sliced raw cells.
+        let buf = Buffer::from_str(0, "wide", "你你你你");
+        let rows = visible_visual_rows(&buf, 0, 6, 0, 2);
+
+        assert_eq!(rows.rows.len(), 2);
+        assert!(rows.rows[0].continues);
+        assert_eq!(
+            rows.rows[0]
+                .cells
+                .iter()
+                .map(|cell| cell.text.as_str())
+                .collect::<String>(),
+            "你你"
+        );
+        assert_eq!(
+            rows.rows[1]
+                .cells
+                .iter()
+                .map(|cell| cell.text.as_str())
+                .collect::<String>(),
+            "你你"
+        );
     }
 
     #[test]
