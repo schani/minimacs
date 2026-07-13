@@ -205,21 +205,26 @@ including dangling links — writing through `foo -> missing` creates
 `missing`, like emacs), so the rename rewrites the link's target instead of
 replacing the link with a regular file, and the buffer keeps the logical
 path as its identity (`C-x C-w` through a symlink does not silently rename
-the buffer; mtime is captured from the physical file). One exception to the
+the buffer; the fingerprint covers the bytes written to the physical file).
+One exception to the
 rename: when the resolved target has other hard links (nlink > 1), a rename
 would replace the inode and make the other names diverge, so the save falls
 back to an in-place truncate-write + fsync. That keeps the inode shared but
 trades away crash-atomicity for exactly that case (a crash mid-write can
 leave the file truncated) — the same tradeoff emacs makes with
-backup-by-copying. Each
-buffer remembers the file's mtime from load/save; every flow that writes a
+backup-by-copying. Each buffer remembers the modification time and a SHA-256
+fingerprint of the exact on-disk bytes from the last successful load/save
+boundary (including CRLF encoding); save streams update the digest while
+writing, without flattening the rope. Every flow that writes a
 buffer to its own path (`C-x C-s`, `C-x C-w` to the buffer's path, and
 quit-time saves) goes through `Editor::external_modification_guard`, which
-checks `externally_modified()` and asks "changed on disk; save anyway? (y/n)"
-before clobbering changes made by another program. Answering "y" is the one
-bypass: the `SaveAnywayConfirm` handler writes via `write_buffer` directly.
+reads the current file (following symlinks) and asks "changed on disk; save
+anyway? (y/n)" if its mtime or bytes differ, it was created/deleted, or it
+cannot be read safely. This detects timestamp-preserving in-place rewrites too.
+Answering "y" is the one bypass: the `SaveAnywayConfirm` handler writes via
+`write_buffer` directly.
 The guard does not apply to `C-x C-w` to a *different* existing path — that is
-covered by `OverwriteConfirm` instead (mtime tracking only covers the buffer's
+covered by `OverwriteConfirm` instead (the fingerprint baseline covers the buffer's
 own file), so no flow double-prompts.
 
 Every flow that writes a buffer to disk — `C-x C-s`, `C-x C-w`, and the
