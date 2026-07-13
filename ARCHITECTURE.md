@@ -9,10 +9,12 @@ async runtime. The event loop polls for terminal events with a 100ms timeout;
 when an event arrives it is processed and the UI re-renders. Poll timeouts
 and events that cannot have changed state (bare mouse motion, key releases,
 focus changes) skip the render entirely — an idle minimacs does no drawing
-work, even with the mouse waving over it. Per-frame
-work is bounded by the viewport (the syntax style map and cursor-row
-computation don't scale with file size), and ratatui diffs the terminal
-output.
+work, even with the mouse waving over it. Rendered cells and syntax-style
+lookups are bounded by the viewport rather than the length of a wrapped line.
+Printable ASCII lines also use direct Rope indexing for cursor and viewport
+jumps. Unicode, tabs, and control characters use a memory-bounded streaming
+fallback whose time is linear in the prefix being skipped. ratatui diffs the
+terminal output.
 
 ```
 Terminal input (crossterm)
@@ -487,20 +489,21 @@ does not cancel a chord in progress.
 2. Walks `pane_tree.calculate_rects()` to get per-pane rectangles.
 3. For each pane:
    - Splits the pane rect into a text area and a 1-row mode line.
-   - For each visible line: if syntax state exists, computes per-character
-     styles from tree-sitter highlight spans; otherwise uses default style.
-     Visual-width and style scans iterate the line's `RopeSlice` directly,
-     without first collecting it into a temporary `Vec` or `String`.
-   - Each line is expanded into `VisualCell`s, one per terminal column:
+   - `VisualLineLayout` is the shared authority for wrapping, cursor geometry,
+     mouse reverse-mapping, and visible-row extraction. For printable ASCII it
+     computes deep wrapped positions directly from Rope character offsets. For
+     Unicode, tabs, and control characters it streams from the line start but
+     retains only one visual row at a time.
+   - Only visible rows are expanded into `VisualCell`s, one per terminal column:
      literal tabs expand to spaces ending at the next `INDENT_WIDTH` tab stop;
      double-width chars (CJK, emoji) contribute their cell plus an empty
      continuation cell; combining marks are appended to the preceding cell's
      text (width 0). The buffer still stores each char individually, and
      editing/movement indexes are not changed by this rendering expansion.
      Width comes from `unicode-width` (`char_width()`), used consistently by
-     wrapping, cursor placement, mouse mapping, and scrolling. Known
-     limitation: a double-width char that straddles a wrap boundary may render
-     one column off on that row.
+     wrapping, cursor placement, mouse mapping, and scrolling. A double-width
+     character is kept atomic and moved to the next row if it would straddle a
+     wrap boundary.
    - Long lines are wrapped with a `\` continuation marker in the last column,
      using the expanded visual width. The first `scroll_row_offset` wrap
      segments of the top (`scroll_top`) line are skipped — they are scrolled
@@ -562,8 +565,9 @@ update drops the tree and falls back to a fresh lazy parse.
 At render time, `highlight_rope()` runs tree-house's range highlighter only for
 a padded byte window around the viewport and converts its events into absolute
 `StyledSpan { start, end, style }` ranges. The renderer clips those spans to
-visible lines and converts them to per-character `Style` entries in a
-`HashMap<(line, col), Style>` used while building terminal spans.
+the byte interval covered by the materialized visible cells and walks the
+sorted spans while building terminal spans. It does not construct a style
+entry for every character in a long line.
 
 **Caching**: the highlight cache stores `edit_generation`, the padded absolute
 byte range, and its spans. Requests contained by that range reuse the captures,
@@ -583,6 +587,22 @@ outside the timed region, checks final text across modes, and requires full and
 incremental highlight checksums to match before reporting the speedup. Its
 output also separates Rope mutation, parse/update, and highlight query time so
 whole-file parser work cannot be mistaken for rendering overhead.
+
+**Long-line render benchmark**: the ignored
+`benchmark_five_megabyte_single_line` integration test renders an exact 5 MiB
+single-line JSON buffer in a 120x40 test terminal with syntax highlighting,
+then measures repeated renders at the beginning and far end. Run it in release
+mode:
+
+```sh
+cargo test --release benchmark_five_megabyte_single_line -- --ignored --nocapture
+```
+
+It is a manual regression benchmark rather than a CI threshold because
+wall-clock timing is machine-dependent. Measurements after the
+viewport-streaming work made a separate wrap-checkpoint cache unnecessary; the
+cache's invalidation state would not improve the direct printable-ASCII path
+used by minified JSON.
 
 **Fuzz harness**: `cargo run --release --bin syntax-fuzz --` applies random
 edits through `Buffer::replace` and after every edit compares the persistent
