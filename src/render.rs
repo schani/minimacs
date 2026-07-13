@@ -399,29 +399,34 @@ impl<'a> VisualLineLayout<'a> {
     fn row_col(&self, buffer_col: usize) -> (usize, usize) {
         if !self.plain_ascii && self.text_width > 1 {
             let target = self.line_start_char + buffer_col.min(self.line_len);
-            let rows = stream_visible_visual_rows(
+            let mut result = None;
+            visit_streamed_visual_rows(
                 self.buf,
                 self.line_idx,
                 self.text_width,
-                0,
-                self.row_count().saturating_add(1),
+                |row_index, row| {
+                    if let Some(col) = row
+                        .cells
+                        .iter()
+                        .position(|cell| cell.buffer_char_pos >= target)
+                    {
+                        result = Some((row_index, col));
+                        return false;
+                    }
+                    if !row.continues && target == self.line_start_char + self.line_len {
+                        let col = row.cells.len();
+                        result = Some(if col >= self.text_width {
+                            (row_index + 1, 0)
+                        } else {
+                            (row_index, col)
+                        });
+                        return false;
+                    }
+                    true
+                },
             );
-            for (row_index, row) in rows.rows.iter().enumerate() {
-                if let Some(col) = row
-                    .cells
-                    .iter()
-                    .position(|cell| cell.buffer_char_pos >= target)
-                {
-                    return (row_index, col);
-                }
-                if !row.continues && target == self.line_start_char + self.line_len {
-                    let col = row.cells.len();
-                    return if col >= self.text_width {
-                        (row_index + 1, 0)
-                    } else {
-                        (row_index, col)
-                    };
-                }
+            if let Some(result) = result {
+                return result;
             }
         }
         let visual_col = if self.plain_ascii {
@@ -555,27 +560,21 @@ impl<'a> VisualLineLayout<'a> {
 /// path expanded the complete line into individually allocated cells before
 /// selecting the viewport; a multi-megabyte minified line therefore cost
 /// multi-megabyte work on every frame even at its beginning.
-fn stream_visible_visual_rows(
+fn visit_streamed_visual_rows(
     buf: &Buffer,
     line_idx: usize,
     text_width: usize,
-    skip_rows: usize,
-    max_rows: usize,
-) -> VisibleVisualRows {
-    if max_rows == 0 {
-        return VisibleVisualRows {
-            rows: Vec::new(),
-            exhausted: false,
-        };
-    }
+    mut visit: impl FnMut(usize, VisualRow) -> bool,
+) -> bool {
     if text_width == 0 {
-        return VisibleVisualRows {
-            rows: vec![VisualRow {
+        visit(
+            0,
+            VisualRow {
                 cells: Vec::new(),
                 continues: false,
-            }],
-            exhausted: true,
-        };
+            },
+        );
+        return true;
     }
 
     let line = buf.text.line(line_idx);
@@ -588,8 +587,6 @@ fn stream_visible_visual_rows(
     let mut carry = Vec::new();
     let mut input_exhausted = false;
     let mut row_index = 0usize;
-    let mut rows = Vec::with_capacity(max_rows);
-
     loop {
         let mut cells = std::mem::take(&mut carry);
 
@@ -680,24 +677,38 @@ fn stream_visible_visual_rows(
             carry = cells.split_off(split);
         }
 
-        if row_index >= skip_rows {
-            rows.push(VisualRow { cells, continues });
-            if rows.len() == max_rows {
-                return VisibleVisualRows {
-                    rows,
-                    exhausted: !continues,
-                };
-            }
+        if !visit(row_index, VisualRow { cells, continues }) {
+            return !continues;
         }
 
         if !continues {
-            return VisibleVisualRows {
-                rows,
-                exhausted: true,
-            };
+            return true;
         }
         row_index += 1;
     }
+}
+
+fn stream_visible_visual_rows(
+    buf: &Buffer,
+    line_idx: usize,
+    text_width: usize,
+    skip_rows: usize,
+    max_rows: usize,
+) -> VisibleVisualRows {
+    if max_rows == 0 {
+        return VisibleVisualRows {
+            rows: Vec::new(),
+            exhausted: false,
+        };
+    }
+    let mut rows = Vec::with_capacity(max_rows);
+    let exhausted = visit_streamed_visual_rows(buf, line_idx, text_width, |row_index, row| {
+        if row_index >= skip_rows {
+            rows.push(row);
+        }
+        rows.len() < max_rows
+    });
+    VisibleVisualRows { rows, exhausted }
 }
 
 fn visible_visual_rows(
