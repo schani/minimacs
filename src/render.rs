@@ -240,9 +240,11 @@ fn visual_width_for_chars(line_chars: &[char]) -> usize {
 }
 
 pub(crate) fn line_visual_width(buf: &Buffer, line_idx: usize) -> usize {
-    let line = buf.text.line(line_idx);
-    let keep = line.len_chars() - crate::buffer::line_break_len_chars(line);
-    line.chars().take(keep).fold(0, advance_visual_col)
+    VisualLineLayout::new(buf, line_idx, usize::MAX).visual_width()
+}
+
+pub(crate) fn visual_row_count(buf: &Buffer, line_idx: usize, text_width: usize) -> usize {
+    VisualLineLayout::new(buf, line_idx, text_width).row_count()
 }
 
 fn visual_col_for_buffer_col(line_chars: &[char], buffer_col: usize) -> usize {
@@ -269,22 +271,7 @@ pub(crate) fn visual_row_col_in_line(
     buffer_col: usize,
     text_width: usize,
 ) -> (usize, usize) {
-    let line_chars = line_chars_without_ending(buf, line_idx);
-    let visual_col = visual_col_for_buffer_col(&line_chars, buffer_col);
-    let line_visual_width = visual_width_for_chars(&line_chars);
-    let (row, col) = if text_width > 1 && line_visual_width > text_width {
-        let cps = text_width - 1;
-        let last_row = visual_lines_for_length(line_visual_width, text_width) - 1;
-        let row = (visual_col / cps).min(last_row);
-        (row, visual_col - row * cps)
-    } else {
-        (0, visual_col)
-    };
-    if text_width > 0 && col >= text_width {
-        (row + 1, 0)
-    } else {
-        (row, col)
-    }
+    VisualLineLayout::new(buf, line_idx, text_width).row_col(buffer_col)
 }
 
 /// A pane's `scroll_row_offset` clamped to the top line's actual visual
@@ -299,7 +286,28 @@ pub(crate) fn clamped_row_offset(pane: &Pane, buf: &Buffer, text_width: usize) -
     pane.scroll_row_offset.min(top_rows - 1)
 }
 
+#[cfg(test)]
 pub(crate) fn buffer_col_for_visual_col(buf: &Buffer, line_idx: usize, target_visual_col: usize) -> usize {
+    VisualLineLayout::new(buf, line_idx, usize::MAX)
+        .buffer_col_for_visual_col(target_visual_col)
+}
+
+pub(crate) fn buffer_col_for_visual_position(
+    buf: &Buffer,
+    line_idx: usize,
+    visual_row: usize,
+    visual_col: usize,
+    text_width: usize,
+) -> usize {
+    VisualLineLayout::new(buf, line_idx, text_width).buffer_col_at(visual_row, visual_col)
+}
+
+#[cfg(test)]
+fn buffer_col_for_visual_col_general(
+    buf: &Buffer,
+    line_idx: usize,
+    target_visual_col: usize,
+) -> usize {
     let line_chars = line_chars_without_ending(buf, line_idx);
     let mut visual_col = 0;
 
@@ -339,11 +347,215 @@ struct VisibleVisualRows {
     exhausted: bool,
 }
 
+/// One authority for buffer-line display geometry. Printable ASCII lines
+/// have constant one-cell width, so positions and wrapped rows can be
+/// indexed directly through the Rope. Lines containing tabs, controls, or
+/// Unicode retain the general streaming width calculation.
+struct VisualLineLayout<'a> {
+    buf: &'a Buffer,
+    line_idx: usize,
+    text_width: usize,
+    line_start_char: usize,
+    line_start_byte: usize,
+    line_len: usize,
+    plain_ascii: bool,
+}
+
+impl<'a> VisualLineLayout<'a> {
+    fn new(buf: &'a Buffer, line_idx: usize, text_width: usize) -> Self {
+        let line = buf.text.line(line_idx);
+        let line_len = line.len_chars() - crate::buffer::line_break_len_chars(line);
+        let plain_ascii = text_width > 1
+            && line
+                .slice(..line_len)
+                .chunks()
+                .all(|chunk| chunk.bytes().all(|byte| (b' '..=b'~').contains(&byte)));
+        Self {
+            buf,
+            line_idx,
+            text_width,
+            line_start_char: buf.text.line_to_char(line_idx),
+            line_start_byte: buf.text.line_to_byte(line_idx),
+            line_len,
+            plain_ascii,
+        }
+    }
+
+    fn visual_width(&self) -> usize {
+        if self.plain_ascii {
+            self.line_len
+        } else {
+            let line = self.buf.text.line(self.line_idx);
+            line.chars()
+                .take(self.line_len)
+                .fold(0, advance_visual_col)
+        }
+    }
+
+    fn row_count(&self) -> usize {
+        visual_lines_for_length(self.visual_width(), self.text_width)
+    }
+
+    fn row_col(&self, buffer_col: usize) -> (usize, usize) {
+        if !self.plain_ascii && self.text_width > 1 {
+            let target = self.line_start_char + buffer_col.min(self.line_len);
+            let rows = stream_visible_visual_rows(
+                self.buf,
+                self.line_idx,
+                self.text_width,
+                0,
+                self.row_count().saturating_add(1),
+            );
+            for (row_index, row) in rows.rows.iter().enumerate() {
+                if let Some(col) = row
+                    .cells
+                    .iter()
+                    .position(|cell| cell.buffer_char_pos >= target)
+                {
+                    return (row_index, col);
+                }
+                if !row.continues && target == self.line_start_char + self.line_len {
+                    let col = row.cells.len();
+                    return if col >= self.text_width {
+                        (row_index + 1, 0)
+                    } else {
+                        (row_index, col)
+                    };
+                }
+            }
+        }
+        let visual_col = if self.plain_ascii {
+            buffer_col.min(self.line_len)
+        } else {
+            let chars = line_chars_without_ending(self.buf, self.line_idx);
+            visual_col_for_buffer_col(&chars, buffer_col)
+        };
+        let line_visual_width = self.visual_width();
+        let (row, col) = if self.text_width > 1 && line_visual_width > self.text_width {
+            let chars_per_segment = self.text_width - 1;
+            let last_row = visual_lines_for_length(line_visual_width, self.text_width) - 1;
+            let row = (visual_col / chars_per_segment).min(last_row);
+            (row, visual_col - row * chars_per_segment)
+        } else {
+            (0, visual_col)
+        };
+        if self.text_width > 0 && col >= self.text_width {
+            (row + 1, 0)
+        } else {
+            (row, col)
+        }
+    }
+
+    #[cfg(test)]
+    fn buffer_col_for_visual_col(&self, target_visual_col: usize) -> usize {
+        if self.plain_ascii {
+            target_visual_col.min(self.line_len)
+        } else {
+            buffer_col_for_visual_col_general(self.buf, self.line_idx, target_visual_col)
+        }
+    }
+
+
+    fn buffer_col_at(&self, visual_row: usize, visual_col: usize) -> usize {
+        if self.plain_ascii {
+            let start = if self.row_count() == 1 {
+                0
+            } else {
+                visual_row.saturating_mul(self.text_width - 1)
+            };
+            return start.saturating_add(visual_col).min(self.line_len);
+        }
+        let visible = stream_visible_visual_rows(
+            self.buf,
+            self.line_idx,
+            self.text_width,
+            visual_row,
+            1,
+        );
+        let Some(row) = visible.rows.first() else {
+            return self.line_len;
+        };
+        if visual_col == 0 {
+            return row
+                .cells
+                .first()
+                .map(|cell| cell.buffer_char_pos - self.line_start_char)
+                .unwrap_or(self.line_len);
+        }
+        row.cells
+            .get(visual_col.min(row.cells.len()) - 1)
+            .map(|cell| cell.buffer_char_pos - self.line_start_char + 1)
+            .unwrap_or(self.line_len)
+            .min(self.line_len)
+    }
+
+    fn visible_rows(&self, skip_rows: usize, max_rows: usize) -> VisibleVisualRows {
+        if !self.plain_ascii {
+            return stream_visible_visual_rows(
+                self.buf,
+                self.line_idx,
+                self.text_width,
+                skip_rows,
+                max_rows,
+            );
+        }
+        if max_rows == 0 {
+            return VisibleVisualRows {
+                rows: Vec::new(),
+                exhausted: false,
+            };
+        }
+
+        let total_rows = self.row_count();
+        if skip_rows >= total_rows {
+            return VisibleVisualRows {
+                rows: Vec::new(),
+                exhausted: true,
+            };
+        }
+        let chars_per_segment = self.text_width - 1;
+        let mut rows = Vec::with_capacity(max_rows.min(total_rows - skip_rows));
+        for row_index in skip_rows..total_rows.min(skip_rows + max_rows) {
+            let start = if total_rows == 1 {
+                0
+            } else {
+                row_index * chars_per_segment
+            };
+            let remaining = self.line_len - start;
+            let continues = remaining > self.text_width;
+            let len = if continues {
+                chars_per_segment
+            } else {
+                remaining.min(self.text_width)
+            };
+            let cells = self
+                .buf
+                .text
+                .chars_at(self.line_start_char + start)
+                .take(len)
+                .enumerate()
+                .map(|(offset, ch)| {
+                    let buffer_col = start + offset;
+                    VisualCell {
+                        text: ch.to_string(),
+                        buffer_char_pos: self.line_start_char + buffer_col,
+                        buffer_byte_start: self.line_start_byte + buffer_col,
+                        buffer_byte_end: self.line_start_byte + buffer_col + 1,
+                    }
+                })
+                .collect();
+            rows.push(VisualRow { cells, continues });
+        }
+        let exhausted = skip_rows + rows.len() == total_rows;
+        VisibleVisualRows { rows, exhausted }
+    }
+}
+
 /// Stream just the requested visual rows of one buffer line. The old render
 /// path expanded the complete line into individually allocated cells before
 /// selecting the viewport; a multi-megabyte minified line therefore cost
 /// multi-megabyte work on every frame even at its beginning.
-fn visible_visual_rows(
+fn stream_visible_visual_rows(
     buf: &Buffer,
     line_idx: usize,
     text_width: usize,
@@ -486,6 +698,16 @@ fn visible_visual_rows(
         }
         row_index += 1;
     }
+}
+
+fn visible_visual_rows(
+    buf: &Buffer,
+    line_idx: usize,
+    text_width: usize,
+    skip_rows: usize,
+    max_rows: usize,
+) -> VisibleVisualRows {
+    VisualLineLayout::new(buf, line_idx, text_width).visible_rows(skip_rows, max_rows)
 }
 
 fn render_pane_text(
@@ -1065,6 +1287,31 @@ mod tests {
     }
 
     #[test]
+    fn plain_ascii_layout_jumps_directly_to_a_deep_wrapped_row() {
+        let source = "x".repeat(5 * 1024 * 1024);
+        let buf = Buffer::from_str(0, "huge", &source);
+        let layout = VisualLineLayout::new(&buf, 0, 120);
+        let last_row = layout.row_count() - 1;
+        let rows = layout.visible_rows(last_row, 1);
+
+        assert!(layout.plain_ascii);
+        assert_eq!(rows.rows.len(), 1);
+        assert!(rows.exhausted);
+        assert_eq!(
+            rows.rows[0].cells[0].buffer_char_pos,
+            last_row * (120 - 1)
+        );
+    }
+
+    #[test]
+    fn plain_ascii_layout_maps_positions_without_scanning_prefix_cells() {
+        let buf = Buffer::from_str(0, "plain", &"x".repeat(10_000));
+        let layout = VisualLineLayout::new(&buf, 0, 80);
+        assert_eq!(layout.row_col(7_900), (100, 0));
+        assert_eq!(layout.buffer_col_for_visual_col(7_900), 7_900);
+    }
+
+    #[test]
     fn visible_rows_do_not_split_a_wide_glyph_at_the_wrap_marker() {
         // Width 6 gives five content cells on continued rows. The third CJK
         // glyph would straddle that boundary if wrapping sliced raw cells.
@@ -1089,6 +1336,11 @@ mod tests {
                 .collect::<String>(),
             "你你"
         );
+        let layout = VisualLineLayout::new(&buf, 0, 6);
+        assert_eq!(layout.row_col(2), (1, 0));
+        assert_eq!(layout.row_col(3), (1, 2));
+        assert_eq!(layout.buffer_col_at(1, 0), 2);
+        assert_eq!(layout.buffer_col_at(1, 1), 3);
     }
 
     #[test]
