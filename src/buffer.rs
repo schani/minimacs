@@ -1,10 +1,11 @@
 use anyhow::{bail, Result};
-use ropey::{Rope, RopeSlice};
+use ropey::{str_utils::byte_to_char_idx, Rope, RopeSlice};
 use std::borrow::Cow;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use tree_house::tree_sitter::{InputEdit, Point};
+use unicode_segmentation::{GraphemeCursor, GraphemeIncomplete};
 
 use crate::history::History;
 use crate::syntax::{self, SyntaxState};
@@ -30,6 +31,81 @@ pub(crate) fn line_break_len_chars(line: RopeSlice) -> usize {
         1
     } else {
         0
+    }
+}
+
+/// Find the extended grapheme boundary immediately before `char_idx` without
+/// flattening the Rope. `GraphemeCursor` requests adjacent chunks and Unicode
+/// pre-context as needed, so ordinary movement examines only the local chunk
+/// while arbitrarily long clusters remain correct across chunk boundaries.
+fn prev_grapheme_boundary_in_slice(slice: RopeSlice<'_>, char_idx: usize) -> usize {
+    let byte_idx = slice.char_to_byte(char_idx);
+    let (mut chunk, mut chunk_byte_idx, mut chunk_char_idx, _) = slice.chunk_at_byte(byte_idx);
+    let mut cursor = GraphemeCursor::new(byte_idx, slice.len_bytes(), true);
+
+    loop {
+        match cursor.prev_boundary(chunk, chunk_byte_idx) {
+            Ok(None) => return 0,
+            Ok(Some(boundary)) => {
+                return chunk_char_idx + byte_to_char_idx(chunk, boundary - chunk_byte_idx);
+            }
+            Err(GraphemeIncomplete::PrevChunk) => {
+                let previous = slice.chunk_at_byte(chunk_byte_idx - 1);
+                chunk = previous.0;
+                chunk_byte_idx = previous.1;
+                chunk_char_idx = previous.2;
+            }
+            Err(GraphemeIncomplete::PreContext(context_end)) => {
+                let (context, context_start, _, _) = slice.chunk_at_byte(context_end - 1);
+                cursor.provide_context(context, context_start);
+            }
+            Err(_) => unreachable!("valid Rope chunks must satisfy GraphemeCursor"),
+        }
+    }
+}
+
+/// Find the extended grapheme boundary immediately after `char_idx` while
+/// walking Rope chunks on demand.
+fn next_grapheme_boundary_in_slice(slice: RopeSlice<'_>, char_idx: usize) -> usize {
+    let byte_idx = slice.char_to_byte(char_idx);
+    let (mut chunk, mut chunk_byte_idx, mut chunk_char_idx, _) = slice.chunk_at_byte(byte_idx);
+    let mut cursor = GraphemeCursor::new(byte_idx, slice.len_bytes(), true);
+
+    loop {
+        match cursor.next_boundary(chunk, chunk_byte_idx) {
+            Ok(None) => return slice.len_chars(),
+            Ok(Some(boundary)) => {
+                return chunk_char_idx + byte_to_char_idx(chunk, boundary - chunk_byte_idx);
+            }
+            Err(GraphemeIncomplete::NextChunk) => {
+                chunk_byte_idx += chunk.len();
+                let next = slice.chunk_at_byte(chunk_byte_idx);
+                chunk = next.0;
+                chunk_char_idx = next.2;
+            }
+            Err(GraphemeIncomplete::PreContext(context_end)) => {
+                let (context, context_start, _, _) = slice.chunk_at_byte(context_end - 1);
+                cursor.provide_context(context, context_start);
+            }
+            Err(_) => unreachable!("valid Rope chunks must satisfy GraphemeCursor"),
+        }
+    }
+}
+
+fn is_grapheme_boundary_in_slice(slice: RopeSlice<'_>, char_idx: usize) -> bool {
+    let byte_idx = slice.char_to_byte(char_idx);
+    let (chunk, chunk_byte_idx, _, _) = slice.chunk_at_byte(byte_idx);
+    let mut cursor = GraphemeCursor::new(byte_idx, slice.len_bytes(), true);
+
+    loop {
+        match cursor.is_boundary(chunk, chunk_byte_idx) {
+            Ok(is_boundary) => return is_boundary,
+            Err(GraphemeIncomplete::PreContext(context_end)) => {
+                let (context, context_start, _, _) = slice.chunk_at_byte(context_end - 1);
+                cursor.provide_context(context, context_start);
+            }
+            Err(_) => unreachable!("valid Rope chunks must satisfy GraphemeCursor"),
+        }
     }
 }
 
@@ -265,30 +341,31 @@ impl Buffer {
     /// never rests mid-cluster, where a backspace or insert would split
     /// the cluster.
     pub fn snap_to_grapheme_boundary(&self, pos: usize) -> usize {
-        use unicode_segmentation::UnicodeSegmentation;
         let pos = pos.min(self.char_count());
-        let (line, col) = self.char_to_line_col(pos);
-        let line_len = self.line_len_chars(line);
-        let line_start = self.line_col_to_char(line, 0);
-        if col >= line_len {
-            // At or past the line's end: resolve to the end of the
-            // line's text, before its line break.
-            return line_start + line_len;
+        let slice = self.text.slice(..);
+        if is_grapheme_boundary_in_slice(slice, pos) {
+            pos
+        } else {
+            prev_grapheme_boundary_in_slice(slice, pos)
         }
-        let line_text: String = self
-            .text
-            .slice(line_start..line_start + line_len)
-            .chars()
-            .collect();
-        let mut start = 0;
-        for g in line_text.graphemes(true) {
-            let g_len = g.chars().count();
-            if col < start + g_len {
-                return line_start + start;
-            }
-            start += g_len;
+    }
+
+    pub(crate) fn prev_grapheme_boundary(&self, pos: usize) -> usize {
+        let pos = pos.min(self.char_count());
+        if pos == 0 {
+            0
+        } else {
+            prev_grapheme_boundary_in_slice(self.text.slice(..), pos)
         }
-        line_start + line_len
+    }
+
+    pub(crate) fn next_grapheme_boundary(&self, pos: usize) -> usize {
+        let pos = pos.min(self.char_count());
+        if pos == self.char_count() {
+            pos
+        } else {
+            next_grapheme_boundary_in_slice(self.text.slice(..), pos)
+        }
     }
 
     /// Length of line in chars, excluding its terminating line break.
@@ -584,6 +661,36 @@ mod tests {
     fn snap_to_grapheme_boundary_clamps_past_end() {
         let buf = Buffer::from_str(0, "test", "ab");
         assert_eq!(buf.snap_to_grapheme_boundary(10), 2);
+    }
+
+    #[test]
+    fn grapheme_movement_crosses_rope_chunks() {
+        // One extended grapheme deliberately spans several Rope chunks.
+        let marks = "\u{301}".repeat(3_000);
+        let buf = Buffer::from_str(0, "test", &format!("x{marks}z"));
+        let z = 1 + marks.chars().count();
+
+        assert_eq!(buf.next_grapheme_boundary(0), z);
+        assert_eq!(buf.prev_grapheme_boundary(z), 0);
+        assert_eq!(buf.snap_to_grapheme_boundary(z / 2), 0);
+        assert_eq!(buf.next_grapheme_boundary(z), z + 1);
+        assert_eq!(buf.prev_grapheme_boundary(z + 1), z);
+    }
+
+    #[test]
+    fn grapheme_movement_treats_newline_as_one_step() {
+        let buf = Buffer::from_str(0, "test", "ab\ncd");
+        assert_eq!(buf.next_grapheme_boundary(2), 3);
+        assert_eq!(buf.prev_grapheme_boundary(3), 2);
+    }
+
+    #[test]
+    fn grapheme_movement_clamps_to_buffer_bounds() {
+        let buf = Buffer::from_str(0, "test", "abc");
+        assert_eq!(buf.prev_grapheme_boundary(0), 0);
+        assert_eq!(buf.next_grapheme_boundary(3), 3);
+        assert_eq!(buf.next_grapheme_boundary(usize::MAX), 3);
+        assert_eq!(buf.prev_grapheme_boundary(usize::MAX), 2);
     }
 
     #[test]

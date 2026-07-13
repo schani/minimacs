@@ -433,63 +433,12 @@ impl Editor {
     /// Char index of the next grapheme-cluster boundary after `pos`.
     /// Line endings count as one step (the rope is LF-only).
     fn next_grapheme_boundary(&self, pos: usize) -> usize {
-        use unicode_segmentation::UnicodeSegmentation;
-        let buf = self.active_buffer();
-        let len = buf.char_count();
-        if pos >= len {
-            return len;
-        }
-        let (line, col) = buf.char_to_line_col(pos);
-        let line_len = buf.line_len_chars(line);
-        if col >= line_len {
-            // Stepping over the line ending.
-            return pos + 1;
-        }
-        let line_start = buf.line_col_to_char(line, 0);
-        let line_text: String = buf
-            .text
-            .slice(line_start..line_start + line_len)
-            .chars()
-            .collect();
-        let mut start = 0;
-        for g in line_text.graphemes(true) {
-            let g_len = g.chars().count();
-            if col < start + g_len {
-                return line_start + start + g_len;
-            }
-            start += g_len;
-        }
-        pos + 1
+        self.active_buffer().next_grapheme_boundary(pos)
     }
 
     /// Char index of the previous grapheme-cluster boundary before `pos`.
     fn prev_grapheme_boundary(&self, pos: usize) -> usize {
-        use unicode_segmentation::UnicodeSegmentation;
-        let buf = self.active_buffer();
-        if pos == 0 {
-            return 0;
-        }
-        let (line, col) = buf.char_to_line_col(pos);
-        if col == 0 {
-            // Stepping back over the previous line's ending.
-            return pos - 1;
-        }
-        let line_start = buf.line_col_to_char(line, 0);
-        let line_len = buf.line_len_chars(line);
-        let line_text: String = buf
-            .text
-            .slice(line_start..line_start + line_len)
-            .chars()
-            .collect();
-        let mut start = 0;
-        for g in line_text.graphemes(true) {
-            let g_len = g.chars().count();
-            if start < col && col <= start + g_len {
-                return line_start + start;
-            }
-            start += g_len;
-        }
-        pos - 1
+        self.active_buffer().prev_grapheme_boundary(pos)
     }
 
     fn forward_char(&mut self) {
