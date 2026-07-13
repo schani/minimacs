@@ -1,7 +1,5 @@
 use std::borrow::Cow;
-use std::cell::RefCell;
-#[cfg(test)]
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::ops::Range;
 use std::path::Path;
 use std::sync::OnceLock;
@@ -531,15 +529,23 @@ pub struct SyntaxState {
     pub language: Language,
     syntax: RefCell<Option<TreeHouseSyntax>>,
     cache: RefCell<Option<HighlightCache>>,
+    parse_timeout: Duration,
+    failed_version: Cell<Option<usize>>,
     #[cfg(test)]
     full_parse_count: Cell<usize>,
     #[cfg(test)]
     incremental_update_count: Cell<usize>,
+    #[cfg(test)]
+    parse_attempt_count: Cell<usize>,
 }
 
 impl SyntaxState {
     /// Create a new syntax state for the given language.
     pub fn new(lang: Language) -> Option<Self> {
+        Self::new_with_timeout(lang, PARSE_TIMEOUT)
+    }
+
+    fn new_with_timeout(lang: Language, parse_timeout: Duration) -> Option<Self> {
         let loader = match tree_house_loader() {
             Ok(loader) => loader,
             Err(error) => {
@@ -553,11 +559,20 @@ impl SyntaxState {
             language: lang,
             syntax: RefCell::new(None),
             cache: RefCell::new(None),
+            parse_timeout,
+            failed_version: Cell::new(None),
             #[cfg(test)]
             full_parse_count: Cell::new(0),
             #[cfg(test)]
             incremental_update_count: Cell::new(0),
+            #[cfg(test)]
+            parse_attempt_count: Cell::new(0),
         })
+    }
+
+    #[cfg(test)]
+    fn with_timeout(lang: Language, parse_timeout: Duration) -> Option<Self> {
+        Self::new_with_timeout(lang, parse_timeout)
     }
 
     /// Highlight a slice of source code bytes and return styled spans.
@@ -588,7 +603,10 @@ impl SyntaxState {
             *syntax = None;
             return;
         };
-        if parsed.update(source, PARSE_TIMEOUT, &[edit], loader).is_err() {
+        if parsed
+            .update(source, self.parse_timeout, &[edit], loader)
+            .is_err()
+        {
             *syntax = None;
         } else {
             #[cfg(test)]
@@ -607,8 +625,12 @@ impl SyntaxState {
         version: usize,
     ) -> Vec<StyledSpan> {
         let requested = clamp_range(requested, source.len_bytes());
+        if self.failed_version.get() == Some(version) {
+            return Vec::new();
+        }
         if !self.cache_is_valid(version, requested.clone()) {
             if !self.ensure_syntax(source) {
+                self.failed_version.set(Some(version));
                 return Vec::new();
             }
             let window = padded_range(source, requested.clone());
@@ -667,7 +689,10 @@ impl SyntaxState {
         let Some(language) = loader.id_for_language(self.language) else {
             return false;
         };
-        let Ok(syntax) = TreeHouseSyntax::new(source, language, PARSE_TIMEOUT, loader) else {
+        #[cfg(test)]
+        self.parse_attempt_count
+            .set(self.parse_attempt_count.get() + 1);
+        let Ok(syntax) = TreeHouseSyntax::new(source, language, self.parse_timeout, loader) else {
             return false;
         };
         *self.syntax.borrow_mut() = Some(syntax);
@@ -697,6 +722,11 @@ impl SyntaxState {
     #[cfg(test)]
     fn incremental_update_count(&self) -> usize {
         self.incremental_update_count.get()
+    }
+
+    #[cfg(test)]
+    fn parse_attempt_count(&self) -> usize {
+        self.parse_attempt_count.get()
     }
 }
 
@@ -1096,6 +1126,25 @@ mod tests {
         state.highlight_rope(source.slice(..), 0..source.len_bytes(), 0);
         assert!(state.cache_is_valid(0, 0..source.len_bytes()));
         assert!(!state.cache_is_valid(1, 0..source.len_bytes()));
+    }
+
+    #[test]
+    fn timed_out_parse_is_attempted_once_per_generation() {
+        let state = SyntaxState::with_timeout(Language::Rust, Duration::ZERO).unwrap();
+        let source = Rope::from_str(&"fn main() {}\n".repeat(10_000));
+
+        assert!(state
+            .highlight_rope(source.slice(..), 0..source.len_bytes(), 0)
+            .is_empty());
+        assert!(state
+            .highlight_rope(source.slice(..), 0..source.len_bytes(), 0)
+            .is_empty());
+        assert_eq!(state.parse_attempt_count(), 1);
+
+        assert!(state
+            .highlight_rope(source.slice(..), 0..source.len_bytes(), 1)
+            .is_empty());
+        assert_eq!(state.parse_attempt_count(), 2);
     }
 
     #[test]

@@ -573,6 +573,9 @@ tree-sitter counts. Parsing reads
 the Rope directly through tree-house's `RopeSlice` input instead of copying a
 buffer prefix into a temporary byte vector. A failed or timed-out incremental
 update drops the tree and falls back to a fresh lazy parse.
+If that fresh parse fails, the failed edit generation is remembered: further
+highlight requests for the same generation return unstyled spans without
+retrying, and the next edit generation gets one new attempt.
 
 At render time, `highlight_rope()` runs tree-house's range highlighter only for
 a padded byte window around the viewport and converts its events into absolute

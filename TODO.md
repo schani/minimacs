@@ -96,12 +96,12 @@ failure drops the tree; the next render re-runs a full 2s-capped parse).
 
 Plan, in order (tests first for each step):
 
-- [ ] Make the parse timeout injectable for tests (e.g. a
+- [x] Make the parse timeout injectable for tests (e.g. a
       `SyntaxState::with_timeout(lang, Duration)` constructor used by tests;
       `new()` keeps `PARSE_TIMEOUT`). With `Duration::ZERO`, assert the
       failure path: `highlight_rope` returns unstyled spans and does not
       panic. This is pure test plumbing — no behavior change.
-- [ ] Poison the failed generation: on `ensure_syntax` failure, record the
+- [x] Poison the failed generation: on `ensure_syntax` failure, record the
       requested `version` in a `failed_version: Cell<Option<usize>>`. While
       `failed_version == Some(version)`, `highlight_rope` returns empty spans
       without attempting to parse. An edit bumps the generation and clears the
