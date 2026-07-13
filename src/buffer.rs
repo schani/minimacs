@@ -1094,6 +1094,53 @@ mod tests {
         assert!(!buf.externally_modified());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn externally_modified_detects_same_mtime_size_and_inode_rewrite() {
+        use std::os::unix::fs::MetadataExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.txt");
+        fs::write(&file, "before").unwrap();
+
+        let buf = Buffer::from_file(0, &file).unwrap();
+        let original = fs::metadata(&file).unwrap();
+        let original_mtime = original.modified().unwrap();
+
+        // Simulate a timestamp-preserving deployment tool rewriting the
+        // existing file in place with different bytes of the same length.
+        fs::write(&file, "after!").unwrap();
+        let rewritten = fs::OpenOptions::new().write(true).open(&file).unwrap();
+        rewritten.set_modified(original_mtime).unwrap();
+        drop(rewritten);
+
+        let current = fs::metadata(&file).unwrap();
+        assert_eq!(current.modified().unwrap(), original_mtime);
+        assert_eq!(current.len(), original.len());
+        assert_eq!(current.ino(), original.ino());
+        assert!(
+            buf.externally_modified(),
+            "different on-disk bytes must be detected even when metadata is unchanged"
+        );
+    }
+
+    #[test]
+    fn externally_modified_baseline_uses_raw_crlf_bytes_after_save() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.txt");
+        fs::write(&file, "one\r\ntwo\r\n").unwrap();
+
+        let mut buf = Buffer::from_file(0, &file).unwrap();
+        buf.replace(3, 3, "!");
+        buf.save().unwrap();
+
+        assert_eq!(fs::read(&file).unwrap(), b"one!\r\ntwo\r\n");
+        assert!(
+            !buf.externally_modified(),
+            "save must fingerprint the CRLF-encoded disk bytes, not normalized rope bytes"
+        );
+    }
+
     #[test]
     fn pathless_buffer_is_never_externally_modified() {
         let buf = Buffer::new_scratch(0);
