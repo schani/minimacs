@@ -864,6 +864,7 @@ dependencies = [
  "insta",
  "ratatui",
  "ropey",
+ "sha2",
  "tempfile",
  "tree-house",
  "tree-house-bindings",

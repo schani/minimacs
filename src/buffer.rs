@@ -1,10 +1,11 @@
 use anyhow::{bail, Result};
 use ropey::{str_utils::byte_to_char_idx, Rope, RopeSlice};
+use sha2::{Digest, Sha256};
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::fs;
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use tree_house::tree_sitter::{InputEdit, Point};
 use unicode_segmentation::{GraphemeCursor, GraphemeIncomplete};
@@ -15,6 +16,16 @@ use crate::syntax::{self, SyntaxState};
 pub type BufferId = usize;
 
 const LINE_CLASS_CACHE_CAPACITY: usize = 8;
+type DiskFingerprint = [u8; 32];
+
+#[derive(PartialEq, Eq)]
+enum DiskState {
+    Missing,
+    Present {
+        modified: Option<std::time::SystemTime>,
+        fingerprint: DiskFingerprint,
+    },
+}
 
 #[derive(Clone, Copy)]
 struct CachedLineClass {
@@ -135,9 +146,9 @@ pub struct Buffer {
     /// cursor, scroll, and render calculation without adding edit invalidation
     /// rules; stale generations simply stop matching and age out.
     line_class_cache: RefCell<VecDeque<CachedLineClass>>,
-    /// Modification time of the file when we last loaded or saved it.
-    /// Used to detect external changes before clobbering them on save.
-    disk_mtime: Option<std::time::SystemTime>,
+    /// Metadata and exact-byte fingerprint last observed at a successful
+    /// load/save boundary.
+    disk_state: DiskState,
 }
 
 impl Buffer {
@@ -153,7 +164,7 @@ impl Buffer {
             syntax: None,
             edit_generation: 0,
             line_class_cache: RefCell::new(VecDeque::with_capacity(LINE_CLASS_CACHE_CAPACITY)),
-            disk_mtime: None,
+            disk_state: DiskState::Missing,
         }
     }
 
@@ -175,7 +186,7 @@ impl Buffer {
             syntax: syntax_state,
             edit_generation: 0,
             line_class_cache: RefCell::new(VecDeque::with_capacity(LINE_CLASS_CACHE_CAPACITY)),
-            disk_mtime: None,
+            disk_state: DiskState::Missing,
         }
     }
 
@@ -191,12 +202,15 @@ impl Buffer {
             syntax: None,
             edit_generation: 0,
             line_class_cache: RefCell::new(VecDeque::with_capacity(LINE_CLASS_CACHE_CAPACITY)),
-            disk_mtime: None,
+            disk_state: DiskState::Missing,
         }
     }
 
     pub fn from_file(id: BufferId, path: &Path) -> Result<Self> {
-        let bytes = fs::read(path)?;
+        let mut file = fs::File::open(path)?;
+        let modified = file.metadata().and_then(|metadata| metadata.modified()).ok();
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes)?;
 
         // Detect binary files (contains null bytes)
         if bytes.contains(&0) {
@@ -238,7 +252,10 @@ impl Buffer {
             syntax: syntax_state,
             edit_generation: 0,
             line_class_cache: RefCell::new(VecDeque::with_capacity(LINE_CLASS_CACHE_CAPACITY)),
-            disk_mtime: fs::metadata(path).and_then(|m| m.modified()).ok(),
+            disk_state: DiskState::Present {
+                modified,
+                fingerprint: Sha256::digest(&bytes).into(),
+            },
         })
     }
 
@@ -264,7 +281,7 @@ impl Buffer {
     pub fn save_as(&mut self, path: &Path) -> Result<()> {
         let physical = resolve_write_target(path)?;
 
-        if has_other_hard_links(&physical) {
+        let disk_state = if has_other_hard_links(&physical) {
             // The target has other hard links; the rename below would
             // replace the inode and make the other names diverge. Write
             // in place to keep the inode, trading away crash-atomicity
@@ -275,28 +292,38 @@ impl Buffer {
                 .write(true)
                 .truncate(true)
                 .open(&physical)?;
-            write_rope_text(&self.text, self.line_ending, &mut file)?;
+            let fingerprint = write_rope_text(&self.text, self.line_ending, &mut file)?;
             file.sync_all()?;
+            DiskState::Present {
+                modified: file.metadata().and_then(|metadata| metadata.modified()).ok(),
+                fingerprint,
+            }
         } else {
             let dir = match physical.parent() {
                 Some(d) if !d.as_os_str().is_empty() => d.to_path_buf(),
                 _ => PathBuf::from("."),
             };
             let mut tmp = tempfile::NamedTempFile::new_in(&dir)?;
-            write_rope_text(&self.text, self.line_ending, &mut tmp)?;
+            let fingerprint = write_rope_text(&self.text, self.line_ending, &mut tmp)?;
             // Keep the target's permissions; a fresh temp file defaults to 0600.
             if let Ok(meta) = fs::metadata(&physical) {
                 tmp.as_file().set_permissions(meta.permissions())?;
             }
             tmp.as_file().sync_all()?;
+            let modified = tmp
+                .as_file()
+                .metadata()
+                .and_then(|metadata| metadata.modified())
+                .ok();
             tmp.persist(&physical)?;
-        }
+            DiskState::Present {
+                modified,
+                fingerprint,
+            }
+        };
 
         self.path = Some(path.to_path_buf());
-        // Stat the file that was actually written. (Statting the logical
-        // path would also work — fs::metadata follows symlinks — but be
-        // explicit.)
-        self.disk_mtime = fs::metadata(&physical).and_then(|m| m.modified()).ok();
+        self.disk_state = disk_state;
         // Saving may target a buffer other than the active one (notably
         // during quit), so command dispatch cannot be relied on to have
         // committed this buffer's pending edit group. Advance history to
@@ -323,13 +350,11 @@ impl Buffer {
         let Some(path) = &self.path else {
             return false;
         };
-        let current = fs::metadata(path).and_then(|m| m.modified()).ok();
-        match (self.disk_mtime, current) {
-            (Some(known), Some(now)) => known != now,
-            // We never saw the file on disk, and it still isn't there.
-            (None, None) => false,
-            // Created or deleted behind our back.
-            _ => true,
+        match read_disk_state(path) {
+            Ok(current) => self.disk_state != current,
+            // If the current bytes cannot be established, saving must be
+            // conservative rather than treating an I/O error as unchanged.
+            Err(_) => true,
         }
     }
 
@@ -476,9 +501,17 @@ impl Buffer {
 
 /// Stream rope chunks to disk, applying the buffer's on-disk line ending
 /// without first flattening the whole buffer into a contiguous `String`.
-fn write_rope_text(text: &Rope, line_ending: LineEnding, mut writer: impl Write) -> io::Result<()> {
+/// The returned fingerprint covers the encoded bytes actually passed to the
+/// writer, including CRLF expansion.
+fn write_rope_text(
+    text: &Rope,
+    line_ending: LineEnding,
+    writer: impl Write,
+) -> io::Result<DiskFingerprint> {
+    let mut writer = FingerprintingWriter::new(writer);
     if line_ending == LineEnding::Lf {
-        return text.write_to(writer);
+        text.write_to(&mut writer)?;
+        return Ok(writer.finish());
     }
 
     // The rope is LF-only (see `from_file`); a CrLf buffer gets its line
@@ -493,7 +526,59 @@ fn write_rope_text(text: &Rope, line_ending: LineEnding, mut writer: impl Write)
         }
         writer.write_all(rest.as_bytes())?;
     }
-    Ok(())
+    Ok(writer.finish())
+}
+
+struct FingerprintingWriter<W> {
+    inner: W,
+    hasher: Sha256,
+}
+
+impl<W> FingerprintingWriter<W> {
+    fn new(inner: W) -> Self {
+        Self {
+            inner,
+            hasher: Sha256::new(),
+        }
+    }
+
+    fn finish(self) -> DiskFingerprint {
+        self.hasher.finalize().into()
+    }
+}
+
+impl<W: Write> Write for FingerprintingWriter<W> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        let written = self.inner.write(bytes)?;
+        self.hasher.update(&bytes[..written]);
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+fn read_disk_state(path: &Path) -> io::Result<DiskState> {
+    let mut file = match fs::File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(DiskState::Missing),
+        Err(error) => return Err(error),
+    };
+    let modified = file.metadata().and_then(|metadata| metadata.modified()).ok();
+    let mut hasher = Sha256::new();
+    let mut bytes = [0; 64 * 1024];
+    loop {
+        let read = file.read(&mut bytes)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&bytes[..read]);
+    }
+    Ok(DiskState::Present {
+        modified,
+        fingerprint: hasher.finalize().into(),
+    })
 }
 
 fn input_edit_for_replace(
@@ -1092,6 +1177,53 @@ mod tests {
         buf.replace(0, 0, "x");
         buf.save().unwrap();
         assert!(!buf.externally_modified());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn externally_modified_detects_same_mtime_size_and_inode_rewrite() {
+        use std::os::unix::fs::MetadataExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.txt");
+        fs::write(&file, "before").unwrap();
+
+        let buf = Buffer::from_file(0, &file).unwrap();
+        let original = fs::metadata(&file).unwrap();
+        let original_mtime = original.modified().unwrap();
+
+        // Simulate a timestamp-preserving deployment tool rewriting the
+        // existing file in place with different bytes of the same length.
+        fs::write(&file, "after!").unwrap();
+        let rewritten = fs::OpenOptions::new().write(true).open(&file).unwrap();
+        rewritten.set_modified(original_mtime).unwrap();
+        drop(rewritten);
+
+        let current = fs::metadata(&file).unwrap();
+        assert_eq!(current.modified().unwrap(), original_mtime);
+        assert_eq!(current.len(), original.len());
+        assert_eq!(current.ino(), original.ino());
+        assert!(
+            buf.externally_modified(),
+            "different on-disk bytes must be detected even when metadata is unchanged"
+        );
+    }
+
+    #[test]
+    fn externally_modified_baseline_uses_raw_crlf_bytes_after_save() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.txt");
+        fs::write(&file, "one\r\ntwo\r\n").unwrap();
+
+        let mut buf = Buffer::from_file(0, &file).unwrap();
+        buf.replace(3, 3, "!");
+        buf.save().unwrap();
+
+        assert_eq!(fs::read(&file).unwrap(), b"one!\r\ntwo\r\n");
+        assert!(
+            !buf.externally_modified(),
+            "save must fingerprint the CRLF-encoded disk bytes, not normalized rope bytes"
+        );
     }
 
     #[test]
