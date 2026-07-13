@@ -77,25 +77,16 @@ where
                 let total_lines = buf.line_count();
                 let mut visual_row: usize = 0;
                 let mut target_line = scroll_top;
-                let mut target_visual_col = col_in_text;
+                let mut target_row = 0usize;
 
                 let mut line_idx = scroll_top;
                 while line_idx < total_lines {
-                    let line_visual_width = render::line_visual_width(buf, line_idx);
-                    let num_visual = crate::pane::visual_lines_for_length(line_visual_width, text_width);
+                    let num_visual = render::visual_row_count(buf, line_idx, text_width);
 
                     if visual_row + num_visual > rel_y {
                         // The click is within this line's visual rows
                         target_line = line_idx;
-                        let row_within_line = rel_y - visual_row;
-
-                        if text_width > 1 && line_visual_width > text_width {
-                            // Wrapped line: compute visual column from segment
-                            let chars_per_segment = text_width - 1;
-                            target_visual_col = row_within_line * chars_per_segment + col_in_text;
-                        } else {
-                            target_visual_col = col_in_text;
-                        }
+                        target_row = rel_y - visual_row;
                         break;
                     }
 
@@ -108,7 +99,13 @@ where
                     let char_count = buf.char_count();
                     self.editor.pane_tree.focused_pane_mut().point = char_count;
                 } else {
-                    let target_col = render::buffer_col_for_visual_col(buf, target_line, target_visual_col);
+                    let target_col = render::buffer_col_for_visual_position(
+                        buf,
+                        target_line,
+                        target_row,
+                        col_in_text,
+                        text_width,
+                    );
                     // buffer_col_for_visual_col skips zero-width chars, so
                     // it never lands on a combining mark, but it can land
                     // between a ZWJ and the next emoji of one cluster; snap

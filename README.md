@@ -97,6 +97,20 @@ options. Known limitation: on heavily corrupted buffers, tree-sitter's
 incremental error recovery can transiently differ from a fresh parse
 (upstream behavior, self-healing) — deep sweeps report those.
 
+### Long-line render benchmark
+
+An ignored integration benchmark renders a syntax-highlighted, exact 5 MiB
+single-line JSON buffer at both the beginning and far end of the line. It also
+measures cursor-left command handling and the complete cursor-left-plus-redraw
+interaction:
+
+```sh
+cargo test --release benchmark_five_megabyte_single_line -- --ignored --nocapture
+```
+
+Use release mode for representative timings. The benchmark is manual because
+absolute wall-clock thresholds would be machine-dependent.
+
 ## Usage
 
 ```sh
@@ -195,7 +209,8 @@ cargo test
 
 The test suite includes unit tests for every module, integration tests that
 drive the full editor through a `TestBackend`, and snapshot tests for rendered
-output.
+output. Ignored manual performance tests are documented with their relevant
+benchmark commands above.
 
 CI (GitHub Actions, `.github/workflows/ci.yml`) runs on every pull request and
 on pushes to `main`. It mirrors the pre-commit hook — build, tests behind the
