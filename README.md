@@ -63,17 +63,21 @@ cargo build --release --no-default-features
 ### Syntax edit benchmark
 
 The `syntax-bench` CLI compares the cost of applying the same deterministic
-edits with full parsing, persistent incremental parsing, and no parsing:
+edits with full parsing, persistent incremental parsing, the single background
+worker, and no parsing:
 
 ```sh
 cargo run --release --bin syntax-bench -- --lines 10000 --edits 100
 ```
 
-Use `--mode full`, `--mode incremental`, or `--mode none` to run one strategy.
+Use `--mode full`, `--mode incremental`, `--mode background`, or `--mode none`
+to run one strategy.
 The default `all` mode also verifies that every strategy produces identical
-final text and that full and incremental parsing produce identical highlight
-checksums. Run `syntax-bench --help` for all options. Release mode is important
-for representative timings.
+final text and that full, incremental, and background parsing produce identical
+highlight checksums. It reports background dispatch—including provisional
+highlight-cache rebasing—separately so UI-thread cost is not confused with
+worker completion latency. Run `syntax-bench --help` for all options. Release
+mode is important for representative timings.
 
 ### Syntax fuzz harness
 

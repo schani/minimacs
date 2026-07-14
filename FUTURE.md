@@ -15,8 +15,8 @@ for correctness.
 
 A complete fix belongs either upstream in tree-house (incrementally update
 injection matches over changed ranges), in a maintained fork, or in a lower-level
-syntax layer that owns root and injection trees directly. Moving parse work to a
-background worker would protect input latency as a complementary measure.
+syntax layer that owns root and injection trees directly. The background worker
+now protects input latency, but does not change this throughput cost.
 
 ## Missing emacs features
 

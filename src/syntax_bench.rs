@@ -6,6 +6,7 @@ use ropey::Rope;
 use tree_house::tree_sitter::{InputEdit, Point};
 
 use crate::syntax::{Language, StyledSpan, SyntaxState};
+use crate::syntax_worker::{SyntaxJob, SyntaxWorker};
 
 const DEFAULT_LINES: usize = 10_000;
 const DEFAULT_EDITS: usize = 100;
@@ -15,6 +16,7 @@ enum SelectedMode {
     All,
     Full,
     Incremental,
+    Background,
     None,
 }
 
@@ -51,6 +53,7 @@ impl Options {
                         "all" => SelectedMode::All,
                         "full" => SelectedMode::Full,
                         "incremental" => SelectedMode::Incremental,
+                        "background" => SelectedMode::Background,
                         "none" => SelectedMode::None,
                         _ => return Err(format!("unknown mode '{value}'")),
                     };
@@ -86,6 +89,7 @@ fn positive_value(value: Option<&String>, option: &str) -> Result<usize, String>
 enum BenchMode {
     Full,
     Incremental,
+    Background,
     None,
 }
 
@@ -94,6 +98,7 @@ impl BenchMode {
         match self {
             Self::Full => "full parsing",
             Self::Incremental => "incremental parsing",
+            Self::Background => "background worker",
             Self::None => "no parsing",
         }
     }
@@ -166,6 +171,7 @@ struct RunResult {
     edit_elapsed: Duration,
     parse_elapsed: Duration,
     highlight_elapsed: Duration,
+    dispatch_elapsed: Duration,
     text_checksum: u64,
     highlight_checksum: u64,
 }
@@ -184,11 +190,28 @@ fn run_mode(mode: BenchMode, workload: &Workload, edits: usize) -> RunResult {
         let _ = SyntaxState::new(Language::Rust);
         None
     };
+    let background = matches!(mode, BenchMode::Background).then(SyntaxWorker::new);
+    let background_state = matches!(mode, BenchMode::Background)
+        .then(|| SyntaxState::new(Language::Rust).expect("Rust syntax configuration"));
+    if let (Some(worker), Some(state)) = (background.as_ref(), background_state.as_ref()) {
+        worker.submit(SyntaxJob {
+            key: state.background_key(),
+            language: Language::Rust,
+            base_generation: None,
+            generation: 0,
+            source: rope.clone(),
+            edits: Vec::new(),
+            requested: workload.viewport.clone(),
+        });
+        let completion = wait_for_completion(worker, state.background_key(), 0);
+        assert!(state.accept_background_completion(completion, 0));
+    }
 
     let mut highlight_results = Vec::with_capacity(edits);
     let mut edit_elapsed = Duration::ZERO;
     let mut parse_elapsed = Duration::ZERO;
     let mut highlight_elapsed = Duration::ZERO;
+    let mut dispatch_elapsed = Duration::ZERO;
     let started = Instant::now();
     for generation in 1..=edits {
         let replacement = if generation % 2 == 1 { "1" } else { "0" };
@@ -227,6 +250,36 @@ fn run_mode(mode: BenchMode, workload: &Workload, edits: usize) -> RunResult {
                 highlight_elapsed += highlight_started.elapsed();
                 spans
             }
+            BenchMode::Background => {
+                let worker = background.as_ref().unwrap();
+                let state = background_state.as_ref().unwrap();
+                let dispatch_started = Instant::now();
+                state.note_background_edit(generation, edit);
+                let (base_generation, edits) = state.background_update_for(generation);
+                worker.submit(SyntaxJob {
+                    key: state.background_key(),
+                    language: Language::Rust,
+                    base_generation,
+                    generation,
+                    source: rope.clone(),
+                    edits,
+                    requested: workload.viewport.clone(),
+                });
+                dispatch_elapsed += dispatch_started.elapsed();
+                let wait_started = Instant::now();
+                let completion = wait_for_completion(worker, state.background_key(), generation);
+                parse_elapsed += wait_started.elapsed();
+                let spans = completion
+                    .spans
+                    .iter()
+                    .filter(|span| {
+                        span.end > workload.viewport.start && span.start < workload.viewport.end
+                    })
+                    .cloned()
+                    .collect();
+                assert!(state.accept_background_completion(completion, generation));
+                spans
+            }
         };
         // Keep the spans alive so highlighting cannot be optimized away;
         // checksumming stays outside the timed region.
@@ -247,8 +300,30 @@ fn run_mode(mode: BenchMode, workload: &Workload, edits: usize) -> RunResult {
         edit_elapsed,
         parse_elapsed,
         highlight_elapsed,
+        dispatch_elapsed,
         text_checksum: bytes_checksum(rope.to_string().as_bytes()),
         highlight_checksum,
+    }
+}
+
+fn wait_for_completion(
+    worker: &SyntaxWorker,
+    key: usize,
+    generation: usize,
+) -> crate::syntax::SyntaxCompletion {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some(completion) = worker
+            .take_completions()
+            .into_iter()
+            .find(|completion| completion.key == key)
+        {
+            if completion.generation == generation {
+                return completion;
+            }
+        }
+        assert!(Instant::now() < deadline, "syntax worker benchmark timed out");
+        std::thread::yield_now();
     }
 }
 
@@ -275,9 +350,15 @@ fn bytes_checksum(bytes: &[u8]) -> u64 {
 
 fn selected_modes(mode: SelectedMode) -> &'static [BenchMode] {
     match mode {
-        SelectedMode::All => &[BenchMode::None, BenchMode::Full, BenchMode::Incremental],
+        SelectedMode::All => &[
+            BenchMode::None,
+            BenchMode::Full,
+            BenchMode::Incremental,
+            BenchMode::Background,
+        ],
         SelectedMode::Full => &[BenchMode::Full],
         SelectedMode::Incremental => &[BenchMode::Incremental],
+        SelectedMode::Background => &[BenchMode::Background],
         SelectedMode::None => &[BenchMode::None],
     }
 }
@@ -289,7 +370,7 @@ fn help_text() -> &'static str {
         "Usage: syntax-bench [OPTIONS]\n",
         "\n",
         "Options:\n",
-        "  --mode MODE    all, full, incremental, or none (default: all)\n",
+        "  --mode MODE    all, full, incremental, background, or none (default: all)\n",
         "  --lines N      generated Rust source lines (default: 10000)\n",
         "  --edits N      single-character edits to apply (default: 100)\n",
         "  -h, --help     print this help\n",
@@ -327,16 +408,17 @@ pub(crate) fn main() {
         .collect::<Vec<_>>();
 
     println!(
-        "mode                     total    per edit        rope       parse   highlight"
+        "mode                     total    per edit        rope    dispatch       parse   highlight"
     );
     for result in &results {
         let seconds = result.elapsed.as_secs_f64();
         println!(
-            "{:<22} {:>8.2} ms {:>8.2} ms {:>8.2} ms {:>8.2} ms {:>8.2} ms",
+            "{:<22} {:>8.2} ms {:>8.2} ms {:>8.2} ms {:>8.2} ms {:>8.2} ms {:>8.2} ms",
             result.mode.name(),
             seconds * 1_000.0,
             seconds * 1_000.0 / options.edits as f64,
             result.edit_elapsed.as_secs_f64() * 1_000.0,
+            result.dispatch_elapsed.as_secs_f64() * 1_000.0,
             result.parse_elapsed.as_secs_f64() * 1_000.0,
             result.highlight_elapsed.as_secs_f64() * 1_000.0,
         );
@@ -363,6 +445,21 @@ pub(crate) fn main() {
             full.elapsed.as_secs_f64() / incremental.elapsed.as_secs_f64()
         );
     }
+    if let (Some(incremental), Some(background)) = (
+        incremental,
+        results
+            .iter()
+            .find(|result| matches!(result.mode, BenchMode::Background)),
+    ) {
+        if incremental.highlight_checksum != background.highlight_checksum {
+            eprintln!("error: incremental and background highlight results differ");
+            std::process::exit(1);
+        }
+        println!(
+            "background UI dispatch: {:.3} ms/edit (highlight checksums match)",
+            background.dispatch_elapsed.as_secs_f64() * 1_000.0 / options.edits as f64
+        );
+    }
 }
 
 #[cfg(test)]
@@ -387,6 +484,12 @@ mod tests {
     }
 
     #[test]
+    fn accepts_background_worker_mode() {
+        let options = Options::parse(&["--mode".into(), "background".into()]).unwrap();
+        assert_eq!(options.mode, SelectedMode::Background);
+    }
+
+    #[test]
     fn rejects_zero_sized_runs_and_unknown_modes() {
         assert!(Options::parse(&["--lines".into(), "0".into()]).is_err());
         assert!(Options::parse(&["--edits".into(), "0".into()]).is_err());
@@ -405,23 +508,32 @@ mod tests {
         let none = run_mode(BenchMode::None, &workload, 4);
         let full = run_mode(BenchMode::Full, &workload, 4);
         let incremental = run_mode(BenchMode::Incremental, &workload, 4);
+        let background = run_mode(BenchMode::Background, &workload, 4);
 
         assert_eq!(none.text_checksum, full.text_checksum);
         assert_eq!(full.text_checksum, incremental.text_checksum);
         assert_eq!(full.highlight_checksum, incremental.highlight_checksum);
+        assert_eq!(incremental.highlight_checksum, background.highlight_checksum);
         // The phase columns are measured inside the totaled loop, so they can
         // never exceed it; checksum work happens outside the timed region.
-        for result in [&none, &full, &incremental] {
+        for result in [&none, &full, &incremental, &background] {
             assert!(
-                result.edit_elapsed + result.parse_elapsed + result.highlight_elapsed
+                result.edit_elapsed
+                    + result.dispatch_elapsed
+                    + result.parse_elapsed
+                    + result.highlight_elapsed
                     <= result.elapsed
             );
         }
         assert_eq!(none.parse_elapsed, Duration::ZERO);
         assert_eq!(none.highlight_elapsed, Duration::ZERO);
+        assert_eq!(none.dispatch_elapsed, Duration::ZERO);
         assert!(full.parse_elapsed > Duration::ZERO);
         assert!(full.highlight_elapsed > Duration::ZERO);
         assert!(incremental.parse_elapsed > Duration::ZERO);
         assert!(incremental.highlight_elapsed > Duration::ZERO);
+        assert!(background.dispatch_elapsed > Duration::ZERO);
+        assert!(background.parse_elapsed > Duration::ZERO);
+        assert_eq!(background.highlight_elapsed, Duration::ZERO);
     }
 }

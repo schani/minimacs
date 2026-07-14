@@ -8,6 +8,7 @@ use crate::buffer::Buffer;
 use crate::editor::Editor;
 use crate::indent::INDENT_WIDTH;
 use crate::pane::{visual_lines_for_length, Pane};
+use crate::syntax_worker::{SyntaxJob, SyntaxWorker};
 
 /// Compute the multi-column layout for completions.
 ///
@@ -55,7 +56,7 @@ pub fn completions_height(editor: &Editor, total_height: u16, total_width: u16) 
 }
 
 /// Render the entire editor UI into the given frame.
-pub fn render(frame: &mut Frame, editor: &Editor) {
+pub fn render(frame: &mut Frame, editor: &Editor, syntax_worker: &SyntaxWorker) {
     let area = frame.area();
 
     let comp_height = completions_height(editor, area.height, area.width);
@@ -130,7 +131,18 @@ pub fn render(frame: &mut Frame, editor: &Editor) {
             None
         };
 
-        render_pane_text(frame, buf, pane, region, &search_matches, current_match, text_area);
+        render_pane_text(
+            frame,
+            buf,
+            pane,
+            PaneOverlays {
+                region,
+                search_matches: &search_matches,
+                current_match,
+            },
+            text_area,
+            syntax_worker,
+        );
         render_pane_mode_line(frame, editor, buf, pane, is_focused, mode_line_area);
 
         // Set cursor position for the focused pane
@@ -717,14 +729,19 @@ fn visible_visual_rows(
     VisualLineLayout::new(buf, line_idx, text_width).visible_rows(skip_rows, max_rows)
 }
 
+struct PaneOverlays<'a> {
+    region: Option<(usize, usize)>,
+    search_matches: &'a [(usize, usize)],
+    current_match: Option<usize>,
+}
+
 fn render_pane_text(
     frame: &mut Frame,
     buf: &Buffer,
     pane: &Pane,
-    region: Option<(usize, usize)>,
-    search_matches: &[(usize, usize)],
-    current_match: Option<usize>,
+    overlays: PaneOverlays<'_>,
     area: Rect,
+    syntax_worker: &SyntaxWorker,
 ) {
     let scroll_top = pane.scroll_top;
     let max_visual_rows = area.height as usize;
@@ -764,30 +781,30 @@ fn render_pane_text(
         line_idx += 1;
     }
 
-    let syntax_spans = compute_visible_syntax_spans(buf, &visible_rows);
+    let syntax_spans = compute_visible_syntax_spans(buf, &visible_rows, syntax_worker);
     let mut output_lines: Vec<Line> = Vec::with_capacity(max_visual_rows);
     for (line_idx, row) in visible_rows {
-            let mut spans = Vec::new();
-            if !row.cells.is_empty() {
-                build_styled_spans(
-                    &mut spans,
-                    &row.cells,
-                    0,
-                    row.cells.len(),
-                    line_idx,
-                    region,
-                    search_matches,
-                    current_match,
-                    &syntax_spans,
-                );
-            }
-            if row.continues {
-                spans.push(Span::styled(
-                    "\\",
-                    Style::default().fg(Color::Rgb(35, 120, 147)),
-                ));
-            }
-            output_lines.push(Line::from(spans));
+        let mut spans = Vec::new();
+        if !row.cells.is_empty() {
+            build_styled_spans(
+                &mut spans,
+                &row.cells,
+                0,
+                row.cells.len(),
+                line_idx,
+                overlays.region,
+                overlays.search_matches,
+                overlays.current_match,
+                &syntax_spans,
+            );
+        }
+        if row.continues {
+            spans.push(Span::styled(
+                "\\",
+                Style::default().fg(Color::Rgb(35, 120, 147)),
+            ));
+        }
+        output_lines.push(Line::from(spans));
     }
 
     // Fill remaining rows with ~
@@ -887,20 +904,34 @@ fn build_styled_spans(
 fn compute_visible_syntax_spans(
     buf: &Buffer,
     rows: &[(usize, VisualRow)],
+    syntax_worker: &SyntaxWorker,
 ) -> Vec<crate::syntax::StyledSpan> {
     let Some(syntax) = buf.syntax.as_ref() else {
         return Vec::new();
     };
+    if syntax.is_disabled() {
+        return Vec::new();
+    }
     let first = rows.iter().find_map(|(_, row)| row.cells.first());
     let last = rows.iter().rev().find_map(|(_, row)| row.cells.last());
     let (Some(first), Some(last)) = (first, last) else {
         return Vec::new();
     };
-    syntax.highlight_rope(
-        buf.text.slice(..),
-        first.buffer_byte_start..last.buffer_byte_end,
-        buf.edit_generation,
-    )
+    let requested = first.buffer_byte_start..last.buffer_byte_end;
+    let cached = syntax.background_spans(requested.clone(), buf.edit_generation);
+    if !cached.exact {
+        let (base_generation, edits) = syntax.background_update_for(buf.edit_generation);
+        syntax_worker.submit(SyntaxJob {
+            key: syntax.background_key(),
+            language: syntax.language,
+            base_generation,
+            generation: buf.edit_generation,
+            source: buf.text.clone(),
+            edits,
+            requested,
+        });
+    }
+    cached.spans
 }
 
 fn syntax_style_at_byte(spans: &[crate::syntax::StyledSpan], byte: usize) -> Style {
