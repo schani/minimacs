@@ -55,31 +55,178 @@ pub fn completions_height(editor: &Editor, total_height: u16, total_width: u16) 
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MinibufferLayout {
+    visible_rows: Vec<String>,
+    height: u16,
+    /// Cursor coordinates relative to the visible minibuffer area.
+    cursor: Option<(usize, usize)>,
+}
+
+pub(crate) struct ScreenLayout {
+    pub(crate) pane_area: Rect,
+    pub(crate) completions_area: Option<Rect>,
+    pub(crate) minibuffer_area: Rect,
+    minibuffer: MinibufferLayout,
+}
+
+fn minibuffer_content(editor: &Editor) -> (String, Option<usize>) {
+    let Some(prompt) = editor.minibuffer.prompt() else {
+        return (
+            editor.minibuffer.message.as_deref().unwrap_or("").to_string(),
+            None,
+        );
+    };
+
+    let input = editor.minibuffer_buffer.text.to_string();
+    let point_byte = input
+        .char_indices()
+        .nth(editor.minibuffer_pane.point)
+        .map_or(input.len(), |(byte, _)| byte);
+    let mut text = String::with_capacity(prompt.label.len() + input.len());
+    text.push_str(&prompt.label);
+    text.push_str(&input);
+    (text, Some(prompt.label.len() + point_byte))
+}
+
+/// Hard-wrap minibuffer content into terminal rows and locate the prompt
+/// cursor. This is the single authority for minibuffer height, rendering,
+/// and cursor geometry. Wrapping is grapheme-safe and measured in display
+/// columns, so wide and combining characters agree with terminal rendering.
+fn minibuffer_layout(editor: &Editor, width: u16, max_height: u16) -> MinibufferLayout {
+    use unicode_segmentation::UnicodeSegmentation;
+    use unicode_width::UnicodeWidthStr;
+
+    if width == 0 || max_height == 0 {
+        return MinibufferLayout {
+            visible_rows: Vec::new(),
+            height: 0,
+            cursor: None,
+        };
+    }
+
+    let (text, cursor_byte) = minibuffer_content(editor);
+    let width = width as usize;
+    let mut rows = Vec::new();
+    let mut row = String::new();
+    let mut row_width = 0;
+    let mut cursor = None;
+
+    for (byte, grapheme) in text.grapheme_indices(true) {
+        if grapheme == "\n" {
+            if cursor_byte == Some(byte) {
+                cursor = Some(if row_width >= width {
+                    (rows.len() + 1, 0)
+                } else {
+                    (rows.len(), row_width)
+                });
+            }
+            rows.push(std::mem::take(&mut row));
+            row_width = 0;
+            continue;
+        }
+
+        let grapheme_width = grapheme.width();
+        if row_width > 0 && grapheme_width > 0 && row_width + grapheme_width > width {
+            rows.push(std::mem::take(&mut row));
+            row_width = 0;
+        }
+        let cursor_in_grapheme = cursor_byte
+            .filter(|cursor_byte| byte <= *cursor_byte && *cursor_byte < byte + grapheme.len());
+        if let Some(cursor_byte) = cursor_in_grapheme {
+            let prefix_width = grapheme[..cursor_byte - byte].width();
+            cursor = Some((rows.len(), row_width + prefix_width));
+        }
+        row.push_str(grapheme);
+        row_width += grapheme_width;
+    }
+
+    if cursor_byte == Some(text.len()) && cursor.is_none() {
+        cursor = Some(if row_width >= width {
+            (rows.len() + 1, 0)
+        } else {
+            (rows.len(), row_width)
+        });
+    }
+    rows.push(row);
+    if let Some((cursor_row, _)) = cursor {
+        while rows.len() <= cursor_row {
+            rows.push(String::new());
+        }
+    }
+
+    let height = rows.len().min(max_height as usize);
+    let max_first = rows.len().saturating_sub(height);
+    let first_visible_row = cursor
+        .map(|(cursor_row, _)| cursor_row.saturating_add(1).saturating_sub(height))
+        .unwrap_or(0)
+        .min(max_first);
+    let cursor = cursor.and_then(|(row, col)| {
+        row.checked_sub(first_visible_row)
+            .filter(|row| *row < height)
+            .map(|row| (row, col))
+    });
+    let visible_rows = rows
+        .into_iter()
+        .skip(first_visible_row)
+        .take(height)
+        .collect();
+
+    MinibufferLayout {
+        visible_rows,
+        height: height as u16,
+        cursor,
+    }
+}
+
+/// Divide the frame into editor panes, optional completions, and a dynamic
+/// minibuffer. The minibuffer may occupy at most one third of the frame;
+/// longer prompts scroll around their cursor instead of consuming the editor.
+pub(crate) fn screen_layout(editor: &Editor, area: Rect) -> ScreenLayout {
+    let comp_height = completions_height(editor, area.height, area.width)
+        .min(area.height.saturating_sub(1));
+    let remaining = area.height.saturating_sub(comp_height);
+    let max_minibuffer_height = if remaining == 0 {
+        0
+    } else {
+        (area.height / 3).max(1).min(remaining)
+    };
+    let minibuffer = minibuffer_layout(editor, area.width, max_minibuffer_height);
+    let pane_height = remaining.saturating_sub(minibuffer.height);
+    let pane_area = Rect::new(area.x, area.y, area.width, pane_height);
+    let completions_area = (comp_height > 0).then(|| {
+        Rect::new(
+            area.x,
+            area.y.saturating_add(pane_height),
+            area.width,
+            comp_height,
+        )
+    });
+    let minibuffer_area = Rect::new(
+        area.x,
+        area
+            .y
+            .saturating_add(pane_height)
+            .saturating_add(comp_height),
+        area.width,
+        minibuffer.height,
+    );
+
+    ScreenLayout {
+        pane_area,
+        completions_area,
+        minibuffer_area,
+        minibuffer,
+    }
+}
+
 /// Render the entire editor UI into the given frame.
 pub fn render(frame: &mut Frame, editor: &Editor, syntax_worker: &SyntaxWorker) {
     let area = frame.area();
-
-    let comp_height = completions_height(editor, area.height, area.width);
-    let (pane_area, completions_area, minibuffer_area) = if comp_height > 0 {
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Min(1),
-                Constraint::Length(comp_height),
-                Constraint::Length(1),
-            ])
-            .split(area);
-        (chunks[0], Some(chunks[1]), chunks[2])
-    } else {
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Min(1), Constraint::Length(1)])
-            .split(area);
-        (chunks[0], None, chunks[1])
-    };
+    let layout = screen_layout(editor, area);
 
     // Calculate rects for all panes
-    let (pane_rects, separator_rects) = editor.pane_tree.calculate_rects(pane_area);
+    let (pane_rects, separator_rects) = editor.pane_tree.calculate_rects(layout.pane_area);
     let focus_path = editor.pane_tree.focus_path();
 
     for (path, rect) in &pane_rects {
@@ -202,13 +349,13 @@ pub fn render(frame: &mut Frame, editor: &Editor, syntax_worker: &SyntaxWorker) 
         frame.render_widget(sep_widget, *sep_rect);
     }
 
-    if let Some(comp_area) = completions_area {
+    if let Some(comp_area) = layout.completions_area {
         if let Some(candidates) = &editor.minibuffer.completions {
             render_completions(frame, candidates, editor.minibuffer.completion_page, comp_area);
         }
     }
 
-    render_minibuffer(frame, editor, minibuffer_area);
+    render_minibuffer(frame, &layout.minibuffer, layout.minibuffer_area);
 }
 
 /// One terminal column of a rendered line. A tab expands to several cells; a
@@ -1094,35 +1241,21 @@ fn render_completions(frame: &mut Frame, candidates: &[String], page: usize, are
     frame.render_widget(paragraph, area);
 }
 
-/// Display column of the minibuffer cursor: the label's width plus the
-/// width of the input up to `point`. All in display columns — labels embed
-/// buffer names and input can hold wide or combining chars, so neither byte
-/// length nor char count is correct.
-fn minibuffer_cursor_col(label: &str, input: &str, point: usize) -> usize {
-    use unicode_width::UnicodeWidthStr;
-    let before: String = input.chars().take(point).collect();
-    label.width() + before.width()
-}
-
-fn render_minibuffer(frame: &mut Frame, editor: &Editor, area: Rect) {
-    let text = if editor.minibuffer.is_active() {
-        let label = &editor.minibuffer.prompt().unwrap().label;
-        let input: String = editor.minibuffer_buffer.text.to_string();
-        format!("{label}{input}")
-    } else {
-        editor.minibuffer.message.as_deref().unwrap_or("").to_string()
-    };
-    let minibuffer = Paragraph::new(Line::from(text));
+fn render_minibuffer(frame: &mut Frame, layout: &MinibufferLayout, area: Rect) {
+    let lines: Vec<Line> = layout
+        .visible_rows
+        .iter()
+        .map(String::as_str)
+        .map(Line::from)
+        .collect();
+    let minibuffer = Paragraph::new(lines);
     frame.render_widget(minibuffer, area);
 
-    // If minibuffer has a prompt, set cursor there
-    if let Some(prompt) = editor.minibuffer.prompt() {
-        let input: String = editor.minibuffer_buffer.text.to_string();
-        let cursor_pos =
-            minibuffer_cursor_col(&prompt.label, &input, editor.minibuffer_pane.point);
-        let x = area.x + cursor_pos as u16;
-        if x < area.x + area.width {
-            frame.set_cursor_position((x, area.y));
+    if let Some((row, col)) = layout.cursor {
+        let x = area.x.saturating_add(col as u16);
+        let y = area.y.saturating_add(row as u16);
+        if x < area.right() && y < area.bottom() {
+            frame.set_cursor_position((x, y));
         }
     }
 }
@@ -1257,32 +1390,147 @@ mod tests {
         assert_eq!(text, "0123456789abc");
     }
 
-    // === minibuffer cursor tests ===
-
     #[test]
-    fn minibuffer_cursor_col_ascii() {
-        assert_eq!(minibuffer_cursor_col("Find file: ", "abc", 3), 14);
-    }
-
-    #[test]
-    fn minibuffer_cursor_col_multibyte_label() {
+    fn minibuffer_layout_handles_multibyte_label() {
         // Confirm-prompt labels embed buffer names, which can be non-ASCII.
         // "Save buffer 日本語.md? " is 12 + 6 + 3 + 2 = 23 display columns
         // (34 bytes) — the cursor must go after it, not 34 cells right.
-        assert_eq!(minibuffer_cursor_col("Save buffer 日本語.md? ", "", 0), 23);
+        let editor = prompt_editor("Save buffer 日本語.md? ", "", 0);
+        let layout = minibuffer_layout(&editor, 40, 2);
+        assert_eq!(layout.cursor, Some((0, 23)));
     }
 
     #[test]
-    fn minibuffer_cursor_col_wide_input_chars() {
-        // Point is a char index; two CJK chars occupy four columns.
-        assert_eq!(minibuffer_cursor_col("I: ", "你好x", 2), 3 + 4);
-    }
-
-    #[test]
-    fn minibuffer_cursor_col_combining_mark_in_input() {
+    fn minibuffer_layout_handles_combining_mark_in_input() {
         // "e" + combining acute renders as one column; point after both
         // chars is still column 1 past the label.
-        assert_eq!(minibuffer_cursor_col("x", "e\u{301}", 2), 1 + 1);
+        let editor = prompt_editor("x", "e\u{301}", 2);
+        let layout = minibuffer_layout(&editor, 10, 2);
+        assert_eq!(layout.cursor, Some((0, 2)));
+    }
+
+    #[test]
+    fn minibuffer_layout_keeps_cursor_at_boundary_before_combining_input() {
+        // Segmentation can join an input-leading combining mark to the last
+        // label grapheme. Point zero must remain visible between them.
+        let editor = prompt_editor("x", "\u{301}", 0);
+        let layout = minibuffer_layout(&editor, 10, 2);
+        assert_eq!(layout.cursor, Some((0, 1)));
+    }
+
+    fn prompt_editor(label: &str, input: &str, point: usize) -> Editor {
+        let mut editor = Editor::new();
+        editor
+            .minibuffer
+            .start_prompt(crate::minibuffer::PromptKind::FindFile, label);
+        editor.minibuffer_buffer.text = ropey::Rope::from_str(input);
+        editor.minibuffer_pane.point = point;
+        editor
+    }
+
+    #[test]
+    fn minibuffer_layout_hard_wraps_and_places_cursor() {
+        let editor = prompt_editor("I: ", "abcdefgh", 8);
+        let layout = minibuffer_layout(&editor, 6, 3);
+
+        assert_eq!(layout.visible_rows, ["I: abc", "defgh"]);
+        assert_eq!(layout.height, 2);
+        assert_eq!(layout.cursor, Some((1, 5)));
+    }
+
+    #[test]
+    fn minibuffer_layout_adds_row_for_cursor_after_exact_fit() {
+        let editor = prompt_editor("I: ", "abc", 3);
+        let layout = minibuffer_layout(&editor, 6, 3);
+
+        assert_eq!(layout.visible_rows, ["I: abc", ""]);
+        assert_eq!(layout.height, 2);
+        assert_eq!(layout.cursor, Some((1, 0)));
+    }
+
+    #[test]
+    fn minibuffer_layout_uses_unicode_display_width() {
+        let editor = prompt_editor("I: ", "你好x", 3);
+        let layout = minibuffer_layout(&editor, 6, 3);
+
+        assert_eq!(layout.visible_rows, ["I: 你", "好x"]);
+        assert_eq!(layout.cursor, Some((1, 3)));
+    }
+
+    #[test]
+    fn minibuffer_layout_keeps_capped_prompt_cursor_visible() {
+        let editor = prompt_editor("", "abcdefghijklmnopqrst", 20);
+        let layout = minibuffer_layout(&editor, 4, 3);
+
+        assert_eq!(layout.visible_rows, ["mnop", "qrst", ""]);
+        assert_eq!(layout.height, 3);
+        assert_eq!(layout.cursor, Some((2, 0)));
+    }
+
+    #[test]
+    fn screen_layout_grows_idle_messages_and_preserves_pane_space() {
+        let mut editor = Editor::new();
+        editor
+            .minibuffer
+            .show_message("abcdefghijkl".to_string());
+
+        let layout = screen_layout(&editor, Rect::new(0, 0, 5, 9));
+
+        assert_eq!(layout.pane_area, Rect::new(0, 0, 5, 6));
+        assert_eq!(layout.completions_area, None);
+        assert_eq!(layout.minibuffer_area, Rect::new(0, 6, 5, 3));
+        assert_eq!(layout.minibuffer.visible_rows, ["abcde", "fghij", "kl"]);
+    }
+
+    #[test]
+    fn screen_layout_keeps_completions_above_grown_minibuffer() {
+        let mut editor = prompt_editor("I: ", "abcdefghijkl", 12);
+        editor.minibuffer.completions = Some(vec!["alpha".into(), "alpine".into()]);
+
+        let layout = screen_layout(&editor, Rect::new(0, 0, 8, 12));
+
+        let completions = layout.completions_area.unwrap();
+        assert_eq!(layout.pane_area.bottom(), completions.y);
+        assert_eq!(completions.bottom(), layout.minibuffer_area.y);
+        assert_eq!(layout.minibuffer_area.height, 2);
+    }
+
+    #[test]
+    fn screen_layout_minibuffer_shrinks_with_content_or_wider_terminal() {
+        let mut editor = prompt_editor("I: ", "abcdefgh", 8);
+        assert_eq!(
+            screen_layout(&editor, Rect::new(0, 0, 6, 9))
+                .minibuffer_area
+                .height,
+            2
+        );
+        assert_eq!(
+            screen_layout(&editor, Rect::new(0, 0, 20, 9))
+                .minibuffer_area
+                .height,
+            1
+        );
+
+        editor.minibuffer_buffer.text = ropey::Rope::from_str("a");
+        editor.minibuffer_pane.point = 1;
+        assert_eq!(
+            screen_layout(&editor, Rect::new(0, 0, 6, 9))
+                .minibuffer_area
+                .height,
+            1
+        );
+    }
+
+    #[test]
+    fn screen_layout_handles_zero_sized_terminal() {
+        let editor = prompt_editor("I: ", "你好", 2);
+        let layout = screen_layout(&editor, Rect::new(0, 0, 0, 0));
+
+        assert_eq!(layout.pane_area, Rect::new(0, 0, 0, 0));
+        assert_eq!(layout.completions_area, None);
+        assert_eq!(layout.minibuffer_area, Rect::new(0, 0, 0, 0));
+        assert!(layout.minibuffer.visible_rows.is_empty());
+        assert_eq!(layout.minibuffer.cursor, None);
     }
 
     // === completions_layout tests ===

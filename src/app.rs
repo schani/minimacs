@@ -161,16 +161,13 @@ where
 
     fn update_viewport(&mut self) {
         let size = self.terminal.size().unwrap_or_default();
-        let comp_height = render::completions_height(&self.editor, size.height, size.width);
-        // Calculate the pane area (full area minus 1 row for minibuffer minus completions)
-        let pane_area = ratatui::layout::Rect {
-            x: 0,
-            y: 0,
-            width: size.width,
-            height: size.height.saturating_sub(1 + comp_height),
-        };
+        let layout = render::screen_layout(
+            &self.editor,
+            ratatui::layout::Rect::new(0, 0, size.width, size.height),
+        );
 
-        let (pane_rects, _separators) = self.editor.pane_tree.calculate_rects(pane_area);
+        let (pane_rects, _separators) =
+            self.editor.pane_tree.calculate_rects(layout.pane_area);
         for (path, rect) in &pane_rects {
             // Each pane rect includes 1 row for mode line
             let text_height = rect.height.saturating_sub(1) as usize;
@@ -178,8 +175,8 @@ where
             self.editor.pane_tree.update_pane_viewport(path, text_height, text_width);
         }
 
-        // Update minibuffer pane viewport width
-        self.editor.minibuffer_pane.viewport_width = size.width as usize;
+        self.editor.minibuffer_pane.viewport_width = layout.minibuffer_area.width as usize;
+        self.editor.minibuffer_pane.viewport_height = layout.minibuffer_area.height as usize;
     }
 
     pub fn render(&mut self) -> Result<()> {
