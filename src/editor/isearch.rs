@@ -1,3 +1,5 @@
+use unicode_segmentation::UnicodeSegmentation;
+
 use crate::minibuffer::PromptKind;
 
 use super::Editor;
@@ -198,6 +200,20 @@ impl Editor {
         let text = self.normalized_paste(text);
         if let Some(ref mut isearch) = self.isearch {
             isearch.query.push_str(&text);
+            let query = isearch.query.clone();
+            self.minibuffer_buffer.text = ropey::Rope::from_str(&query);
+            self.minibuffer_pane.point = query.chars().count();
+        }
+        self.isearch_update();
+    }
+
+    /// Remove one user-perceived character from the query and keep the
+    /// minibuffer mirror synchronized.
+    pub fn isearch_backspace(&mut self) {
+        if let Some(ref mut isearch) = self.isearch {
+            if let Some((start, _)) = isearch.query.grapheme_indices(true).next_back() {
+                isearch.query.truncate(start);
+            }
             let query = isearch.query.clone();
             self.minibuffer_buffer.text = ropey::Rope::from_str(&query);
             self.minibuffer_pane.point = query.chars().count();
