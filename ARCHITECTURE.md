@@ -736,6 +736,11 @@ failing-isearch label, since queued messages are invisible while a prompt is
 active) and the default directory prefill is restored. `open_file` and the
 `write_buffer` choke point also reject empty paths outright (defense in depth
 for non-prompt callers like CLI arguments).
+Before opening, `Editor::open_file` anchors relative paths to the editor cwd,
+lexically removes `.`/`..`, and canonicalizes the longest existing ancestor.
+That gives nonexistent files a stable absolute identity too: multiple CLI or
+prompt spellings of the same future file switch to one buffer instead of
+creating duplicate buffers that later save over each other.
 
 Message lifecycle: `message` is only rendered while the minibuffer is idle —
 a prompt hides it. To keep a message queued during a prompt (e.g. "Mark set"

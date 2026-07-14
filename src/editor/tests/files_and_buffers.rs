@@ -19,6 +19,27 @@ fn open_nonexistent_file_creates_buffer() {
 }
 
 #[test]
+fn nonexistent_file_spellings_share_one_buffer_identity() {
+    let dir = tempfile::tempdir().unwrap();
+    let subdir = dir.path().join("subdir");
+    std::fs::create_dir(&subdir).unwrap();
+    let with_parent = subdir.join("..").join("future.txt");
+    let direct = dir.path().join("future.txt");
+
+    let mut editor = Editor::new();
+    editor.open_file(&with_parent).unwrap();
+    let first_id = editor.current_buffer().id;
+    editor.open_file(&direct).unwrap();
+
+    assert_eq!(editor.current_buffer().id, first_id);
+    assert_eq!(editor.buffers.len(), 2, "scratch plus one file buffer");
+    let expected = std::fs::canonicalize(dir.path())
+        .unwrap()
+        .join("future.txt");
+    assert_eq!(editor.current_buffer().path.as_deref(), Some(expected.as_path()));
+}
+
+#[test]
 fn open_nonexistent_file_save_creates_file() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("new_file.txt");
