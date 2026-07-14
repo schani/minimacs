@@ -195,7 +195,10 @@ Larger items (incremental tree-sitter parsing, missing emacs features) are in FU
 
 ## Major
 
-- [x] Atomic saves: write to a temp file in the same directory and rename over the target (`buffer.rs:142` currently truncates in place with `fs::write`, so a crash or full disk mid-write destroys the file). Consider fsync.
+- [x] Atomic saves: write to a temp file in the same directory, fsync it,
+      rename over the target, and on Unix fsync the containing directory so
+      the replacement directory entry is crash-durable. A crash or full disk
+      mid-write cannot destroy the existing file.
 - [x] Detect external file modification: remember mtime plus a fingerprint of the exact raw bytes at load/save and warn before saving over a file whose metadata or contents changed on disk (including timestamp-preserving rewrites). There is still no revert-buffer command.
 - [x] `C-x C-w` mutates the buffer's path and name *before* knowing the save succeeded (`editor.rs:440-449`), silently overwrites existing files without confirmation, and never re-detects syntax for the new extension.
 - [x] Wide-character and grapheme-cluster support: `unicode-width` and `unicode-segmentation` are declared in Cargo.toml but never imported anywhere in src/. `visual_width_for_chars` (`render.rs:187-195`) counts every non-tab char as width 1, so CJK/emoji lines get wrong cursor position, wrap points, mouse mapping, and highlight columns; cursor movement and backspace step through combining sequences one scalar at a time.
