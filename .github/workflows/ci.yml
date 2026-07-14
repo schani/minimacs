@@ -9,7 +9,7 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # Mirrors the pre-commit hook managed by build.rs: build, tests behind the
+  # Mirrors the optional, versioned pre-commit hook: build, tests behind the
   # 90% line-coverage threshold, and clippy with warnings denied.
   test:
     name: Build, test, lint
