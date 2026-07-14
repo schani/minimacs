@@ -500,9 +500,11 @@ does not cancel a chord in progress.
 
 ## Rendering
 
-`render::render(frame, &editor)` is called every iteration. It:
+`render::render(frame, &editor)` is called when visible state changes. It:
 
-1. Splits the terminal area into a pane region and a 1-row minibuffer.
+1. Calls the shared `screen_layout()` calculation used by both rendering and
+   `App::update_viewport()`. It divides the terminal into the pane region, an
+   optional completion list, and a dynamically sized minibuffer.
 2. Walks `pane_tree.calculate_rects()` to get per-pane rectangles.
 3. For each pane:
    - Splits the pane rect into a text area and a 1-row mode line.
@@ -538,11 +540,12 @@ does not cancel a chord in progress.
      pending key chord prefix.
    - Focused pane gets a blue-background bold mode line with white text;
      unfocused panes get a light gray background with dark text.
-4. Renders the minibuffer (prompt or message).
+4. Renders the minibuffer's hard-wrapped prompt or message rows.
 5. Sets the terminal cursor position. If the minibuffer is active, the cursor
-   goes to the minibuffer input. Otherwise it is placed at the focused pane's
-   point, accounting for line wrapping and display-only tab expansion when
-   computing the visual position, and subtracting the pane's
+   goes to the minibuffer input's wrapped row and display column. Otherwise it
+   is placed at the focused pane's point, accounting for line wrapping and
+   display-only tab expansion when computing the visual position, and
+   subtracting the pane's
    `scroll_row_offset` (a cursor row among the scrolled-off wrap segments of
    the top line is above the viewport and left unset). When point is at EOL
    of a line (or of a final wrap segment) that exactly fills the pane width,
@@ -736,11 +739,29 @@ it with "Quit". Handlers that want a result message ("Wrote file.txt",
 ### Minibuffer as a Real Buffer
 
 The minibuffer uses a real `Buffer` (`minibuffer_buffer`, id=`usize::MAX`) and
-`Pane` (`minibuffer_pane`, viewport_height=1) owned by `Editor`. When a prompt
-is active, `active_buffer()` / `active_pane()` return the minibuffer's
-buffer/pane instead of the focused pane's. This means all editing and movement
-commands (word movement, kill-line, delete-forward, undo/redo, mark/cut/copy/
-paste) work automatically in the minibuffer without duplicating logic.
+`Pane` (`minibuffer_pane`) owned by `Editor`. Its viewport starts at one row
+and `App::update_viewport()` refreshes both dimensions from `screen_layout()`.
+When a prompt is active, `active_buffer()` / `active_pane()` return the
+minibuffer's buffer/pane instead of the focused pane's. This means all editing
+and movement commands (word movement, kill-line, delete-forward, undo/redo,
+mark/cut/copy/paste) work automatically in the minibuffer without duplicating
+logic.
+
+### Dynamic Minibuffer Layout
+
+`minibuffer_layout()` is the single authority for the minibuffer's height,
+rendered rows, and prompt cursor. It concatenates the live prompt label and
+input (or uses the idle message), hard-wraps without trimming whitespace, and
+measures terminal display columns rather than bytes or scalar values. Grapheme
+clusters remain intact; CJK and emoji can occupy two columns and combining
+marks occupy none. A cursor immediately after content that exactly fills a row
+appears at column zero of the following row.
+
+The minibuffer grows upward and shrinks again when content is deleted or the
+terminal widens. Its height is capped at one third of the terminal. If a prompt
+exceeds the cap, the visible row window follows the cursor; an idle message
+shows its first rows. `screen_layout()` places any completion list immediately
+above the resulting minibuffer and gives the remaining rows to the pane tree.
 
 The minibuffer buffer is never in `self.buffers` and never appears in buffer
 lists. Its `History` is reset each time a prompt starts. The shared clipboard
@@ -800,14 +821,14 @@ is cleared:
 - On paste events
 - In `cancel()`, `finish()`, and `start_prompt()` lifecycle methods
 
-Rendering uses `completions_height()` (shared by `render()` and
-`update_viewport()`) to conditionally insert a completions area between panes
-and minibuffer. The shared `completions_layout()` helper computes column width,
-column count, and row count from the candidates and terminal width. All widths
-are display columns measured with unicode-width (CJK/emoji names count two
-columns per glyph, not one per char); names too wide for the remaining row are
-truncated by `truncate_to_width()`, which drops a straddling wide char entirely
-rather than splitting a glyph. Height is the number of layout rows, capped at
+`screen_layout()` uses `completions_height()` to conditionally insert a
+completions area between panes and minibuffer. The shared
+`completions_layout()` helper computes column width, column count, and row
+count from the candidates and terminal width. All widths are display columns
+measured with unicode-width (CJK/emoji names count two columns per glyph, not
+one per char); names too wide for the remaining row are truncated by
+`truncate_to_width()`, which drops a straddling wide char entirely rather than
+splitting a glyph. Height is the number of layout rows, capped at
 `(screen_height - 2) / 3`, always leaving room for panes and minibuffer.
 Candidates display in a multi-column layout (like `ls` output) with a dark
 gray background.
