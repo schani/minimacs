@@ -60,16 +60,24 @@ src/
   editor/prompts.rs   Prompt starters, submit_prompt, confirm/quit flows
   editor/fileops.rs   open_file, the write_buffer save choke point, kill-buffer,
                       buffer-name uniquification
-  editor/tests.rs     Editor unit tests
+  editor/tests/       Editor unit tests, split by command and subsystem
   buffer.rs         Buffer -- Rope text storage, file I/O, metadata
   pane.rs           PaneTree/PaneNode/Pane -- window layout tree
   keymap.rs         Key/KeymapNode/KeymapState -- multi-key chord trie
   command.rs        Command enum -- flat enum of all editor actions
-  render.rs         render() -- walks pane tree, produces ratatui widgets
+  render.rs         Rendering facade
+  render/layout.rs  Screen, completions, and minibuffer layout
+  render/visual_line.rs
+                    Shared wrapped-line display geometry
+  render/widgets.rs render() orchestration and ratatui widgets
   minibuffer.rs     Minibuffer/Prompt -- prompt state, tab completion functions
   history.rs        History -- undo/redo with edit grouping
   indent.rs         Shared indentation constants (INDENT_WIDTH = 4)
-  syntax.rs         SyntaxState -- tree-sitter highlighting
+  syntax.rs         Syntax highlighting facade and StyledSpan
+  syntax/languages.rs
+                    Language detection and tree-house configuration
+  syntax/state.rs   SyntaxState parser, cache, and background state
+  syntax/theme.rs   Highlight capture names and VSCode Light+ styles
   syntax_worker.rs  Single-thread parser executor and coalescing mailbox
   syntax_bench.rs   syntax-bench performance harness (see below)
   syntax_fuzz.rs    syntax-fuzz incremental-vs-fresh fuzz harness (see below)
