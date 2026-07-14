@@ -60,7 +60,7 @@ src/
   editor/prompts.rs   Prompt starters, submit_prompt, confirm/quit flows
   editor/fileops.rs   open_file, the write_buffer save choke point, kill-buffer,
                       buffer-name uniquification
-  editor/tests.rs     Editor unit tests
+  editor/tests/       Editor unit tests, split by command and subsystem
   buffer.rs         Buffer -- Rope text storage, file I/O, metadata
   pane.rs           PaneTree/PaneNode/Pane -- window layout tree
   keymap.rs         Key/KeymapNode/KeymapState -- multi-key chord trie
