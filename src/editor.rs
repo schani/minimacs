@@ -457,17 +457,59 @@ impl Editor {
         pane.preferred_column = None;
     }
 
-    fn forward_word(&mut self) {
-        let buf = self.active_buffer();
-        let mut pos = self.active_pane().point;
-        let mut chars = buf.text.chars_at(pos).peekable();
+    fn grapheme_is_word(&self, start: usize, end: usize) -> bool {
+        self.active_buffer()
+            .text
+            .slice(start..end)
+            .chars()
+            .any(is_word_char)
+    }
 
-        while chars.next_if(|ch| !is_word_char(*ch)).is_some() {
-            pos += 1;
+    fn forward_word_position(&self, pos: usize) -> usize {
+        let buffer = self.active_buffer();
+        let mut pos = buffer.snap_to_grapheme_boundary(pos);
+        let end = buffer.char_count();
+
+        while pos < end {
+            let next = buffer.next_grapheme_boundary(pos);
+            if self.grapheme_is_word(pos, next) {
+                break;
+            }
+            pos = next;
         }
-        while chars.next_if(|ch| is_word_char(*ch)).is_some() {
-            pos += 1;
+        while pos < end {
+            let next = buffer.next_grapheme_boundary(pos);
+            if !self.grapheme_is_word(pos, next) {
+                break;
+            }
+            pos = next;
         }
+        pos
+    }
+
+    fn backward_word_position(&self, pos: usize) -> usize {
+        let buffer = self.active_buffer();
+        let mut pos = buffer.snap_to_grapheme_boundary(pos);
+
+        while pos > 0 {
+            let previous = buffer.prev_grapheme_boundary(pos);
+            if self.grapheme_is_word(previous, pos) {
+                break;
+            }
+            pos = previous;
+        }
+        while pos > 0 {
+            let previous = buffer.prev_grapheme_boundary(pos);
+            if !self.grapheme_is_word(previous, pos) {
+                break;
+            }
+            pos = previous;
+        }
+        pos
+    }
+
+    fn forward_word(&mut self) {
+        let pos = self.forward_word_position(self.active_pane().point);
 
         let pane = self.active_pane_mut();
         pane.point = pos;
@@ -475,16 +517,7 @@ impl Editor {
     }
 
     fn backward_word(&mut self) {
-        let buf = self.active_buffer();
-        let mut pos = self.active_pane().point;
-        let mut chars = buf.text.chars_at(pos).reversed().peekable();
-
-        while chars.next_if(|ch| !is_word_char(*ch)).is_some() {
-            pos -= 1;
-        }
-        while chars.next_if(|ch| is_word_char(*ch)).is_some() {
-            pos -= 1;
-        }
+        let pos = self.backward_word_position(self.active_pane().point);
 
         let pane = self.active_pane_mut();
         pane.point = pos;
@@ -492,20 +525,12 @@ impl Editor {
     }
 
     fn delete_word_backward(&mut self) {
-        let buf = self.active_buffer();
         let start = self.active_pane().point;
         if start == 0 {
             return;
         }
 
-        let mut pos = start;
-        let mut chars = buf.text.chars_at(pos).reversed().peekable();
-        while chars.next_if(|ch| !is_word_char(*ch)).is_some() {
-            pos -= 1;
-        }
-        while chars.next_if(|ch| is_word_char(*ch)).is_some() {
-            pos -= 1;
-        }
+        let pos = self.backward_word_position(start);
 
         // Delete from pos to start
         self.apply_edit(pos, start, "", EditRecord::Delete);

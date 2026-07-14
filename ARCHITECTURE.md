@@ -183,6 +183,10 @@ never rests mid-cluster, where a Backspace would orphan a combining mark and
 typing would split the cluster. Only the landing point is snapped; the
 remembered goal column (`preferred_column`) keeps the unsnapped value, so moving
 through a cluster-bearing line and back restores the original column.
+Word movement and backward-word deletion likewise walk whole grapheme
+clusters. A cluster is word text when any scalar in it is alphanumeric or `_`,
+so a decomposed letter plus combining marks stays part of the surrounding word
+and every command leaves point on a cluster boundary.
 
 ### Buffer
 
