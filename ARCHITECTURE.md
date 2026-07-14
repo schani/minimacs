@@ -65,7 +65,11 @@ src/
   pane.rs           PaneTree/PaneNode/Pane -- window layout tree
   keymap.rs         Key/KeymapNode/KeymapState -- multi-key chord trie
   command.rs        Command enum -- flat enum of all editor actions
-  render.rs         render() -- walks pane tree, produces ratatui widgets
+  render.rs         Rendering facade
+  render/layout.rs  Screen, completions, and minibuffer layout
+  render/visual_line.rs
+                    Shared wrapped-line display geometry
+  render/widgets.rs render() orchestration and ratatui widgets
   minibuffer.rs     Minibuffer/Prompt -- prompt state, tab completion functions
   history.rs        History -- undo/redo with edit grouping
   indent.rs         Shared indentation constants (INDENT_WIDTH = 4)
