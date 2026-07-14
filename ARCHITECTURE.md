@@ -73,7 +73,11 @@ src/
   minibuffer.rs     Minibuffer/Prompt -- prompt state, tab completion functions
   history.rs        History -- undo/redo with edit grouping
   indent.rs         Shared indentation constants (INDENT_WIDTH = 4)
-  syntax.rs         SyntaxState -- tree-sitter highlighting
+  syntax.rs         Syntax highlighting facade and StyledSpan
+  syntax/languages.rs
+                    Language detection and tree-house configuration
+  syntax/state.rs   SyntaxState parser, cache, and background state
+  syntax/theme.rs   Highlight capture names and VSCode Light+ styles
   syntax_worker.rs  Single-thread parser executor and coalescing mailbox
   syntax_bench.rs   syntax-bench performance harness (see below)
   syntax_fuzz.rs    syntax-fuzz incremental-vs-fresh fuzz harness (see below)
