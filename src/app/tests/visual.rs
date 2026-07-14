@@ -697,8 +697,8 @@ fn cl_recenter_via_app() {
 #[test]
 fn lone_cr_is_content_and_renders_on_one_row() {
     // Old-Mac style content: \r is not a line break, so "x" and "y"
-    // share the first row (the raw \r passing through to the cell is a
-    // known limitation of the LF-only decision).
+    // share the first row. Control characters are rendered visibly rather
+    // than being passed through to the terminal.
     let text = "x\ry\r";
     let (mut app, mut events) = test_app_with_text(20, 6, text, vec![]);
     app.run_until_idle(&mut events).unwrap();
@@ -709,9 +709,27 @@ fn lone_cr_is_content_and_renders_on_one_row() {
         "x and y must share row 0, got {:?}",
         lines[0]
     );
+    assert_eq!(lines[0].matches('␍').count(), 2);
     assert!(
         !lines[1].contains('y'),
         "nothing must spill to row 1, got {:?}",
         lines[1]
     );
+}
+
+#[test]
+fn terminal_control_sequences_are_rendered_as_visible_text() {
+    let payload = "safe\u{1b}]52;c;clipboard\u{7}tail\u{85}";
+    let (mut app, mut events) = test_app_with_text(80, 6, payload, vec![]);
+    app.editor.buffers[0].name = "name\u{1b}]0;owned\u{7}.txt".to_string();
+
+    app.run_until_idle(&mut events).unwrap();
+
+    let screen = capture_screen(&app.terminal);
+    assert!(
+        !screen.chars().any(|ch| ch != '\n' && ch.is_control()),
+        "got {screen:?}"
+    );
+    assert!(screen.contains("safe␛]52;c;clipboard␇tail�"), "got {screen:?}");
+    assert!(screen.contains("name␛]0;owned␇.txt"), "got {screen:?}");
 }
