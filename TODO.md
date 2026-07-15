@@ -179,6 +179,10 @@ Plan, in order (tests first for each step):
 
 Larger items (incremental tree-sitter parsing, missing emacs features) are in FUTURE.md.
 
+- [x] Goto-line accepts `0`, closes the prompt, and silently does nothing.
+      (Done: zero follows the same explicit invalid-input path as non-numeric
+      text, preserving point and showing `Invalid line number`.)
+
 ## Critical — crashes, corruption, data loss
 
 - [x] Install a panic hook that restores the terminal (raw mode, alternate screen, mouse capture) before printing the panic message. Currently teardown only happens on `main()`'s normal return path (`main.rs:47-77`), so any panic leaves the shell garbled and the message swallowed by the alternate screen.

@@ -728,6 +728,10 @@ All confirmation prompts treat an unrecognized answer the same way: the input
 is cleared and the prompt re-asks (the prompt state stays alive); only a
 recognized answer finishes the prompt.
 
+`GotoLine` accepts one-based positive line numbers. Non-numeric input and zero
+both leave point unchanged and report `Invalid line number`; values past the
+end continue to clamp to the last line through `Buffer::line_col_to_char`.
+
 The path prompts (find-file, write-file) share a "non-empty normalized path"
 validation on submit: input that is blank or normalizes to the empty path
 (`.`, `a/..`) re-asks instead of acting — the requirement is flagged in the

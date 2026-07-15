@@ -186,15 +186,15 @@ impl Editor {
             }
             PromptKind::GotoLine => {
                 self.minibuffer.finish();
-                if let Ok(line_num) = input.parse::<usize>() {
-                    if line_num > 0 {
+                match input.parse::<usize>() {
+                    Ok(line_num) if line_num > 0 => {
                         let target_line = line_num - 1;
                         let char_pos = self.current_buffer().line_col_to_char(target_line, 0);
                         self.pane_tree.focused_pane_mut().point = char_pos;
                     }
-                } else {
-                    self.minibuffer
-                        .show_message("Invalid line number".to_string());
+                    _ => self
+                        .minibuffer
+                        .show_message("Invalid line number".to_string()),
                 }
             }
             PromptKind::ISearch => {
