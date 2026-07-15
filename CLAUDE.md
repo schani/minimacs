@@ -3,3 +3,4 @@
 - Always start with tests, then write the actual code
 - Check the TODO.md file. If there are tasks in there, do them, then check them off.
 - Documentation, in particular ARCHITECTURE.md, must always be kept up-to-date!
+- After cloning, enable the versioned pre-commit checks once per checkout with `git config core.hooksPath .githooks`; Cargo builds never install or overwrite Git hooks.

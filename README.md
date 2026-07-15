@@ -217,13 +217,13 @@ output. Ignored manual performance tests are documented with their relevant
 benchmark commands above.
 
 An optional, versioned pre-commit hook runs the same build, test/coverage, and
-Clippy checks. Enable it explicitly for this checkout with:
+Clippy checks. After cloning, enable it once for each checkout with:
 
 ```sh
 git config core.hooksPath .githooks
 ```
 
-Cargo builds never install or overwrite Git hooks.
+This is an explicit opt-in: Cargo builds never install or overwrite Git hooks.
 
 CI (GitHub Actions, `.github/workflows/ci.yml`) runs on every pull request and
 on pushes to `main`. It mirrors the optional pre-commit hook — build, tests behind the
