@@ -187,6 +187,21 @@ fn goto_line_invalid_input() {
 }
 
 #[test]
+fn goto_line_zero_is_invalid() {
+    let mut editor = Editor::new_with_text("line1\nline2\nline3");
+    editor.pane_tree.focused_pane_mut().point = 6;
+    editor.execute(Command::GotoLine);
+    editor.set_minibuffer_text("0");
+    editor.submit_prompt();
+
+    assert_eq!(editor.point(), 6);
+    assert_eq!(
+        editor.minibuffer.message,
+        Some("Invalid line number".to_string())
+    );
+}
+
+#[test]
 fn switch_to_nonexistent_buffer() {
     let mut editor = Editor::new_with_text("hello");
     editor.execute(Command::SwitchBuffer);
