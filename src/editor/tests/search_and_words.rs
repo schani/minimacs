@@ -205,6 +205,23 @@ fn word_commands_cross_rope_chunks() {
     assert_eq!(editor.buffer_text(), punctuation);
 }
 
+#[test]
+fn word_commands_treat_decomposed_graphemes_as_atomic_word_text() {
+    let source = "!e\u{301}x";
+    let mut editor = Editor::new_with_text(source);
+
+    editor.execute(Command::ForwardWord);
+    assert_eq!(editor.point(), source.chars().count());
+
+    editor.execute(Command::BackwardWord);
+    assert_eq!(editor.point(), 1);
+
+    editor.pane_tree.focused_pane_mut().point = source.chars().count();
+    editor.execute(Command::DeleteWordBackward);
+    assert_eq!(editor.buffer_text(), "!");
+    assert_eq!(editor.point(), 1);
+}
+
 // === Delete word backward tests ===
 
 #[test]
