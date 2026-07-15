@@ -2,7 +2,7 @@ use ratatui::layout::Rect;
 
 use crate::editor::Editor;
 
-use super::visual_line::char_width;
+use super::visual_line::{char_width, terminal_safe_text};
 
 pub fn completions_layout(
     num_candidates: usize,
@@ -41,7 +41,11 @@ pub fn completions_height(editor: &Editor, total_height: u16, total_width: u16) 
         Some(candidates) if !candidates.is_empty() => {
             use unicode_width::UnicodeWidthStr;
             let max_rows = ((total_height.saturating_sub(2)) / 3).max(1) as usize;
-            let max_len = candidates.iter().map(|c| c.width()).max().unwrap_or(0);
+            let max_len = candidates
+                .iter()
+                .map(|candidate| terminal_safe_text(candidate).width())
+                .max()
+                .unwrap_or(0);
             let (_num_cols, num_rows, _col_width) =
                 completions_layout(candidates.len(), max_len, total_width as usize);
             num_rows.min(max_rows) as u16
@@ -68,25 +72,21 @@ pub(crate) struct ScreenLayout {
 fn minibuffer_content(editor: &Editor) -> (String, Option<usize>) {
     let Some(prompt) = editor.minibuffer.prompt() else {
         return (
-            editor
-                .minibuffer
-                .message
-                .as_deref()
-                .unwrap_or("")
-                .to_string(),
+            terminal_safe_text(editor.minibuffer.message.as_deref().unwrap_or("")),
             None,
         );
     };
 
-    let input = editor.minibuffer_buffer.text.to_string();
+    let input = terminal_safe_text(&editor.minibuffer_buffer.text.to_string());
+    let label = terminal_safe_text(&prompt.label);
     let point_byte = input
         .char_indices()
         .nth(editor.minibuffer_pane.point)
         .map_or(input.len(), |(byte, _)| byte);
-    let mut text = String::with_capacity(prompt.label.len() + input.len());
-    text.push_str(&prompt.label);
+    let mut text = String::with_capacity(label.len() + input.len());
+    text.push_str(&label);
     text.push_str(&input);
-    (text, Some(prompt.label.len() + point_byte))
+    (text, Some(label.len() + point_byte))
 }
 
 /// Hard-wrap minibuffer content into terminal rows and locate the prompt

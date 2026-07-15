@@ -13,7 +13,27 @@ pub(super) struct VisualCell {
 /// Tabs are handled separately via `tab_width_at`.
 pub(crate) fn char_width(ch: char) -> usize {
     use unicode_width::UnicodeWidthChar;
-    ch.width().unwrap_or(0)
+    terminal_safe_char(ch).width().unwrap_or(0)
+}
+
+/// Convert a character into text that is safe to hand to a terminal backend.
+/// C0 controls are shown with their Unicode control-picture glyph, DEL uses
+/// its control picture, and C1 controls use the replacement character. Tabs
+/// and newlines retain their structural meaning and are handled by layout.
+pub(crate) fn terminal_safe_char(ch: char) -> char {
+    match ch {
+        '\t' | '\n' => ch,
+        '\u{0}'..='\u{1f}' => {
+            char::from_u32(0x2400 + ch as u32).expect("C0 control pictures are valid Unicode")
+        }
+        '\u{7f}' => '\u{2421}',
+        '\u{80}'..='\u{9f}' => '\u{fffd}',
+        _ => ch,
+    }
+}
+
+pub(crate) fn terminal_safe_text(text: &str) -> String {
+    text.chars().map(terminal_safe_char).collect()
 }
 
 pub(super) fn line_chars_without_ending(buf: &Buffer, line_idx: usize) -> Vec<char> {
@@ -424,7 +444,7 @@ pub(super) fn visit_streamed_visual_rows(
                 }
                 2 => {
                     cells.push(VisualCell {
-                        text: ch.to_string(),
+                        text: terminal_safe_char(ch).to_string(),
                         buffer_char_pos,
                         buffer_byte_start,
                         buffer_byte_end,
@@ -439,7 +459,7 @@ pub(super) fn visit_streamed_visual_rows(
                 }
                 _ => {
                     cells.push(VisualCell {
-                        text: ch.to_string(),
+                        text: terminal_safe_char(ch).to_string(),
                         buffer_char_pos,
                         buffer_byte_start,
                         buffer_byte_end,

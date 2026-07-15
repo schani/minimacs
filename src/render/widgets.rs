@@ -382,6 +382,8 @@ fn syntax_style_at_byte(spans: &[crate::syntax::StyledSpan], byte: usize) -> Sty
 /// columns, not bytes — buffer names can contain multibyte and wide chars.
 fn mode_line_text(left: &str, right: &str, total_width: usize) -> String {
     use unicode_width::UnicodeWidthStr;
+    let left = terminal_safe_text(left);
+    let right = terminal_safe_text(right);
     let padding = total_width.saturating_sub(left.width() + right.width());
     format!("{left}{}{right}", " ".repeat(padding))
 }
@@ -462,6 +464,10 @@ fn render_completions(frame: &mut Frame, candidates: &[String], page: usize, are
     // All measurements below are in display columns (unicode-width), never
     // bytes or chars: candidate names can contain multibyte and wide chars.
     use unicode_width::UnicodeWidthStr;
+    let candidates: Vec<String> = candidates
+        .iter()
+        .map(|candidate| terminal_safe_text(candidate))
+        .collect();
     let max_len = candidates.iter().map(|c| c.width()).max().unwrap_or(0);
     let (num_cols, _num_rows, col_width) = completions_layout(candidates.len(), max_len, width);
 
@@ -696,6 +702,15 @@ mod tests {
         let editor = prompt_editor("x", "e\u{301}", 2);
         let layout = minibuffer_layout(&editor, 10, 2);
         assert_eq!(layout.cursor, Some((0, 2)));
+    }
+
+    #[test]
+    fn minibuffer_layout_escapes_terminal_controls_in_labels_and_input() {
+        let editor = prompt_editor("x\u{1b}]0;title\u{7}: ", "a\u{85}b", 3);
+        let layout = minibuffer_layout(&editor, 80, 2);
+
+        assert_eq!(layout.visible_rows, ["x␛]0;title␇: a�b"]);
+        assert!(!layout.visible_rows[0].chars().any(char::is_control));
     }
 
     #[test]

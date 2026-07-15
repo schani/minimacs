@@ -63,9 +63,9 @@ self-healing), same picture as before the migration.
       section), the grapheme-cluster CRLF-atomicity mention, and the
       paste-normalization paragraph to describe the LF-only invariant;
       check README/FUTURE for stale mentions. Decide/verify how
-      now-inline control chars (`\r`, FF, VT) render — passing them raw
-      to the terminal is acceptable per the decision, but note it as a
-      known limitation.
+      now-inline control chars (`\r`, FF, VT) render. (Superseded: controls
+      are now escaped to visible control-picture/replacement glyphs at the
+      rendering boundary so file content cannot inject terminal sequences.)
 
 # Long single-line rendering (2026-07-12)
 

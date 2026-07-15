@@ -19,7 +19,10 @@ jumps; an eight-entry, edit-generation-keyed per-buffer cache remembers that
 line classification across the several geometry queries in one interaction.
 Unicode, tabs, and control characters use a memory-bounded streaming fallback
 whose time is linear in the prefix being skipped. ratatui diffs the terminal
-output.
+output. C0/DEL control characters are rendered as visible Unicode control
+pictures and C1 controls as the replacement character; untrusted buffer text,
+file names, prompts, messages, and completion candidates never reach the
+terminal backend as raw escape sequences.
 
 ```
 Terminal input (crossterm)
@@ -203,8 +206,8 @@ and movement sees only `\n`. Ropey is pinned to
 `default-features = false` (dropping its `unicode_lines` feature, as Helix
 does): lone CR, VT, FF, NEL, LS, and PS are ordinary content — `C-e` moves
 past them, `C-k` kills through them, and they render as width-bearing chars
-(a raw control char reaching the terminal cell is a known, accepted
-limitation). This also makes ropey line rows exactly equal tree-sitter
+(using visible control-picture or replacement glyphs rather than emitting raw
+terminal controls). This also makes ropey line rows exactly equal tree-sitter
 Point rows for arbitrary content (see the syntax section). Accepted
 tradeoffs: mixed-ending files are normalized to one uniform ending on
 save, and mac-classic lone-CR files are not split into lines.
