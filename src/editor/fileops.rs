@@ -1,4 +1,5 @@
-use std::path::{Path, PathBuf};
+use std::ffi::OsString;
+use std::path::{Component, Path, PathBuf};
 
 use anyhow::bail;
 
@@ -21,6 +22,60 @@ pub(super) enum WriteTarget {
     Path(PathBuf),
 }
 
+fn lexical_normalize(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if matches!(normalized.components().next_back(), Some(Component::Normal(_))) {
+                    normalized.pop();
+                } else if !normalized.has_root() {
+                    normalized.push(component.as_os_str());
+                }
+            }
+            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => {
+                normalized.push(component.as_os_str());
+            }
+        }
+    }
+    normalized
+}
+
+/// Canonicalize file identity even when the final path does not exist: first
+/// remove lexical `.`/`..` aliases, then canonicalize the longest existing
+/// ancestor so symlinked directories still resolve to one spelling.
+fn normalized_file_identity(path: &Path, cwd: &Path) -> PathBuf {
+    let anchored = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        cwd.join(path)
+    };
+    let normalized = lexical_normalize(&anchored);
+    if let Ok(canonical) = std::fs::canonicalize(&normalized) {
+        return canonical;
+    }
+
+    let mut ancestor = normalized.as_path();
+    let mut missing: Vec<OsString> = Vec::new();
+    loop {
+        if let Ok(mut canonical) = std::fs::canonicalize(ancestor) {
+            for component in missing.iter().rev() {
+                canonical.push(component);
+            }
+            return canonical;
+        }
+        let Some(name) = ancestor.file_name() else {
+            return normalized;
+        };
+        missing.push(name.to_os_string());
+        let Some(parent) = ancestor.parent() else {
+            return normalized;
+        };
+        ancestor = parent;
+    }
+}
+
 impl Editor {
     pub fn open_file(&mut self, path: &Path) -> anyhow::Result<()> {
         // Prompt submission already validates, but paths also arrive from
@@ -29,12 +84,12 @@ impl Editor {
         if path.as_os_str().is_empty() {
             bail!("empty file path");
         }
-        let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        let canonical = normalized_file_identity(path, &self.cwd);
 
         // Check if file is already open
         let existing_buffer_id = self.buffers.iter().find_map(|buf| {
             let bp = buf.path.as_ref()?;
-            let buf_canonical = std::fs::canonicalize(bp).unwrap_or_else(|_| bp.clone());
+            let buf_canonical = normalized_file_identity(bp, &self.cwd);
             (buf_canonical == canonical).then_some(buf.id)
         });
         if let Some(buffer_id) = existing_buffer_id {

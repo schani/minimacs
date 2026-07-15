@@ -236,6 +236,11 @@ ARCHITECTURE.md current.
 
 - [x] External-modification guard on every save flow: quitting with `C-x C-c` and answering "y" (`prompts.rs:192`), and `C-x C-w` to the buffer's own path (`prompts.rs:113,249`), call `Buffer::save`/`save_as` without checking `externally_modified()`, silently clobbering changes another program wrote to disk. Only `C-x C-s` checks. Route all flows through the unified safe-save path's guard, prompting "changed on disk; save anyway?" like `C-x C-s` does. (Done: all own-path save flows now call `Editor::external_modification_guard`; `SaveAnywayConfirm` gained a `resume_quit` flag so the quit flow chains through the guard — "y" saves and resumes the quit, "n" cancels it like a failed quit-time save.)
 - [x] `normalize_path_string` silently drops leading `..` on relative paths (`minibuffer.rs:83-87`): `ParentDir` pops only when a prior component exists, so `../notes.txt` becomes `notes.txt` and find-file/write-file open or save the wrong file. Preserve leading `..` components for rootless paths (and resolve them against the effective base directory where the result is used). (Done: leading `..` is preserved on rootless paths (rooted paths still clamp at `/`); find-file/write-file submission resolves relative input against `Editor::cwd` via `path_from_input`, and tab completion looks relative input up against the same base while keeping the minibuffer text relative.)
+- [x] `open_file` falls back to the raw input spelling when a file does not
+      exist, so `dir/../future.txt` and `future.txt` create distinct buffers
+      that later save over the same file. (Done: file identities are anchored,
+      lexically normalized, and resolved through the longest existing ancestor
+      before duplicate-buffer detection.)
 
 ## Correctness
 
