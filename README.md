@@ -46,7 +46,8 @@ cargo install --git https://github.com/schani/minimacs --no-default-features
 
 ## Building
 
-Requires Rust 1.70+ and a C compiler (for tree-sitter grammars).
+Requires Rust 1.88+ and a C compiler (for tree-sitter grammars). CI checks the
+locked dependency graph with Rust 1.88 as well as the current stable toolchain.
 
 ```sh
 cargo build --release

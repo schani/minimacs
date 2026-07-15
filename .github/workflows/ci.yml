@@ -9,6 +9,16 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  msrv:
+    name: Rust 1.88 minimum
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: Swatinem/rust-cache@v2
+      - name: Check every target and feature
+        run: cargo check --locked --all-targets --all-features
+
   # Mirrors the optional, versioned pre-commit hook: build, tests behind the
   # 90% line-coverage threshold, and clippy with warnings denied.
   test:
