@@ -185,6 +185,11 @@ Larger items (incremental tree-sitter parsing, missing emacs features) are in FU
       (Done: zero follows the same explicit invalid-input path as non-numeric
       text, preserving point and showing `Invalid line number`.)
 
+- [x] README claims Rust 1.70 support even though source APIs and locked
+      dependencies require newer compilers. (Done: declare Rust 1.88 in the
+      manifest, document it, verify the locked graph locally on 1.88, and run
+      an exact-version all-target/all-feature check in CI.)
+
 ## Critical — crashes, corruption, data loss
 
 - [x] Install a panic hook that restores the terminal (raw mode, alternate screen, mouse capture) before printing the panic message. Currently teardown only happens on `main()`'s normal return path (`main.rs:47-77`), so any panic leaves the shell garbled and the message swallowed by the alternate screen.

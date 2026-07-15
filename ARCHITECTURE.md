@@ -929,6 +929,12 @@ by tracking the cumulative character delta per line.
 
 ## Testing
 
+The package declares Rust 1.88 as its minimum supported Rust version. CI runs
+`cargo check --locked --all-targets --all-features` on exactly 1.88 in addition
+to the stable-toolchain test, coverage, Clippy, fuzz-smoke, and benchmark-smoke
+jobs, preventing the manifest and installation documentation from drifting
+below the compiler required by source or locked dependencies.
+
 The editor is generic over `ratatui::Backend`. Production uses
 `CrosstermBackend<Stdout>`, tests use ratatui's `TestBackend`. Input is
 abstracted via the `EventSource` trait:
