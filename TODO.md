@@ -170,7 +170,9 @@ Plan, in order (tests first for each step):
 - [x] Support mouse clicks, which should place the cursor at the point clicked at. It probably shouldn't do that when the minibuffer is active.
 - [x] Ctrl-/ to undo doesn't work
 - [x] Alt-Backspace doesn't delete word backwards
-- [x] Add a pre-commit hook that runs the build and unit tests, and doesn't allow committing if they fail
+- [x] Add an optional, versioned pre-commit hook that runs the build and unit
+      tests, and doesn't allow committing if they fail. It is enabled explicitly
+      with `git config core.hooksPath .githooks`; Cargo builds never modify hooks.
 - [x] Enforce unit test coverage threshold
 - [x] Invoking the editor with a filename that doesn't exist should still open a buffer for that file, and saving it should save to that file
 - [x] When a file is unchanged, doing something, and then undoing that, should put it back into the unchanged state
@@ -220,7 +222,11 @@ Larger items (incremental tree-sitter parsing, missing emacs features) are in FU
 - [x] Deletions split CRLF pairs: `kill_line` at EOL, `delete_forward`, and `delete_backward` remove a single char, turning `\r\n` into `\n` and mixing line endings; `forward_char` can place point between `\r` and `\n`.
 - [x] `common_prefix` (`minibuffer.rs:205-225`) is only correct for sorted input; `complete_buffer_with_candidates` passes matches in creation order, so TAB can rewrite the minibuffer to a "prefix" that excludes a valid match.
 - [x] Undo does not restore mark and only sets point on the active pane (`editor.rs:1198-1200`). (Resolved by the apply_edit refactor: undo replay adjusts point/mark in every pane with marker semantics, keeping them valid; exact mark restoration is not emacs behavior and is not attempted.)
-- [x] The pre-commit coverage check silently degrades to plain `cargo test` when `cargo-llvm-cov` is not installed, and `build.rs` never updates a stale hook (`build.rs:7,17-21`). The hook also tests the working tree, not the staged index. (Fixed: the hook now warns loudly when the coverage tool is missing, and build.rs rewrites the hook whenever its content differs. Testing the staged index instead of the working tree is intentionally not done — it would require a full rebuild per commit.)
+- [x] The pre-commit coverage check silently degrades to plain `cargo test` when
+      `cargo-llvm-cov` is not installed. (Fixed: the optional versioned hook now
+      warns loudly when the coverage tool is missing. Builds do not install or
+      overwrite hooks. Testing the staged index instead of the working tree is
+      intentionally not done — it would require a full rebuild per commit.)
 - [x] Update ARCHITECTURE.md: it references a nonexistent `handle_minibuffer_key()` (line 209), describes outdated colors for region/match highlighting and mode lines (lines 243-251), and the claim "unconditional rendering is cheap" (line 9) is contradicted by the per-frame O(buffer) paths above.
 
 # From code review (2026-07-06)

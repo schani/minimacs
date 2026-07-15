@@ -965,3 +965,9 @@ queue is drained, which is how `run_until_idle` terminates in tests.
    directory from the source file's directory, and the snapshot names from
    the module path `app::tests` — so these tests must stay directly in that
    module).
+
+4. **Repository policy tests** (under `tests/`): protect source-tree invariants
+   that Cargo itself cannot express. In particular, a normal Cargo build has no
+   build script and therefore cannot install or overwrite Git hooks. The
+   versioned `.githooks/pre-commit` check suite is strictly opt-in via the
+   checkout-local `core.hooksPath` configuration.
