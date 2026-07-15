@@ -315,7 +315,7 @@ impl Buffer {
                 .metadata()
                 .and_then(|metadata| metadata.modified())
                 .ok();
-            tmp.persist(&physical)?;
+            persist_and_sync_parent(tmp, &physical, sync_parent_directory)?;
             DiskState::Present {
                 modified,
                 fingerprint,
@@ -697,6 +697,38 @@ fn has_other_hard_links(path: &Path) -> bool {
 #[cfg(not(unix))]
 fn has_other_hard_links(_path: &Path) -> bool {
     false
+}
+
+fn persist_and_sync_parent<F>(
+    tmp: tempfile::NamedTempFile,
+    target: &Path,
+    sync_parent: F,
+) -> Result<()>
+where
+    F: FnOnce(&Path) -> io::Result<()>,
+{
+    let parent = match target.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
+        _ => PathBuf::from("."),
+    };
+    tmp.persist(target)?;
+    sync_parent(&parent)?;
+    Ok(())
+}
+
+/// Persisting the temporary file makes the replacement atomic, but POSIX does
+/// not promise that the directory entry survives a crash until the containing
+/// directory is synced too.
+#[cfg(unix)]
+fn sync_parent_directory(parent: &Path) -> io::Result<()> {
+    fs::File::open(parent)?.sync_all()
+}
+
+// Rust's portable filesystem API cannot open directory handles on every
+// non-Unix target. The file itself is still synced before the atomic rename.
+#[cfg(not(unix))]
+fn sync_parent_directory(_parent: &Path) -> io::Result<()> {
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1296,6 +1328,25 @@ mod tests {
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
             .collect();
         assert_eq!(entries, vec!["test.txt"], "no temp files may remain");
+    }
+
+    #[test]
+    fn atomic_persist_syncs_parent_after_rename() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("test.txt");
+        let mut tmp = tempfile::NamedTempFile::new_in(dir.path()).unwrap();
+        tmp.write_all(b"durable").unwrap();
+        let mut synced = false;
+
+        persist_and_sync_parent(tmp, &target, |parent| {
+            assert_eq!(parent, dir.path());
+            assert_eq!(fs::read(&target).unwrap(), b"durable");
+            synced = true;
+            Ok(())
+        })
+        .unwrap();
+
+        assert!(synced, "the parent directory must be synced after rename");
     }
 
     #[cfg(unix)]
