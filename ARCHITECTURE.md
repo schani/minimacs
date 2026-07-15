@@ -898,7 +898,8 @@ buffer (emacs `isearch-yank` semantics): `Editor::isearch_yank` normalizes the
 pasted text with `normalized_paste` (the query is a single line, so every line
 break becomes a space, like any minibuffer paste), appends it to the query,
 syncs the minibuffer display, and re-runs `isearch_update`. Backspace after a
-paste pops one query char at a time, same as after typed input.
+paste removes one extended grapheme cluster at a time, same as after typed
+input, so decomposed characters and emoji sequences are not split.
 
 The current match is highlighted with an olive background; other matches in
 light orange.

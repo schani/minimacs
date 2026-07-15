@@ -173,16 +173,9 @@ where
             (KeyModifiers::NONE, KeyCode::Enter) => {
                 self.editor.isearch_accept();
             }
-            // Backspace: delete char from query
+            // Backspace: delete one grapheme cluster from query
             (KeyModifiers::NONE, KeyCode::Backspace) => {
-                if let Some(ref mut isearch) = self.editor.isearch {
-                    isearch.query.pop();
-                    // Sync minibuffer buffer to query
-                    let query = isearch.query.clone();
-                    self.editor.minibuffer_buffer.text = ropey::Rope::from_str(&query);
-                    self.editor.minibuffer_pane.point = query.chars().count();
-                }
-                self.editor.isearch_update();
+                self.editor.isearch_backspace();
             }
             // Printable char: add to query and search
             (KeyModifiers::NONE | KeyModifiers::SHIFT, KeyCode::Char(c)) => {

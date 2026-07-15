@@ -190,3 +190,19 @@ fn backspace_after_isearch_paste_keeps_query_and_display_in_sync() {
         "point at the match for the refined query"
     );
 }
+
+#[test]
+fn isearch_backspace_removes_one_grapheme_cluster() {
+    let events = vec![
+        ctrl('s'),
+        Event::Paste("e\u{301}".to_string()),
+        key(KeyCode::Backspace),
+    ];
+    let (mut app, mut events) = test_app_with_text(40, 10, "e\u{301}x", events);
+    app.run_until_idle(&mut events).unwrap();
+
+    let isearch = app.editor.isearch.as_ref().expect("isearch still active");
+    assert_eq!(isearch.query, "");
+    assert_eq!(app.editor.minibuffer_text(), "");
+    assert_eq!(app.editor.point(), 0);
+}
