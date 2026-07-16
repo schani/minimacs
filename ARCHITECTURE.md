@@ -642,9 +642,13 @@ the changed bytes. These windows are marked provisional, displayed immediately,
 and refreshed by the versioned worker result. When no exact window covers a
 request, the fallback picks the window with the largest overlap, breaking ties
 toward the newest — rebasing only shifts spans and never restyles new text, so
-older windows are never fresher. The inserted/replaced bytes remain
-unstyled until that exact result arrives. Padding keeps typical highlight
-queries small while making ordinary scrolling an exact cache hit.
+older windows are never fresher. Inserted/replaced bytes provisionally inherit
+the style of the character preceding the edit — a span covering or ending at
+the edit is extended over the new bytes — so typing inside or at the end of a
+token does not flash it unstyled; bytes inserted at the buffer start or after
+unstyled text stay unstyled until the exact result arrives. Padding keeps
+typical highlight queries small while making ordinary scrolling an exact cache
+hit.
 
 **Performance harness**: `cargo run --release --bin syntax-bench --` generates a
 deterministic Rust buffer and applies the same fixed-width visible edit under
