@@ -253,6 +253,20 @@ mod tests {
     use super::*;
     use crate::syntax::{Language, StyledSpan};
 
+    fn insertion_edit(start: u32, len: u32) -> InputEdit {
+        InputEdit {
+            start_byte: start,
+            old_end_byte: start,
+            new_end_byte: start + len,
+            start_point: Point { row: 0, col: start },
+            old_end_point: Point { row: 0, col: start },
+            new_end_point: Point {
+                row: 0,
+                col: start + len,
+            },
+        }
+    }
+
     fn job(key: usize, generation: usize, source: &str, requested: Range<usize>) -> SyntaxJob {
         SyntaxJob {
             key,
@@ -658,6 +672,201 @@ mod tests {
     }
 
     #[test]
+    fn inserting_inside_a_span_styles_the_inserted_bytes_like_their_surroundings() {
+        let syntax = SyntaxState::new(Language::Rust).unwrap();
+        let key = syntax.background_key();
+        let style = Style::default().fg(Color::Green);
+        assert!(syntax.accept_background_completion(
+            SyntaxCompletion {
+                key,
+                generation: 0,
+                requested: 0..100,
+                spans: vec![StyledSpan {
+                    start: 0,
+                    end: 10,
+                    style,
+                }],
+                disabled: false,
+            },
+            0,
+        ));
+
+        syntax.note_background_edit(1, insertion_edit(5, 3));
+        let cached = syntax.background_spans(0..20, 1);
+
+        assert!(!cached.exact);
+        assert_eq!(
+            cached
+                .spans
+                .iter()
+                .map(|span| (span.start, span.end, span.style))
+                .collect::<Vec<_>>(),
+            vec![(0, 8, style), (8, 13, style)]
+        );
+    }
+
+    #[test]
+    fn inserting_at_a_spans_end_inherits_the_preceding_style() {
+        let syntax = SyntaxState::new(Language::Rust).unwrap();
+        let key = syntax.background_key();
+        let keyword = Style::default().fg(Color::Blue);
+        let other = Style::default().fg(Color::Green);
+        assert!(syntax.accept_background_completion(
+            SyntaxCompletion {
+                key,
+                generation: 0,
+                requested: 0..100,
+                spans: vec![
+                    StyledSpan {
+                        start: 0,
+                        end: 3,
+                        style: keyword,
+                    },
+                    StyledSpan {
+                        start: 4,
+                        end: 8,
+                        style: other,
+                    },
+                ],
+                disabled: false,
+            },
+            0,
+        ));
+
+        // Typing at the end of a token: the token's style covers the new
+        // bytes until the worker's exact result arrives.
+        syntax.note_background_edit(1, insertion_edit(3, 3));
+        let cached = syntax.background_spans(0..20, 1);
+
+        assert_eq!(
+            cached
+                .spans
+                .iter()
+                .map(|span| (span.start, span.end, span.style))
+                .collect::<Vec<_>>(),
+            vec![(0, 6, keyword), (7, 11, other)]
+        );
+    }
+
+    #[test]
+    fn inserting_between_adjacent_spans_inherits_from_the_preceding_span() {
+        let syntax = SyntaxState::new(Language::Rust).unwrap();
+        let key = syntax.background_key();
+        let before = Style::default().fg(Color::Red);
+        let after = Style::default().fg(Color::Blue);
+        assert!(syntax.accept_background_completion(
+            SyntaxCompletion {
+                key,
+                generation: 0,
+                requested: 0..100,
+                spans: vec![
+                    StyledSpan {
+                        start: 0,
+                        end: 3,
+                        style: before,
+                    },
+                    StyledSpan {
+                        start: 3,
+                        end: 6,
+                        style: after,
+                    },
+                ],
+                disabled: false,
+            },
+            0,
+        ));
+
+        syntax.note_background_edit(1, insertion_edit(3, 2));
+        let cached = syntax.background_spans(0..20, 1);
+
+        assert_eq!(
+            cached
+                .spans
+                .iter()
+                .map(|span| (span.start, span.end, span.style))
+                .collect::<Vec<_>>(),
+            vec![(0, 5, before), (5, 8, after)]
+        );
+    }
+
+    #[test]
+    fn inserting_at_the_buffer_start_leaves_the_inserted_bytes_unstyled() {
+        let syntax = SyntaxState::new(Language::Rust).unwrap();
+        let key = syntax.background_key();
+        let style = Style::default().fg(Color::Blue);
+        assert!(syntax.accept_background_completion(
+            SyntaxCompletion {
+                key,
+                generation: 0,
+                requested: 0..100,
+                spans: vec![StyledSpan {
+                    start: 0,
+                    end: 5,
+                    style,
+                }],
+                disabled: false,
+            },
+            0,
+        ));
+
+        syntax.note_background_edit(1, insertion_edit(0, 2));
+        let cached = syntax.background_spans(0..20, 1);
+
+        assert_eq!(
+            cached
+                .spans
+                .iter()
+                .map(|span| (span.start, span.end, span.style))
+                .collect::<Vec<_>>(),
+            vec![(2, 7, style)]
+        );
+    }
+
+    #[test]
+    fn replacing_inside_a_span_styles_the_replacement_like_its_surroundings() {
+        let syntax = SyntaxState::new(Language::Rust).unwrap();
+        let key = syntax.background_key();
+        let style = Style::default().fg(Color::Green);
+        assert!(syntax.accept_background_completion(
+            SyntaxCompletion {
+                key,
+                generation: 0,
+                requested: 0..100,
+                spans: vec![StyledSpan {
+                    start: 0,
+                    end: 10,
+                    style,
+                }],
+                disabled: false,
+            },
+            0,
+        ));
+
+        // Replace bytes [4, 6) with three new bytes.
+        syntax.note_background_edit(
+            1,
+            InputEdit {
+                start_byte: 4,
+                old_end_byte: 6,
+                new_end_byte: 7,
+                start_point: Point { row: 0, col: 4 },
+                old_end_point: Point { row: 0, col: 6 },
+                new_end_point: Point { row: 0, col: 7 },
+            },
+        );
+        let cached = syntax.background_spans(0..20, 1);
+
+        assert_eq!(
+            cached
+                .spans
+                .iter()
+                .map(|span| (span.start, span.end, span.style))
+                .collect::<Vec<_>>(),
+            vec![(0, 7, style), (7, 11, style)]
+        );
+    }
+
+    #[test]
     fn editing_inside_a_long_capture_preserves_both_unaffected_sides() {
         let syntax = SyntaxState::new(Language::Rust).unwrap();
         let key = syntax.background_key();
@@ -696,7 +905,7 @@ mod tests {
                 .iter()
                 .map(|span| (span.start, span.end, span.style))
                 .collect::<Vec<_>>(),
-            vec![(0, 50, style), (51, 101, style)]
+            vec![(0, 51, style), (51, 101, style)]
         );
     }
 

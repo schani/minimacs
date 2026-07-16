@@ -482,9 +482,13 @@ fn rebase_background_cache(
         };
         if overlaps_edit {
             if span.start < start {
+                // The surviving piece before the edit also covers the
+                // inserted bytes: new text provisionally inherits the
+                // preceding character's style until the worker's exact
+                // result replaces this window.
                 cache.spans.push(StyledSpan {
                     start: span.start,
-                    end: start,
+                    end: new_end,
                     style: span.style,
                 });
             }
@@ -500,6 +504,10 @@ fn rebase_background_cache(
         if span.start >= old_end {
             span.start = shift_after_edit(span.start, old_end, new_end);
             span.end = shift_after_edit(span.end, old_end, new_end);
+        } else if new_end > start && span.end == start && span.start < start {
+            // A span ending exactly at the edit precedes the inserted
+            // bytes; extend it over them for the same provisional styling.
+            span.end = new_end;
         }
         cache.spans.push(span);
     }
