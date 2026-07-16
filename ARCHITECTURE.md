@@ -634,10 +634,15 @@ entry for every character in a long line.
 **Caching**: the worker's highlight cache stores `edit_generation`, the padded
 absolute byte range, and its spans. The UI retains up to eight completed
 viewport windows per generation so disjoint panes viewing one buffer do not
-evict each other. On replacement, cached byte ranges and unaffected spans are
+evict each other; accepting a completion evicts any window its range fully
+covers, so a window never coexists with a fresher result for the same bytes.
+On replacement, cached byte ranges and unaffected spans are
 rebased through the `InputEdit`; a capture intersecting the edit is split around
 the changed bytes. These windows are marked provisional, displayed immediately,
-and refreshed by the versioned worker result. The inserted/replaced bytes remain
+and refreshed by the versioned worker result. When no exact window covers a
+request, the fallback picks the window with the largest overlap, breaking ties
+toward the newest — rebasing only shifts spans and never restyles new text, so
+older windows are never fresher. The inserted/replaced bytes remain
 unstyled until that exact result arrives. Padding keeps typical highlight
 queries small while making ordinary scrolling an exact cache hit.
 

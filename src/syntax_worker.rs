@@ -456,6 +456,122 @@ mod tests {
     }
 
     #[test]
+    fn accepting_a_window_evicts_stale_windows_it_covers() {
+        let syntax = SyntaxState::new(Language::Rust).unwrap();
+        let key = syntax.background_key();
+        let style = Style::default().fg(Color::Blue);
+        // An older completion for the same window, from before the styled
+        // text existed.
+        assert!(syntax.accept_background_completion(
+            SyntaxCompletion {
+                key,
+                generation: 0,
+                requested: 0..100,
+                spans: Vec::new(),
+                disabled: false,
+            },
+            0,
+        ));
+        // The fresh completion for the same window carries the styling.
+        assert!(syntax.accept_background_completion(
+            SyntaxCompletion {
+                key,
+                generation: 0,
+                requested: 0..100,
+                spans: vec![StyledSpan {
+                    start: 10,
+                    end: 13,
+                    style,
+                }],
+                disabled: false,
+            },
+            0,
+        ));
+
+        // An edit elsewhere makes every window provisional; the fallback
+        // must not serve the stale unstyled window.
+        syntax.note_background_edit(
+            1,
+            InputEdit {
+                start_byte: 90,
+                old_end_byte: 90,
+                new_end_byte: 91,
+                start_point: Point { row: 0, col: 90 },
+                old_end_point: Point { row: 0, col: 90 },
+                new_end_point: Point { row: 0, col: 91 },
+            },
+        );
+        let cached = syntax.background_spans(0..50, 1);
+
+        assert!(!cached.exact);
+        assert_eq!(
+            cached
+                .spans
+                .iter()
+                .map(|span| (span.start, span.end, span.style))
+                .collect::<Vec<_>>(),
+            vec![(10, 13, style)]
+        );
+    }
+
+    #[test]
+    fn provisional_fallback_prefers_the_newest_window_on_overlap_ties() {
+        let syntax = SyntaxState::new(Language::Rust).unwrap();
+        let key = syntax.background_key();
+        let style = Style::default().fg(Color::Green);
+        // Two overlapping windows, neither containing the other, so both
+        // survive the accept.
+        assert!(syntax.accept_background_completion(
+            SyntaxCompletion {
+                key,
+                generation: 0,
+                requested: 0..100,
+                spans: Vec::new(),
+                disabled: false,
+            },
+            0,
+        ));
+        assert!(syntax.accept_background_completion(
+            SyntaxCompletion {
+                key,
+                generation: 0,
+                requested: 50..150,
+                spans: vec![StyledSpan {
+                    start: 60,
+                    end: 70,
+                    style,
+                }],
+                disabled: false,
+            },
+            0,
+        ));
+
+        syntax.note_background_edit(
+            1,
+            InputEdit {
+                start_byte: 160,
+                old_end_byte: 160,
+                new_end_byte: 161,
+                start_point: Point { row: 0, col: 160 },
+                old_end_point: Point { row: 0, col: 160 },
+                new_end_point: Point { row: 0, col: 161 },
+            },
+        );
+        // Both windows overlap the request equally; the newer one must win.
+        let cached = syntax.background_spans(50..100, 1);
+
+        assert!(!cached.exact);
+        assert_eq!(
+            cached
+                .spans
+                .iter()
+                .map(|span| (span.start, span.end, span.style))
+                .collect::<Vec<_>>(),
+            vec![(60, 70, style)]
+        );
+    }
+
+    #[test]
     fn scrolling_keeps_overlapping_cached_spans_while_requesting_the_remainder() {
         let syntax = SyntaxState::new(Language::Rust).unwrap();
         let key = syntax.background_key();

@@ -195,11 +195,12 @@ impl SyntaxState {
                 && cache.range.start <= requested.start
                 && cache.range.end >= requested.end
         });
+        // max_by_key returns the last of equally-overlapping windows, so a
+        // forward scan breaks ties toward the newest (freshest) window.
         let cache = exact.or_else(|| {
             background
                 .caches
                 .iter()
-                .rev()
                 .filter(|cache| cache.version == generation)
                 .max_by_key(|cache| overlap_len(&cache.range, &requested))
                 .filter(|cache| overlap_len(&cache.range, &requested) > 0)
@@ -250,9 +251,14 @@ impl SyntaxState {
         background
             .pending_edits
             .retain(|versioned| versioned.generation > completion.generation);
-        background
-            .caches
-            .retain(|cache| cache.version == completion.generation);
+        // Windows fully covered by the fresh result are superseded; keeping
+        // them around would let the provisional fallback serve their stale
+        // spans after the next edit. Disjoint windows (other panes) survive.
+        background.caches.retain(|cache| {
+            cache.version == completion.generation
+                && !(completion.requested.start <= cache.range.start
+                    && cache.range.end <= completion.requested.end)
+        });
         if background.caches.len() == BACKGROUND_CACHE_WINDOWS {
             background.caches.pop_front();
         }
