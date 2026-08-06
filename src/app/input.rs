@@ -217,20 +217,4 @@ where
             self.editor.minibuffer.completion_page = 0;
         }
     }
-
-    pub(super) fn handle_paste(&mut self, text: &str) {
-        self.editor.clear_last_command();
-        if self.editor.minibuffer.is_active() {
-            self.editor.minibuffer.completions = None;
-            self.editor.minibuffer.completion_page = 0;
-        }
-        let text = self.editor.normalized_paste(text);
-        // Insert pasted text as a single undo group
-        self.editor.active_buffer_mut().history.commit();
-        let point = self.editor.active_pane().point;
-        self.editor
-            .apply_edit(point, point, &text, EditRecord::Insert);
-        self.editor.active_pane_mut().point = point + text.chars().count();
-        self.editor.active_buffer_mut().history.commit();
-    }
 }

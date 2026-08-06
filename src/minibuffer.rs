@@ -342,6 +342,12 @@ impl Minibuffer {
         self.completion_page = 0;
     }
 
+    /// Dismiss the completion list and reset paging after input changes.
+    pub fn dismiss_completions(&mut self) {
+        self.completions = None;
+        self.completion_page = 0;
+    }
+
     pub fn show_message(&mut self, msg: String) {
         self.message = Some(msg);
     }

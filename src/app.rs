@@ -134,7 +134,7 @@ where
                 if self.editor.isearch.is_some() {
                     self.editor.isearch_yank(&text);
                 } else {
-                    self.handle_paste(&text);
+                    self.editor.paste_supplied_text(&text);
                 }
                 true
             }

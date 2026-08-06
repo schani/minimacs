@@ -891,11 +891,17 @@ modulo. A `[Page X/Y]` indicator appears in the bottom-right of the completions
 area when multiple pages exist. `completion_page` resets to 0 on typing, paste,
 `C-g`, Enter, or when the completion prefix changes.
 
-Pasted text is normalized (`Editor::normalized_paste`, used by both `C-y` and
-bracketed paste): in the minibuffer every line-break form (`\r\n`, `\r`, `\n`)
-becomes a space; in a buffer, every break form is unified to `\n` (the rope
-is LF-only regardless of the buffer's save-time `LineEnding`), so pasting
-CRLF text cannot smuggle in raw `\r` chars.
+Pasted text is an Editor-owned transaction. Bracketed-paste events route
+supplied text to `Editor::paste_supplied_text`; `C-y` obtains clipboard text
+and then converges on the same method. The transaction owns completion
+dismissal, normalization, one undo group, char-indexed point movement,
+preferred-column reset, and cursor reveal; App only cancels pending event
+state and routes the text. In the minibuffer every line-break form (`\r\n`,
+`\r`, `\n`) becomes a space; in a buffer, every break form is unified to `\n`
+(the rope is LF-only regardless of the buffer's save-time `LineEnding`), so
+pasting CRLF text cannot smuggle in raw `\r` chars. Empty bracketed paste keeps
+its prior semantics: it dismisses completions and forms an undo boundary but
+does not reset the preferred column; empty `C-y` only resets that column.
 
 ## Incremental Search
 

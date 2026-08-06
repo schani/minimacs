@@ -1189,14 +1189,37 @@ impl Editor {
         let text = self
             .get_os_clipboard()
             .unwrap_or_else(|| self.clipboard.clone());
+        if text.is_empty() {
+            // Preserve C-y's existing empty-paste behavior: it resets the
+            // goal column but does not create an edit or undo boundary.
+            self.active_pane_mut().preferred_column = None;
+            return;
+        }
+        self.paste_supplied_text(&text);
+    }
+
+    /// Insert text supplied by an input event as one editor-owned paste
+    /// transaction. Both bracketed paste and C-y converge here after C-y has
+    /// obtained clipboard text. Normalization, completion lifecycle, undo
+    /// grouping, point/goal-column updates, and cursor reveal stay together.
+    pub(crate) fn paste_supplied_text(&mut self, text: &str) {
+        self.clear_last_command();
+        if self.minibuffer.is_active() {
+            self.minibuffer.dismiss_completions();
+        }
+
+        // Preserve bracketed empty-paste semantics: it is an undo boundary
+        // and dismisses completions, but does not reset the goal column.
+        self.active_buffer_mut().history.commit();
+        let text = self.normalized_paste(text);
         if !text.is_empty() {
-            let text = self.normalized_paste(&text);
             let pos = self.active_pane().point;
             self.apply_edit(pos, pos, &text, EditRecord::Insert);
-            self.active_buffer_mut().history.commit();
             self.active_pane_mut().point = pos + text.chars().count();
+            self.active_pane_mut().preferred_column = None;
         }
-        self.active_pane_mut().preferred_column = None;
+        self.active_buffer_mut().history.commit();
+        self.ensure_cursor_visible();
     }
 
     fn set_os_clipboard(&mut self, text: &str) {
