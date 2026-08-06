@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 /// The state of the minibuffer.
 #[derive(Debug)]
 pub enum MinibufferState {
-    /// Idle — shows timed messages.
+    /// Idle — shows the current message until it is replaced or cleared.
     Idle,
     /// Active prompt waiting for user input.
     Prompt(Prompt),

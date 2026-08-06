@@ -1182,7 +1182,7 @@ impl Editor {
     fn delete_backward(&mut self) {
         let pos = self.active_pane().point();
         if pos > 0 {
-            // Delete a whole grapheme cluster (or CRLF pair) as a unit.
+            // Delete a whole grapheme cluster as a unit.
             let start = self.prev_grapheme_boundary(pos);
             self.apply_edit(start, pos, "", EditRecord::Delete);
             self.set_active_point_and_preferred(start, None);
@@ -1193,7 +1193,7 @@ impl Editor {
         let len = self.active_buffer().char_count();
         let pos = self.active_pane().point();
         if pos < len {
-            // Delete a whole grapheme cluster (or CRLF pair) as a unit.
+            // Delete a whole grapheme cluster as a unit.
             let end = self.next_grapheme_boundary(pos);
             self.apply_edit(pos, end, "", EditRecord::Delete);
             self.set_active_preferred_column(None);
@@ -1220,7 +1220,7 @@ impl Editor {
                 }
                 return false;
             }
-            // At EOL, kill the whole line break (one char, or two for CRLF).
+            // At EOL, kill the terminating LF.
             pos + crate::buffer::line_break_len_chars(buf.text().line(line))
         } else {
             buf.line_col_to_char(line, line_len)

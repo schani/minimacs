@@ -1,7 +1,7 @@
 use std::path::{Component, Path, PathBuf};
 
 use syn::visit::{self, Visit};
-use syn::{Attribute, Expr, ItemMod, Lit, Macro, Meta, Visibility};
+use syn::{Attribute, Expr, ItemEnum, ItemMod, Lit, Macro, Meta, Visibility};
 
 #[derive(Debug, Default, PartialEq, Eq)]
 struct BinarySourceViolations {
@@ -197,22 +197,48 @@ fn binary_sources(root: &Path) -> Vec<PathBuf> {
     paths
 }
 
-fn editor_sources(root: &Path) -> Vec<PathBuf> {
-    fn collect(directory: &Path, paths: &mut Vec<PathBuf>) {
-        for entry in std::fs::read_dir(directory).unwrap() {
-            let path = entry.unwrap().path();
-            if path.is_dir() {
-                collect(&path, paths);
-            } else if path.extension().and_then(|extension| extension.to_str()) == Some("rs") {
-                paths.push(path);
-            }
+fn collect_files_with_extension(directory: &Path, extension: &str, paths: &mut Vec<PathBuf>) {
+    for entry in std::fs::read_dir(directory).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            collect_files_with_extension(&path, extension, paths);
+        } else if path.extension().and_then(|value| value.to_str()) == Some(extension) {
+            paths.push(path);
         }
     }
+}
 
+fn editor_sources(root: &Path) -> Vec<PathBuf> {
     let mut paths = vec![root.join("src/editor.rs")];
-    collect(&root.join("src/editor"), &mut paths);
+    collect_files_with_extension(&root.join("src/editor"), "rs", &mut paths);
     paths.sort();
     paths
+}
+
+fn prompt_kind_variants(contents: &str) -> syn::Result<Vec<String>> {
+    let file = syn::parse_file(contents)?;
+    let variants = file
+        .items
+        .iter()
+        .find_map(|item| match item {
+            syn::Item::Enum(ItemEnum {
+                ident, variants, ..
+            }) if ident == "PromptKind" => Some(
+                variants
+                    .iter()
+                    .map(|variant| variant.ident.to_string())
+                    .collect(),
+            ),
+            _ => None,
+        })
+        .unwrap_or_default();
+    Ok(variants)
+}
+
+fn line_comments(contents: &str) -> impl Iterator<Item = &str> {
+    contents
+        .lines()
+        .filter_map(|line| line.split_once("//").map(|(_, comment)| comment.trim()))
 }
 
 fn active_command_line(contents: &str, command: &str, actions_run: bool) -> Option<usize> {
@@ -399,6 +425,72 @@ fn library_owns_shared_modules_and_binary_wrappers_do_not_reinclude_them() {
             path.display()
         );
     }
+}
+
+#[test]
+fn minibuffer_messages_are_not_documented_as_timed() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut sources = Vec::new();
+    collect_files_with_extension(&root.join("src"), "rs", &mut sources);
+    sources.extend(
+        std::fs::read_dir(root)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| path.extension().and_then(|value| value.to_str()) == Some("md")),
+    );
+
+    for path in sources {
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            !contents.to_ascii_lowercase().contains("timed message"),
+            "{} must not claim that minibuffer messages have a timer",
+            path.display()
+        );
+    }
+}
+
+#[test]
+fn architecture_covers_every_prompt_kind_variant() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let source = std::fs::read_to_string(root.join("src/minibuffer.rs")).unwrap();
+    let variants = prompt_kind_variants(&source).unwrap();
+    assert!(
+        !variants.is_empty(),
+        "src/minibuffer.rs must define PromptKind"
+    );
+
+    let architecture = std::fs::read_to_string(root.join("ARCHITECTURE.md")).unwrap();
+    let minibuffer_section = architecture
+        .split_once("## Minibuffer")
+        .and_then(|(_, rest)| rest.split_once("## Incremental Search"))
+        .map(|(section, _)| section)
+        .expect("ARCHITECTURE.md must retain the Minibuffer section");
+
+    let missing: Vec<_> = variants
+        .iter()
+        .filter(|variant| !minibuffer_section.contains(variant.as_str()))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "ARCHITECTURE.md's Minibuffer section must cover every PromptKind variant; missing {missing:?}"
+    );
+}
+
+#[test]
+fn editor_deletion_comments_do_not_describe_crlf_pair_special_cases() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let source = std::fs::read_to_string(root.join("src/editor.rs")).unwrap();
+    let stale: Vec<_> = line_comments(&source)
+        .filter(|comment| {
+            let comment = comment.to_ascii_lowercase();
+            comment.contains("crlf") && (comment.contains("delete") || comment.contains("two for"))
+        })
+        .collect();
+
+    assert!(
+        stale.is_empty(),
+        "src/editor.rs must not describe obsolete CRLF-pair deletion behavior; found {stale:?}"
+    );
 }
 
 #[test]

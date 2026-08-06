@@ -82,8 +82,8 @@ mode is important for representative timings.
 
 ### Syntax fuzz harness
 
-The `syntax-fuzz` CLI applies random edits through the editor's real edit
-path and, after every edit, compares the incremental tree's highlights
+The `syntax-fuzz` CLI applies random edits through `Buffer::replace` and,
+after every edit, compares the incremental tree's highlights
 against a fresh parse of the same text — whole-file and over a random
 viewport window. It exits 1 with a one-line reproduce command on divergence:
 

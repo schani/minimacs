@@ -73,7 +73,7 @@ src/
   command.rs        Command enum -- flat enum of all editor actions
   display.rs        Neutral wrapped-line display geometry shared by editor,
                     isearch, mouse mapping, and rendering
-  render.rs         Rendering facade
+  render.rs         Rendering facade and immutable PendingInput projection
   render/layout.rs  Screen, completions, and minibuffer layout
   render/widgets.rs render() orchestration and ratatui widgets
   minibuffer.rs     Minibuffer/Prompt -- prompt state, tab completion functions
@@ -93,36 +93,36 @@ src/
 
 ### Dependency Graph
 
+The binaries call three public entry functions in `lib.rs`; the library is the
+single owner of every production module below. Direct module dependencies are:
+
 ```
 binary wrappers ──> lib entry functions
-                         |
-                         +──> runtime ──> app ──> editor ──> buffer
-                         |                 |          |          |
-                         |                 |          |          +──> history
-                         |                 |          |          +──> syntax
-                         |                 |          |
-                         |                 |          +──> display ──> buffer + pane + indent
-                         |                 |          +──> pane
-                         |                 |          +──> minibuffer
-                         |                 |          +──> command
-                         |                 +──> render ──> editor (read-only)
-                         |                 |       +──> display
-                         |                 |       +──> syntax_worker ──> syntax
-                         |                 +──> display (mouse geometry)
-                         |                 +──> syntax_worker ──> syntax
-                         |                 +──> keymap
-                         |                 +──> event
-                         +──> syntax-bench ──> syntax_worker ──> syntax
-                         +──> syntax-fuzz ──> buffer + syntax
+runtime ──> app + editor + event
+app ──> editor + render + syntax_worker + event
+app/input ──> editor + keymap + command + minibuffer
+app/mouse ──> render (screen layout) + display + pane
+editor ──> buffer + pane + minibuffer + command + display + syntax + indent
+buffer ──> history + syntax
+pane ──> buffer
+display ──> buffer + pane + indent
+render ──> editor (read-only) + buffer + pane + minibuffer + display
+           + syntax + syntax_worker
+syntax_worker ──> syntax
+keymap ──> command
+syntax_bench ──> syntax + syntax_worker
+syntax_fuzz ──> buffer + syntax
 ```
 
-All rendering reads from `Editor` without mutating it. The `render()` function
-takes `&Editor`, the syntax worker handle, and a small immutable pending-input
-view from `App`, then produces a frame. Neutral
-wrapped-line geometry lives in `display.rs`: editor cursor reveal, isearch
-reveal, mouse mapping, and render widgets all depend on it directly. The editor
-never depends on `render`; ratatui screen layout and widget orchestration remain
-inside `render`.
+All rendering reads from `Editor` without mutating it. The exact facade call is
+`render::render(frame, &editor, &syntax_worker, PendingInput { display })`:
+`App` owns the worker and pending input, and passes immutable references/views
+to rendering. The renderer may submit work through the worker's internally
+synchronized mailbox; `App` later drains completions and asks `Editor` to
+accept them. Neutral wrapped-line geometry lives in `display.rs`: editor cursor
+reveal, isearch reveal, mouse mapping, and render widgets all depend on it
+directly. The editor never depends on `render`; ratatui screen layout and widget
+orchestration remain inside `render`.
 
 ## Key Data Structures
 
@@ -136,13 +136,23 @@ submission, or cursor reveal after viewport reflow). These entry points keep
 state transitions inside `Editor` without exposing broad mutable access to
 `App`.
 
-`Editor` keeps every owned aggregate and lifecycle flag private: buffer
-storage/identity allocation, pane tree, clipboard, cwd, quit state,
-minibuffer buffer/pane/state, isearch, command sequencing, and pending quit
-work. Rendering and input use immutable queries for buffers, panes,
+`Editor` keeps every owned aggregate and lifecycle flag private. It owns the
+buffer collection and id allocator, pane tree, cwd, internal kill clipboard,
+a persistent lazily connected `OsClipboard`, minibuffer state plus its real
+buffer/pane, optional `ISearchState`, command sequencing, and quit state.
+`should_quit` requests normal termination; `quit_abort` records the explicit
+abort answer so runtime exits non-zero; `quit_pending` is the ordered list of
+modified buffer ids still awaiting a quit-time decision. `quit()` initializes
+that list, and the prompt handlers remove, clear, or advance it together with
+the two outcome flags rather than exposing the ids to callers.
+
+Rendering and input use immutable queries for buffers, panes,
 minibuffer/search state, cwd, and quit status. Changes use narrow editor
-intents for edits/history, messages, background-syntax completion, pane focus
-and viewport geometry, and prompt/search lifecycles. Production code receives
+intents for edits/history, clipboard transactions, messages, background-syntax
+completion, pane focus and viewport geometry, and prompt/search lifecycles.
+The minibuffer buffer and pane are selected only through `active_buffer()` /
+`active_pane()` while a prompt is active; isearch state and its prompt mirror
+are advanced together by editor-owned transitions. Production code receives
 neither generic mutable buffer collections nor generic mutable aggregate
 access; exceptional setup is confined to cfg(test) fixture methods. `App`
 follows the same rule for its editor, terminal, input state, syntax worker, and
@@ -366,9 +376,10 @@ char key into the shifted character (`shifted_char`: Unicode uppercase for
 letters, a US-layout table for punctuation). Bindings name the shifted
 character (`M-<`, `C-_`), but kitty-protocol terminals without the "report
 alternate keys" flag deliver shifted keys as the *base* key plus SHIFT
-(Alt+Shift+`,` for M-<) — both forms must reach the same binding. `main()`
-also pushes `REPORT_ALTERNATE_KEYS`, so terminals that support it report the
-layout-correct shifted char and the US-layout table is only the fallback.
+(Alt+Shift+`,` for M-<) — both forms must reach the same binding.
+`runtime::run()` also pushes `REPORT_ALTERNATE_KEYS`, so terminals that support
+it report the layout-correct shifted char and the US-layout table is only the
+fallback.
 
 ### Command
 
@@ -395,7 +406,8 @@ discarded branch, `clean_version` is set to `None` (unreachable).
 ## Terminal Lifecycle
 
 CLI arguments are handled before any terminal setup by the pure
-`parse_args()` (unit-tested in main.rs): `-h`/`--help` and `-V`/`--version`
+`runtime::parse_args()` (unit-tested in `runtime.rs`): `-h`/`--help` and
+`-V`/`--version`
 print to a normal screen and exit 0; unrecognized leading-dash arguments and
 empty arguments print an error pointing at `--help` and exit 2; `--` ends
 option parsing so files literally named `--help` stay reachable, and a lone
@@ -405,12 +417,13 @@ buffers, the *first* successfully opened one is displayed, and the rest are
 reachable via `C-x b`; a path that fails to open is reported and skipped
 (the error message is never papered over by the "Opened N files" summary).
 
-`main()` installs a panic hook before entering raw mode, and holds a
-`RestoreGuard` whose `Drop` calls `restore_terminal()`, so every error path
-between `enable_raw_mode()` and the end of `main` (the `?` early returns
-from terminal setup and from the run loop) restores the terminal before the
-error prints. The normal path drops the guard explicitly before the
-abort-quit `std::process::exit(1)` (which skips destructors). Both the guard
+`src/main.rs` is only a wrapper around `minimacs::run_editor()`; the CLI and
+terminal lifecycle live in `runtime::run()`. Runtime installs a panic hook
+before entering raw mode and holds a `RestoreGuard` whose `Drop` calls
+`restore_terminal()`, so every `?` error path from terminal setup or the run
+loop restores the terminal before the error prints. The normal path drops the
+guard explicitly before the abort-quit `std::process::exit(1)` (which skips
+destructors). Both the guard
 and the panic hook call `restore_terminal()`, which best-effort disables raw
 mode, pops keyboard enhancement flags, leaves the alternate screen, disables
 bracketed paste and mouse capture, and shows the cursor. Every step runs
@@ -444,7 +457,7 @@ hook so the panic message prints on the normal screen.
 `Poll::Closed` means no further input can ever arrive (e.g. a tty hangup),
 so `run()` exits with an "event source closed" error instead of spinning on
 the dead source. Unsaved buffers cannot be prompted about — there is no
-input to answer with — so the editor just quits; `main` still runs
+input to answer with — so the editor just quits; `runtime::run()` still runs
 `restore_terminal()` on this error path before propagating the error.
 
 ### Input State
@@ -731,10 +744,25 @@ queries, so no mutable prompt reference crosses the module boundary.
 
 The two lifecycle states are:
 
-- **Idle**: shows timed messages ("Wrote file.txt", "Quit", errors).
-- **Prompt**: active text input with a label. Prompt kinds:
-  `FindFile`, `WriteFile`, `SwitchBuffer`, `GotoLine`, `ISearch`,
-  `KillConfirm { buffer_id }`, `QuitSaveConfirm { buffer_id }`.
+- **Idle**: shows the current message ("Wrote file.txt", "Quit", errors).
+  There is no message timer: an idle message remains until another message
+  replaces it or a minibuffer lifecycle transition clears it.
+- **Prompt**: active text input with a label. `PromptKind` is exhaustive:
+  - `FindFile`: its minibuffer text is the path to open.
+  - `SwitchBuffer`: its text names the buffer to display (empty input selects
+    the pane's alternate buffer).
+  - `WriteFile`: its text is the requested save-as path.
+  - `GotoLine`: its text is the one-based line number.
+  - `ISearch`: the payload-free marker tying the live prompt to the
+    Editor-owned isearch state.
+  - `KillConfirm { buffer_id }`: identifies the modified buffer to kill.
+  - `SaveAnywayConfirm { buffer_id, resume_quit }`: identifies the
+    externally modified buffer and records whether a successful save must
+    resume the pending quit sequence.
+  - `OverwriteConfirm { buffer_id, path }`: identifies both the buffer being
+    saved and the existing save-as destination.
+  - `QuitSaveConfirm { buffer_id }`: identifies the modified buffer currently
+    awaiting a quit-time save decision.
 
 Confirmation prompts identify buffers by id, never by name (names are not
 unique). All of them save through the `Editor::write_buffer` choke point (see
@@ -781,12 +809,14 @@ That gives nonexistent files a stable absolute identity too: multiple CLI or
 prompt spellings of the same future file switch to one buffer instead of
 creating duplicate buffers that later save over each other.
 
-Message lifecycle: `message` is only rendered while the minibuffer is idle —
-a prompt hides it. To keep a message queued during a prompt (e.g. "Mark set"
-from `C-SPC`) from reappearing stale afterwards, every prompt exit clears it:
-`start_prompt()` and `finish()` set `message = None`, and `cancel()` replaces
-it with "Quit". Handlers that want a result message ("Wrote file.txt",
-"Opened file.txt") therefore show it *after* calling `finish()`.
+Message lifecycle: `show_message()` stores a message without an expiry; while
+idle it persists until replaced or cleared. A prompt hides messages, and
+`start_prompt()` clears the previous idle message. To keep a message queued
+during a prompt (e.g. "Mark set" from `C-SPC`) from reappearing stale
+afterwards, every prompt exit clears or replaces it: `finish()` sets
+`message = None`, while `cancel()` replaces it with "Quit". Handlers that want
+a result message ("Wrote file.txt", "Opened file.txt") therefore show it
+after calling `finish()`.
 
 ### Minibuffer as a Real Buffer
 
@@ -1036,9 +1066,13 @@ queue is drained, which is how `run_until_idle` terminates in tests.
    the module path `app::tests` — so these tests must stay directly in that
    module).
 
-4. **Repository policy tests** (under `tests/`): protect source-tree invariants
-   that Cargo itself cannot express. In particular, a normal Cargo build has no
-   build script and therefore cannot install or overwrite Git hooks. The
-   versioned `.githooks/pre-commit` suite runs formatting before its build,
-   test/coverage, and Clippy checks; it is strictly opt-in via the checkout-local
+4. **Repository policy tests** (`tests/repository_policy.rs`): protect
+   source-tree invariants that Cargo itself cannot express. They parse Rust
+   syntax where practical to enforce single library ownership, aggregate-field
+   privacy, the editor-to-display dependency boundary, and exhaustive
+   `PromptKind` documentation; narrow text checks protect message-lifecycle and
+   deletion-comment semantics. A normal Cargo build has no build script and
+   therefore cannot install or overwrite Git hooks. The versioned
+   `.githooks/pre-commit` suite runs formatting before its build, test/coverage,
+   and Clippy checks; it is strictly opt-in via the checkout-local
    `core.hooksPath` configuration. CI mirrors these checks.
