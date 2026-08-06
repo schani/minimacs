@@ -2,7 +2,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::backend::Backend;
 
 use crate::command::Command;
-use crate::editor::{EditRecord, Editor};
+use crate::editor::EditRecord;
 use crate::keymap::{default_keymap, Key, KeymapResult, KeymapState};
 use crate::minibuffer::PromptKind;
 
@@ -13,10 +13,8 @@ use super::App;
 /// - `keymap`: the chord-in-progress walk of the keymap trie (`C-x ...`).
 /// - `esc_pending`: a bare ESC was seen; the next key gets the ALT modifier.
 ///
-/// `Editor::pending_keys` — the mode-line display of the pending input — is
-/// a mirror of this state (it lives on `Editor` because rendering only sees
-/// `&Editor`). Every mutation goes through these methods so the mirror stays
-/// in sync, and `reset` is the single point that clears everything at once.
+/// This state also owns its mode-line display. Rendering receives only a
+/// small immutable view, so `Editor` has no pending-input mirror.
 pub(super) struct InputState {
     keymap: KeymapState,
     esc_pending: bool,
@@ -31,17 +29,15 @@ impl InputState {
     }
 
     /// The single reset point for all pending input state: cancels any chord
-    /// in progress, any pending ESC, and the mode-line indicator.
-    pub(super) fn reset(&mut self, editor: &mut Editor) {
+    /// in progress, any pending ESC, and therefore the derived indicator.
+    pub(super) fn reset(&mut self) {
         self.keymap.clear();
         self.esc_pending = false;
-        editor.pending_keys.clear();
     }
 
     /// Record a bare ESC: the next key will be treated as Meta-modified.
-    fn set_esc_pending(&mut self, editor: &mut Editor) {
+    fn set_esc_pending(&mut self) {
         self.esc_pending = true;
-        editor.pending_keys = format!("{}ESC ", self.keymap.pending_display());
     }
 
     /// Consume the pending-ESC flag, returning whether it was set.
@@ -50,18 +46,21 @@ impl InputState {
     }
 
     fn pending_display(&self) -> String {
-        self.keymap.pending_display()
+        let mut display = self.keymap.pending_display();
+        if self.esc_pending {
+            display.push_str("ESC ");
+        }
+        display
     }
 
-    /// Feed a key to the chord trie, keeping the mode-line display in sync:
-    /// `Pending` shows the accumulated prefix, anything else clears it.
-    fn process_key(&mut self, editor: &mut Editor, key: KeyEvent) -> KeymapResult {
-        let result = self.keymap.process_key(key);
-        editor.pending_keys = match result {
-            KeymapResult::Pending => self.keymap.pending_display(),
-            _ => String::new(),
-        };
-        result
+    pub(super) fn render_view(&self) -> String {
+        self.pending_display()
+    }
+
+    /// Feed a key to the chord trie. Its result and pending walk are the only
+    /// sources for the derived mode-line display.
+    fn process_key(&mut self, key: KeyEvent) -> KeymapResult {
+        self.keymap.process_key(key)
     }
 }
 
@@ -72,7 +71,7 @@ where
     pub(super) fn handle_key(&mut self, key: KeyEvent) {
         // C-g always cancels: reset all pending input state, then Cancel.
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('g') {
-            self.input.reset(&mut self.editor);
+            self.input.reset();
             self.editor.execute(Command::Cancel);
             return;
         }
@@ -82,7 +81,7 @@ where
             && !key.modifiers.contains(KeyModifiers::CONTROL)
             && !key.modifiers.contains(KeyModifiers::ALT)
         {
-            self.input.set_esc_pending(&mut self.editor);
+            self.input.set_esc_pending();
             return;
         }
 
@@ -119,7 +118,7 @@ where
         }
 
         let pending_before = self.input.pending_display();
-        match self.input.process_key(&mut self.editor, key) {
+        match self.input.process_key(key) {
             KeymapResult::Matched(cmd) => {
                 self.editor.execute(cmd);
             }

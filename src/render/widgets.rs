@@ -11,9 +11,15 @@ use crate::pane::{visual_lines_for_length, Pane};
 use crate::syntax_worker::{SyntaxJob, SyntaxWorker};
 
 use super::layout::*;
+use super::PendingInput;
 
 /// Render the entire editor UI into the given frame.
-pub fn render(frame: &mut Frame, editor: &Editor, syntax_worker: &SyntaxWorker) {
+pub fn render(
+    frame: &mut Frame,
+    editor: &Editor,
+    syntax_worker: &SyntaxWorker,
+    pending_input: PendingInput<'_>,
+) {
     let area = frame.area();
     let layout = screen_layout(editor, area);
 
@@ -82,7 +88,7 @@ pub fn render(frame: &mut Frame, editor: &Editor, syntax_worker: &SyntaxWorker) 
             text_area,
             syntax_worker,
         );
-        render_pane_mode_line(frame, editor, buf, pane, is_focused, mode_line_area);
+        render_pane_mode_line(frame, buf, pane, is_focused, pending_input, mode_line_area);
 
         // Set cursor position for the focused pane
         if is_focused && !editor.minibuffer.is_active() {
@@ -390,10 +396,10 @@ fn mode_line_text(left: &str, right: &str, total_width: usize) -> String {
 
 fn render_pane_mode_line(
     frame: &mut Frame,
-    editor: &Editor,
     buf: &Buffer,
     pane: &Pane,
     is_focused: bool,
+    pending_input: PendingInput<'_>,
     area: Rect,
 ) {
     let (line, col) = buf.char_to_line_col(pane.point);
@@ -419,7 +425,7 @@ fn render_pane_mode_line(
         .map(|s| format!("  ({})", s.language.name()))
         .unwrap_or_default();
 
-    let pending = &editor.pending_keys;
+    let pending = pending_input.display;
     let pending_display = if is_focused && !pending.is_empty() {
         format!("  {pending}")
     } else {

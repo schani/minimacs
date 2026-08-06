@@ -128,7 +128,7 @@ where
                 true
             }
             Event::Paste(text) => {
-                self.input.reset(&mut self.editor);
+                self.input.reset();
                 // Paste during isearch extends the query (isearch-yank)
                 // instead of inserting into a buffer.
                 if self.editor.isearch.is_some() {
@@ -142,7 +142,7 @@ where
                 MouseEventKind::Down(MouseButton::Left)
                 | MouseEventKind::ScrollUp
                 | MouseEventKind::ScrollDown => {
-                    self.input.reset(&mut self.editor);
+                    self.input.reset();
                     self.handle_mouse(mouse_event);
                     true
                 }
@@ -186,8 +186,10 @@ where
             self.renders += 1;
         }
         let editor = &self.editor;
+        let pending = self.input.render_view();
+        let pending_input = render::PendingInput { display: &pending };
         self.terminal.draw(|frame| {
-            render::render(frame, editor, &self.syntax_worker);
+            render::render(frame, editor, &self.syntax_worker, pending_input);
         })?;
         Ok(())
     }

@@ -117,7 +117,8 @@ binary wrappers ──> lib entry functions
 ```
 
 All rendering reads from `Editor` without mutating it. The `render()` function
-takes `&Editor` plus the syntax worker handle and produces a frame. Neutral
+takes `&Editor`, the syntax worker handle, and a small immutable pending-input
+view from `App`, then produces a frame. Neutral
 wrapped-line geometry lives in `display.rs`: editor cursor reveal, isearch
 reveal, mouse mapping, and render widgets all depend on it directly. The editor
 never depends on `render`; ratatui screen layout and widget orchestration remain
@@ -139,7 +140,6 @@ struct Editor {
     clipboard: String,
     cwd: PathBuf,
     should_quit: bool,
-    pending_keys: String,
     minibuffer: Minibuffer,
     minibuffer_buffer: Buffer,  // id=usize::MAX, not in buffers vec
     minibuffer_pane: Pane,      // viewport_height=1
@@ -473,12 +473,11 @@ All partially-consumed input lives in one struct, `InputState`, owned by
 - `esc_pending`: a bare ESC was seen; the next key gets the ALT modifier
   (ESC-as-Meta).
 
-`Editor::pending_keys` — the mode-line display of the pending input — is a
-mirror of this state (it lives on `Editor` because rendering only sees
-`&Editor`). Every mutation goes through `InputState` methods so the mirror
-stays in sync, and `InputState::reset()` is the single point that clears
-everything at once (a chord in progress, a pending ESC, and the mode-line
-indicator).
+`InputState` is the sole owner of the pending-input display, derived from its
+chord walk and pending-ESC flag. `App::render()` passes the renderer a small
+immutable `PendingInput` view; `Editor` has no mirror. `InputState::reset()` is
+the single point that clears everything at once (a chord in progress, a
+pending ESC, and therefore the derived mode-line indicator).
 
 ### Key routing (`handle_key`)
 
