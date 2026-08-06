@@ -4,7 +4,7 @@ impl Editor {
     /// Helper: set minibuffer text directly (for tests).
     fn set_minibuffer_text(&mut self, text: &str) {
         self.minibuffer_buffer.reset_transient_text(text);
-        self.minibuffer_pane.point = text.chars().count();
+        self.minibuffer_pane.set_point(text.chars().count());
     }
 }
 

@@ -21,9 +21,8 @@ fn edit_above_other_pane_viewport_shifts_its_scroll() {
     editor.pane_tree.cycle_focus();
     {
         let point = editor.current_buffer().line_col_to_char(100, 0);
-        let pane = editor.pane_tree.focused_pane_mut();
-        pane.scroll_top = 100;
-        pane.point = point;
+        editor.pane_tree.set_focused_scroll_position(100, 0);
+        editor.pane_tree.set_focused_point(point);
     }
     editor.pane_tree.cycle_focus();
 
@@ -35,8 +34,8 @@ fn edit_above_other_pane_viewport_shifts_its_scroll() {
     // up by the 50 removed lines, point still at the same line's start.
     editor.pane_tree.cycle_focus();
     let pane = editor.pane_tree.focused_pane();
-    assert_eq!(pane.scroll_top, 50);
-    let (line, col) = editor.current_buffer().char_to_line_col(pane.point);
+    assert_eq!(pane.scroll_top(), 50);
+    let (line, col) = editor.current_buffer().char_to_line_col(pane.point());
     assert_eq!((line, col), (50, 0));
 }
 
@@ -86,7 +85,7 @@ fn insert_newline_inserts_lf_in_crlf_buffer() {
     editor
         .current_buffer_mut()
         .set_line_ending_for_test(crate::buffer::LineEnding::CrLf);
-    editor.pane_tree.focused_pane_mut().point = 1;
+    editor.pane_tree.set_focused_point(1);
     editor.execute(Command::InsertNewline);
     assert_eq!(editor.buffer_text(), "a\nb");
     assert_eq!(editor.point(), 2);
@@ -211,8 +210,8 @@ fn focus_and_layout_frozen_while_prompt_is_active() {
 fn goto_line_scrolls_target_into_view() {
     let text: String = (1..=200).map(|i| format!("line{i}\n")).collect();
     let mut editor = Editor::new_with_text(&text);
-    editor.pane_tree.focused_pane_mut().viewport_height = 10;
-    editor.pane_tree.focused_pane_mut().viewport_width = 80;
+    editor.pane_tree.set_focused_viewport_height(10);
+    editor.pane_tree.set_focused_viewport_width(80);
     editor.execute(Command::GotoLine);
     editor.set_minibuffer_text("150");
     editor.submit_prompt();
@@ -220,9 +219,9 @@ fn goto_line_scrolls_target_into_view() {
     assert_eq!(line, 149);
     let pane = editor.pane_tree.focused_pane();
     assert!(
-        pane.scroll_top <= 149 && 149 < pane.scroll_top + pane.viewport_height,
+        pane.scroll_top() <= 149 && 149 < pane.scroll_top() + pane.viewport_height(),
         "target line must be inside the viewport; scroll_top={}",
-        pane.scroll_top
+        pane.scroll_top()
     );
 }
 
@@ -437,10 +436,10 @@ fn switch_buffer_restores_point_in_window() {
     std::fs::write(&file, "file buffer").unwrap();
 
     let mut editor = Editor::new_with_text("scratch buffer");
-    editor.pane_tree.focused_pane_mut().point = 6;
+    editor.pane_tree.set_focused_point(6);
 
     editor.open_file(&file).unwrap();
-    editor.pane_tree.focused_pane_mut().point = 4;
+    editor.pane_tree.set_focused_point(4);
 
     editor.execute(Command::SwitchBuffer);
     editor.set_minibuffer_text("*scratch*");
@@ -462,18 +461,18 @@ fn switch_buffer_restores_point_per_window() {
     std::fs::write(&file, "file buffer").unwrap();
 
     let mut editor = Editor::new_with_text("scratch buffer");
-    editor.pane_tree.focused_pane_mut().point = 2;
+    editor.pane_tree.set_focused_point(2);
     editor.open_file(&file).unwrap();
-    editor.pane_tree.focused_pane_mut().point = 5;
+    editor.pane_tree.set_focused_point(5);
 
     editor.execute(Command::SplitVertical);
     editor.execute(Command::CycleFocus);
-    editor.pane_tree.focused_pane_mut().point = 1;
+    editor.pane_tree.set_focused_point(1);
 
     editor.execute(Command::SwitchBuffer);
     editor.set_minibuffer_text("*scratch*");
     editor.submit_prompt();
-    editor.pane_tree.focused_pane_mut().point = 7;
+    editor.pane_tree.set_focused_point(7);
 
     editor.execute(Command::SwitchBuffer);
     editor.set_minibuffer_text("test.txt");
@@ -500,27 +499,27 @@ fn switch_buffer_restores_point_per_window() {
 #[test]
 fn set_mark() {
     let mut editor = Editor::new_with_text("hello");
-    editor.pane_tree.focused_pane_mut().point = 2;
+    editor.pane_tree.set_focused_point(2);
     editor.execute(Command::SetMark);
-    assert_eq!(editor.pane_tree.focused_pane().mark, Some(2));
+    assert_eq!(editor.pane_tree.focused_pane().mark(), Some(2));
 }
 
 #[test]
 fn swap_point_and_mark() {
     let mut editor = Editor::new_with_text("hello");
-    editor.pane_tree.focused_pane_mut().point = 1;
+    editor.pane_tree.set_focused_point(1);
     editor.execute(Command::SetMark);
-    editor.pane_tree.focused_pane_mut().point = 4;
+    editor.pane_tree.set_focused_point(4);
     editor.execute(Command::SwapPointAndMark);
     assert_eq!(editor.point(), 1);
-    assert_eq!(editor.pane_tree.focused_pane().mark, Some(4));
+    assert_eq!(editor.pane_tree.focused_pane().mark(), Some(4));
 }
 
 #[test]
 fn region_returns_ordered_range() {
     let mut editor = Editor::new_with_text("hello");
-    editor.pane_tree.focused_pane_mut().point = 4;
-    editor.pane_tree.focused_pane_mut().mark = Some(1);
+    editor.pane_tree.set_focused_point(4);
+    editor.pane_tree.set_focused_mark(Some(1));
     let (start, end) = editor.region().unwrap();
     assert_eq!(start, 1);
     assert_eq!(end, 4);
@@ -529,33 +528,33 @@ fn region_returns_ordered_range() {
 #[test]
 fn cut_removes_region() {
     let mut editor = Editor::new_with_text("hello world");
-    editor.pane_tree.focused_pane_mut().point = 5;
+    editor.pane_tree.set_focused_point(5);
     editor.execute(Command::SetMark);
-    editor.pane_tree.focused_pane_mut().point = 11;
+    editor.pane_tree.set_focused_point(11);
     editor.execute(Command::Cut);
     assert_eq!(editor.buffer_text(), "hello");
     assert_eq!(editor.clipboard, " world");
     assert_eq!(editor.point(), 5);
-    assert_eq!(editor.pane_tree.focused_pane().mark, None);
+    assert_eq!(editor.pane_tree.focused_pane().mark(), None);
 }
 
 #[test]
 fn copy_preserves_text() {
     let mut editor = Editor::new_with_text("hello world");
-    editor.pane_tree.focused_pane_mut().point = 0;
+    editor.pane_tree.set_focused_point(0);
     editor.execute(Command::SetMark);
-    editor.pane_tree.focused_pane_mut().point = 5;
+    editor.pane_tree.set_focused_point(5);
     editor.execute(Command::Copy);
     assert_eq!(editor.buffer_text(), "hello world");
     assert_eq!(editor.clipboard, "hello");
-    assert_eq!(editor.pane_tree.focused_pane().mark, None);
+    assert_eq!(editor.pane_tree.focused_pane().mark(), None);
 }
 
 #[test]
 fn paste_inserts_clipboard() {
     let mut editor = Editor::new_with_text("hello");
     editor.clipboard = " world".to_string();
-    editor.pane_tree.focused_pane_mut().point = 5;
+    editor.pane_tree.set_focused_point(5);
     editor.execute(Command::Paste);
     assert_eq!(editor.buffer_text(), "hello world");
     assert_eq!(editor.point(), 11);
@@ -564,22 +563,22 @@ fn paste_inserts_clipboard() {
 #[test]
 fn cancel_deactivates_mark() {
     let mut editor = Editor::new_with_text("hello");
-    editor.pane_tree.focused_pane_mut().point = 2;
+    editor.pane_tree.set_focused_point(2);
     editor.execute(Command::SetMark);
-    assert!(editor.pane_tree.focused_pane().mark.is_some());
+    assert!(editor.pane_tree.focused_pane().mark().is_some());
     editor.execute(Command::Cancel);
-    assert_eq!(editor.pane_tree.focused_pane().mark, None);
+    assert_eq!(editor.pane_tree.focused_pane().mark(), None);
 }
 
 #[test]
 fn cut_then_paste() {
     let mut editor = Editor::new_with_text("hello world");
-    editor.pane_tree.focused_pane_mut().point = 6;
+    editor.pane_tree.set_focused_point(6);
     editor.execute(Command::SetMark);
-    editor.pane_tree.focused_pane_mut().point = 11;
+    editor.pane_tree.set_focused_point(11);
     editor.execute(Command::Cut);
     assert_eq!(editor.buffer_text(), "hello ");
-    editor.pane_tree.focused_pane_mut().point = 0;
+    editor.pane_tree.set_focused_point(0);
     editor.execute(Command::Paste);
     assert_eq!(editor.buffer_text(), "worldhello ");
 }
@@ -587,9 +586,9 @@ fn cut_then_paste() {
 #[test]
 fn cut_undo() {
     let mut editor = Editor::new_with_text("hello world");
-    editor.pane_tree.focused_pane_mut().point = 5;
+    editor.pane_tree.set_focused_point(5);
     editor.execute(Command::SetMark);
-    editor.pane_tree.focused_pane_mut().point = 11;
+    editor.pane_tree.set_focused_point(11);
     editor.execute(Command::Cut);
     assert_eq!(editor.buffer_text(), "hello");
     editor.execute(Command::Undo);
@@ -622,9 +621,9 @@ fn cycle_focus_between_panes() {
     editor.open_file(&file).unwrap();
     editor.execute(Command::SplitVertical);
     // Both panes show same buffer
-    let first_bid = editor.pane_tree.focused_pane().buffer_id;
+    let first_bid = editor.pane_tree.focused_pane().buffer_id();
     editor.execute(Command::CycleFocus);
-    let second_bid = editor.pane_tree.focused_pane().buffer_id;
+    let second_bid = editor.pane_tree.focused_pane().buffer_id();
     assert_eq!(first_bid, second_bid);
 }
 

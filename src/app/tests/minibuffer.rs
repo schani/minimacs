@@ -99,7 +99,7 @@ fn minibuffer_grows_upward_and_moves_cursor_to_wrapped_row() {
     app.editor
         .minibuffer_buffer
         .reset_transient_text("abcdefghi");
-    app.editor.minibuffer_pane.point = 9;
+    app.editor.minibuffer_pane.set_point(9);
 
     app.update_viewport();
     app.render().unwrap();
@@ -109,8 +109,8 @@ fn minibuffer_grows_upward_and_moves_cursor_to_wrapped_row() {
     assert_eq!(rows[6], "I: abcde");
     assert_eq!(rows[7], "fghi");
     assert_eq!(app.terminal.get_cursor_position().unwrap(), (4, 7).into());
-    assert_eq!(app.editor.minibuffer_pane.viewport_height, 2);
-    assert_eq!(app.editor.pane_tree.focused_pane().viewport_height, 5);
+    assert_eq!(app.editor.minibuffer_pane.viewport_height(), 2);
+    assert_eq!(app.editor.pane_tree.focused_pane().viewport_height(), 5);
 }
 
 // === Minibuffer-as-real-buffer integration tests ===

@@ -138,10 +138,7 @@ fn write_file_success_reports_wrote_and_updates_identity() {
     );
     assert!(!editor.current_buffer().is_modified());
     assert_eq!(editor.current_buffer().name(), "output.txt");
-    assert_eq!(
-        editor.current_buffer().path().as_deref(),
-        Some(target.as_path())
-    );
+    assert_eq!(editor.current_buffer().path(), Some(target.as_path()));
     assert_eq!(std::fs::read_to_string(&target).unwrap(), "x");
 }
 

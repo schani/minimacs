@@ -36,10 +36,7 @@ fn nonexistent_file_spellings_share_one_buffer_identity() {
     let expected = std::fs::canonicalize(dir.path())
         .unwrap()
         .join("future.txt");
-    assert_eq!(
-        editor.current_buffer().path().as_deref(),
-        Some(expected.as_path())
-    );
+    assert_eq!(editor.current_buffer().path(), Some(expected.as_path()));
 }
 
 #[test]
@@ -62,7 +59,7 @@ fn open_nonexistent_file_save_creates_file() {
 #[test]
 fn delete_word_backward_undo() {
     let mut editor = Editor::new_with_text("hello world");
-    editor.pane_tree.focused_pane_mut().point = 11;
+    editor.pane_tree.set_focused_point(11);
     editor.execute(Command::DeleteWordBackward);
     assert_eq!(editor.buffer_text(), "hello ");
     editor.commit_undo_group();
@@ -159,7 +156,7 @@ fn kill_buffer_modified_prompts() {
 fn kill_confirm_yes_kills_buffer_without_quitting() {
     let mut editor = Editor::new_with_text("");
     editor.execute(Command::InsertChar('x'));
-    let old_id = editor.pane_tree.focused_pane().buffer_id;
+    let old_id = editor.pane_tree.focused_pane().buffer_id();
     editor.execute(Command::KillBuffer);
     editor.set_minibuffer_text("y");
     editor.submit_prompt();
@@ -171,7 +168,7 @@ fn kill_confirm_yes_kills_buffer_without_quitting() {
 fn kill_confirm_no_keeps_buffer() {
     let mut editor = Editor::new_with_text("");
     editor.execute(Command::InsertChar('x'));
-    let old_id = editor.pane_tree.focused_pane().buffer_id;
+    let old_id = editor.pane_tree.focused_pane().buffer_id();
     editor.execute(Command::KillBuffer);
     editor.set_minibuffer_text("n");
     editor.submit_prompt();
@@ -192,7 +189,7 @@ fn kill_buffer_with_others_remaining() {
     editor.open_file(&file1).unwrap();
     editor.open_file(&file2).unwrap();
     assert_eq!(editor.buffers.len(), 3); // scratch + a.txt + b.txt
-    let current_id = editor.pane_tree.focused_pane().buffer_id;
+    let current_id = editor.pane_tree.focused_pane().buffer_id();
     editor.execute(Command::KillBuffer);
     // Buffer was killed, switched to first remaining
     assert!(editor.buffers.iter().all(|b| b.id() != current_id));
@@ -213,7 +210,7 @@ fn goto_line_invalid_input() {
 #[test]
 fn goto_line_zero_is_invalid() {
     let mut editor = Editor::new_with_text("line1\nline2\nline3");
-    editor.pane_tree.focused_pane_mut().point = 6;
+    editor.pane_tree.set_focused_point(6);
     editor.execute(Command::GotoLine);
     editor.set_minibuffer_text("0");
     editor.submit_prompt();
@@ -773,10 +770,7 @@ fn write_file_to_symlink_keeps_link_and_buffer_identity() {
     assert_eq!(std::fs::read_to_string(&target).unwrap(), "new content");
     // The buffer's identity is the logical path the user typed, not the
     // resolved target.
-    assert_eq!(
-        editor.current_buffer().path().as_deref(),
-        Some(link.as_path())
-    );
+    assert_eq!(editor.current_buffer().path(), Some(link.as_path()));
     assert_eq!(editor.current_buffer().name(), "link.txt");
 }
 

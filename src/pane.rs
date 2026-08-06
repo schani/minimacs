@@ -195,23 +195,88 @@ struct BufferViewState {
 
 /// A single pane (window) viewing a buffer.
 pub struct Pane {
-    pub buffer_id: BufferId,
-    pub point: usize,
-    pub mark: Option<usize>,
-    pub preferred_column: Option<usize>,
-    pub scroll_top: usize,
+    buffer_id: BufferId,
+    point: usize,
+    mark: Option<usize>,
+    preferred_column: Option<usize>,
+    scroll_top: usize,
     /// Visual rows of the `scroll_top` line scrolled off above the viewport;
     /// nonzero only when the top line wraps taller than the space above the
     /// cursor. Consumers clamp it to the top line's current visual height
     /// (it can go stale when a resize or edit changes how that line wraps).
-    pub scroll_row_offset: usize,
-    pub viewport_height: usize,
-    pub viewport_width: usize,
-    pub last_buffer_id: Option<BufferId>,
+    scroll_row_offset: usize,
+    viewport_height: usize,
+    viewport_width: usize,
+    last_buffer_id: Option<BufferId>,
     buffer_states: HashMap<BufferId, BufferViewState>,
 }
 
 impl Pane {
+    pub fn buffer_id(&self) -> BufferId {
+        self.buffer_id
+    }
+
+    pub fn point(&self) -> usize {
+        self.point
+    }
+
+    pub fn mark(&self) -> Option<usize> {
+        self.mark
+    }
+
+    pub fn preferred_column(&self) -> Option<usize> {
+        self.preferred_column
+    }
+
+    pub fn scroll_top(&self) -> usize {
+        self.scroll_top
+    }
+
+    pub fn scroll_row_offset(&self) -> usize {
+        self.scroll_row_offset
+    }
+
+    pub fn viewport_height(&self) -> usize {
+        self.viewport_height
+    }
+
+    pub fn viewport_width(&self) -> usize {
+        self.viewport_width
+    }
+
+    pub(crate) fn set_point(&mut self, point: usize) {
+        self.point = point;
+    }
+
+    pub(crate) fn set_mark(&mut self, mark: Option<usize>) {
+        self.mark = mark;
+    }
+
+    pub(crate) fn set_preferred_column(&mut self, preferred_column: Option<usize>) {
+        self.preferred_column = preferred_column;
+    }
+
+    pub(crate) fn set_scroll_position(&mut self, top: usize, row_offset: usize) {
+        self.scroll_top = top;
+        self.scroll_row_offset = row_offset;
+    }
+
+    pub(crate) fn set_viewport(&mut self, height: usize, width: usize) {
+        self.viewport_height = height;
+        self.viewport_width = width;
+    }
+
+    pub(crate) fn set_point_mark_and_preferred(
+        &mut self,
+        point: usize,
+        mark: Option<usize>,
+        preferred_column: Option<usize>,
+    ) {
+        self.point = point;
+        self.mark = mark;
+        self.preferred_column = preferred_column;
+    }
+
     pub fn new(buffer_id: BufferId) -> Self {
         Self {
             buffer_id,
@@ -349,7 +414,7 @@ pub enum PaneNode {
 
 /// The pane tree manages all panes.
 pub struct PaneTree {
-    pub root: PaneNode,
+    root: PaneNode,
     /// Index path from root to focused leaf.
     focus_path: Vec<usize>,
 }
@@ -367,8 +432,8 @@ impl PaneTree {
         self.pane_at_path(&self.focus_path)
     }
 
-    /// Get the focused pane mutably.
-    pub fn focused_pane_mut(&mut self) -> &mut Pane {
+    /// Get the focused pane mutably inside the pane ownership module.
+    fn focused_pane_mut(&mut self) -> &mut Pane {
         let path = self.focus_path.clone();
         self.pane_at_path_mut(&path)
     }
@@ -388,9 +453,88 @@ impl PaneTree {
         self.pane_at_path(path)
     }
 
-    /// Get a mutable pane at a specific path (for scrolling, etc.).
-    pub fn pane_at_path_pub_mut(&mut self, path: &[usize]) -> &mut Pane {
-        self.pane_at_path_mut(path)
+    pub(crate) fn set_focused_point(&mut self, point: usize) {
+        self.focused_pane_mut().set_point(point);
+    }
+
+    pub(crate) fn set_focused_mark(&mut self, mark: Option<usize>) {
+        self.focused_pane_mut().set_mark(mark);
+    }
+
+    pub(crate) fn set_focused_preferred_column(&mut self, column: Option<usize>) {
+        self.focused_pane_mut().set_preferred_column(column);
+    }
+
+    pub(crate) fn set_focused_point_and_preferred(&mut self, point: usize, column: Option<usize>) {
+        let pane = self.focused_pane_mut();
+        pane.set_point(point);
+        pane.set_preferred_column(column);
+    }
+
+    pub(crate) fn set_focused_point_mark_and_preferred(
+        &mut self,
+        point: usize,
+        mark: Option<usize>,
+        column: Option<usize>,
+    ) {
+        self.focused_pane_mut()
+            .set_point_mark_and_preferred(point, mark, column);
+    }
+
+    pub(crate) fn set_focused_scroll_position(&mut self, top: usize, row_offset: usize) {
+        self.focused_pane_mut().set_scroll_position(top, row_offset);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_focused_scroll_top(&mut self, top: usize) {
+        let offset = self.focused_pane().scroll_row_offset();
+        self.focused_pane_mut().set_scroll_position(top, offset);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_focused_viewport_height(&mut self, height: usize) {
+        let width = self.focused_pane().viewport_width();
+        self.focused_pane_mut().set_viewport(height, width);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_focused_viewport_width(&mut self, width: usize) {
+        let height = self.focused_pane().viewport_height();
+        self.focused_pane_mut().set_viewport(height, width);
+    }
+
+    pub(crate) fn restore_focused_view(&mut self, point: usize, top: usize, row_offset: usize) {
+        let pane = self.focused_pane_mut();
+        pane.set_point(point);
+        pane.set_scroll_position(top, row_offset);
+    }
+
+    pub(crate) fn switch_focused_buffer(&mut self, buffer_id: BufferId, buffer_len: usize) {
+        self.focused_pane_mut().switch_buffer(buffer_id, buffer_len);
+    }
+
+    pub(crate) fn set_pane_scroll_position(&mut self, path: &[usize], top: usize, offset: usize) {
+        self.pane_at_path_mut(path).set_scroll_position(top, offset);
+    }
+
+    pub(crate) fn adjust_for_edit(&mut self, buffer_id: BufferId, delta: EditDelta) {
+        Self::visit_panes_mut(&mut self.root, &mut |pane| {
+            pane.adjust_for_edit(buffer_id, delta);
+        });
+    }
+
+    pub(crate) fn replace_killed_buffer(
+        &mut self,
+        buffer_id: BufferId,
+        replacement_id: BufferId,
+        replacement_len: usize,
+    ) {
+        Self::visit_panes_mut(&mut self.root, &mut |pane| {
+            pane.forget_buffer(buffer_id);
+            if pane.buffer_id() == buffer_id {
+                pane.restore_buffer_state(replacement_id, replacement_len);
+            }
+        });
     }
 
     fn pane_at_path(&self, path: &[usize]) -> &Pane {
@@ -698,10 +842,6 @@ impl PaneTree {
         }
     }
 
-    pub fn for_each_pane_mut<F: FnMut(&mut Pane)>(&mut self, f: &mut F) {
-        Self::visit_panes_mut(&mut self.root, f);
-    }
-
     fn visit_panes_mut<F: FnMut(&mut Pane)>(node: &mut PaneNode, f: &mut F) {
         match node {
             PaneNode::Leaf(pane) => f(pane),
@@ -715,9 +855,7 @@ impl PaneTree {
 
     /// Update viewport dimensions for a pane at a given path.
     pub fn update_pane_viewport(&mut self, path: &[usize], height: usize, width: usize) {
-        let pane = self.pane_at_path_mut(path);
-        pane.viewport_height = height;
-        pane.viewport_width = width;
+        self.pane_at_path_mut(path).set_viewport(height, width);
     }
 }
 

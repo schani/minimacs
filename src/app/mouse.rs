@@ -57,7 +57,7 @@ where
                 self.editor.pane_tree.set_focus_path(path.clone());
 
                 let pane = self.editor.pane_tree.focused_pane();
-                let buf = self.editor.buffer_by_id(pane.buffer_id);
+                let buf = self.editor.buffer_by_id(pane.buffer_id());
                 let text_width = text_area.width as usize;
 
                 let rel_x = (click_x - text_area.x) as usize;
@@ -70,7 +70,7 @@ where
                 let col_in_text = rel_x;
 
                 // Walk buffer lines from scroll_top to find which line the visual row maps to
-                let scroll_top = pane.scroll_top;
+                let scroll_top = pane.scroll_top();
                 let total_lines = buf.line_count();
                 let mut visual_row: usize = 0;
                 let mut target_line = scroll_top;
@@ -94,7 +94,7 @@ where
                 if line_idx >= total_lines {
                     // Clicked below all content — place at end of buffer
                     let char_count = buf.char_count();
-                    self.editor.pane_tree.focused_pane_mut().point = char_count;
+                    self.editor.pane_tree.set_focused_point(char_count);
                 } else {
                     let target_col = crate::display::buffer_col_for_visual_position(
                         buf,
@@ -109,10 +109,10 @@ where
                     // out of the cluster.
                     let char_pos = buf
                         .snap_to_grapheme_boundary(buf.line_col_to_char(target_line, target_col));
-                    self.editor.pane_tree.focused_pane_mut().point = char_pos;
+                    self.editor.pane_tree.set_focused_point(char_pos);
                 }
 
-                self.editor.pane_tree.focused_pane_mut().preferred_column = None;
+                self.editor.pane_tree.set_focused_preferred_column(None);
                 return;
             }
         }
@@ -139,9 +139,9 @@ where
                 && scroll_y < rect.y + rect.height
             {
                 let pane = self.editor.pane_tree.pane_at_focus_path(path);
-                let buf = self.editor.buffer_by_id(pane.buffer_id);
-                let scroll_top = pane.scroll_top;
-                let scroll_row_offset = pane.scroll_row_offset;
+                let buf = self.editor.buffer_by_id(pane.buffer_id());
+                let scroll_top = pane.scroll_top();
+                let scroll_row_offset = pane.scroll_row_offset();
                 let text_width = rect.width as usize;
                 let total_lines = buf.line_count();
                 let line_len = |l: usize| crate::display::line_visual_width(buf, l);
@@ -166,9 +166,9 @@ where
                     _ => return,
                 };
 
-                let pane = self.editor.pane_tree.pane_at_path_pub_mut(path);
-                pane.scroll_top = new_top;
-                pane.scroll_row_offset = new_offset;
+                self.editor
+                    .pane_tree
+                    .set_pane_scroll_position(path, new_top, new_offset);
                 return;
             }
         }

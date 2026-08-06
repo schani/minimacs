@@ -35,7 +35,7 @@ fn isearch_snapshots_a_multi_chunk_buffer_once() {
 fn isearch_backward_basic() {
     let mut editor = Editor::new_with_text("hello world hello");
     // Start at end
-    editor.pane_tree.focused_pane_mut().point = 17;
+    editor.pane_tree.set_focused_point(17);
     editor.execute(Command::ISearchBackward);
     assert!(editor.isearch.is_some());
 
@@ -137,7 +137,7 @@ fn forward_word_skips_non_word() {
 #[test]
 fn forward_word_at_end() {
     let mut editor = Editor::new_with_text("hello");
-    editor.pane_tree.focused_pane_mut().point = 5;
+    editor.pane_tree.set_focused_point(5);
     editor.execute(Command::ForwardWord);
     assert_eq!(editor.point(), 5); // Stays at end
 }
@@ -152,7 +152,7 @@ fn forward_word_with_underscore() {
 #[test]
 fn backward_word_basic() {
     let mut editor = Editor::new_with_text("hello world");
-    editor.pane_tree.focused_pane_mut().point = 11;
+    editor.pane_tree.set_focused_point(11);
     editor.execute(Command::BackwardWord);
     assert_eq!(editor.point(), 6); // Start of "world"
 }
@@ -160,7 +160,7 @@ fn backward_word_basic() {
 #[test]
 fn backward_word_skips_non_word() {
     let mut editor = Editor::new_with_text("hello   world");
-    editor.pane_tree.focused_pane_mut().point = 13;
+    editor.pane_tree.set_focused_point(13);
     editor.execute(Command::BackwardWord);
     assert_eq!(editor.point(), 8); // Start of "world"
     editor.execute(Command::BackwardWord);
@@ -177,7 +177,7 @@ fn backward_word_at_start() {
 #[test]
 fn backward_word_with_underscore() {
     let mut editor = Editor::new_with_text("foo_bar baz");
-    editor.pane_tree.focused_pane_mut().point = 11;
+    editor.pane_tree.set_focused_point(11);
     editor.execute(Command::BackwardWord);
     assert_eq!(editor.point(), 8); // Start of "baz"
     editor.execute(Command::BackwardWord);
@@ -200,7 +200,7 @@ fn word_commands_cross_rope_chunks() {
     editor.execute(Command::BackwardWord);
     assert_eq!(editor.point(), punctuation.chars().count());
 
-    editor.pane_tree.focused_pane_mut().point = source.chars().count();
+    editor.pane_tree.set_focused_point(source.chars().count());
     editor.execute(Command::DeleteWordBackward);
     assert_eq!(editor.buffer_text(), punctuation);
 }
@@ -216,7 +216,7 @@ fn word_commands_treat_decomposed_graphemes_as_atomic_word_text() {
     editor.execute(Command::BackwardWord);
     assert_eq!(editor.point(), 1);
 
-    editor.pane_tree.focused_pane_mut().point = source.chars().count();
+    editor.pane_tree.set_focused_point(source.chars().count());
     editor.execute(Command::DeleteWordBackward);
     assert_eq!(editor.buffer_text(), "!");
     assert_eq!(editor.point(), 1);
@@ -227,7 +227,7 @@ fn word_commands_treat_decomposed_graphemes_as_atomic_word_text() {
 #[test]
 fn delete_word_backward_basic() {
     let mut editor = Editor::new_with_text("hello world");
-    editor.pane_tree.focused_pane_mut().point = 11;
+    editor.pane_tree.set_focused_point(11);
     editor.execute(Command::DeleteWordBackward);
     assert_eq!(editor.buffer_text(), "hello ");
     assert_eq!(editor.point(), 6);
@@ -236,7 +236,7 @@ fn delete_word_backward_basic() {
 #[test]
 fn delete_word_backward_with_spaces() {
     let mut editor = Editor::new_with_text("hello   world");
-    editor.pane_tree.focused_pane_mut().point = 13;
+    editor.pane_tree.set_focused_point(13);
     editor.execute(Command::DeleteWordBackward);
     assert_eq!(editor.buffer_text(), "hello   ");
     assert_eq!(editor.point(), 8);

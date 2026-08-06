@@ -29,7 +29,7 @@ pub fn render(
 
     for (path, rect) in &pane_rects {
         let pane = editor.pane_tree.pane_at_focus_path(path);
-        let buf = editor.buffer_by_id(pane.buffer_id);
+        let buf = editor.buffer_by_id(pane.buffer_id());
         let is_focused = path.as_slice() == focus_path;
 
         // Split each pane rect into text area + mode line
@@ -48,9 +48,9 @@ pub fn render(
         let region = if is_focused {
             editor.region()
         } else {
-            pane.mark.map(|mark| {
-                let start = pane.point.min(mark);
-                let end = pane.point.max(mark);
+            pane.mark().map(|mark| {
+                let start = pane.point().min(mark);
+                let end = pane.point().max(mark);
                 (start, end)
             })
         };
@@ -92,7 +92,7 @@ pub fn render(
 
         // Set cursor position for the focused pane
         if is_focused && !editor.minibuffer.is_active() {
-            let (cursor_line, cursor_col) = buf.char_to_line_col(pane.point);
+            let (cursor_line, cursor_col) = buf.char_to_line_col(pane.point());
             let text_width = text_area.width as usize;
             let row_offset = clamped_row_offset(pane, buf, text_width);
 
@@ -101,7 +101,7 @@ pub fn render(
             // Only place cursor if it's within the visible viewport.
             let mut visual_row: usize = 0;
             let max_rows = text_area.height as usize + row_offset;
-            for lidx in pane.scroll_top..cursor_line {
+            for lidx in pane.scroll_top()..cursor_line {
                 let line_visual_width = line_visual_width(buf, lidx);
                 visual_row += visual_lines_for_length(line_visual_width, text_width);
                 if visual_row >= max_rows {
@@ -122,7 +122,7 @@ pub fn render(
             // off; a cursor row before them is above the viewport. Both
             // coordinates are pane-relative; compare against the pane's
             // dimensions, not its absolute right edge.
-            if cursor_line >= pane.scroll_top {
+            if cursor_line >= pane.scroll_top() {
                 if let Some(screen_line) = visual_row.checked_sub(row_offset) {
                     if screen_col < text_area.width && screen_line < text_area.height as usize {
                         frame.set_cursor_position((
@@ -179,7 +179,7 @@ fn render_pane_text(
     area: Rect,
     syntax_worker: &SyntaxWorker,
 ) {
-    let scroll_top = pane.scroll_top;
+    let scroll_top = pane.scroll_top();
     let max_visual_rows = area.height as usize;
     let total_lines = buf.line_count();
     let text_width = area.width as usize;
@@ -402,7 +402,7 @@ fn render_pane_mode_line(
     pending_input: PendingInput<'_>,
     area: Rect,
 ) {
-    let (line, col) = buf.char_to_line_col(pane.point);
+    let (line, col) = buf.char_to_line_col(pane.point());
 
     let modified_indicator = if buf.is_modified() { "**" } else { "--" };
     let name = buf.name();
@@ -734,7 +734,7 @@ mod tests {
             .minibuffer
             .start_prompt(crate::minibuffer::PromptKind::FindFile, label);
         editor.minibuffer_buffer.reset_transient_text(input);
-        editor.minibuffer_pane.point = point;
+        editor.minibuffer_pane.set_point(point);
         editor
     }
 
@@ -820,7 +820,7 @@ mod tests {
         );
 
         editor.minibuffer_buffer.reset_transient_text("a");
-        editor.minibuffer_pane.point = 1;
+        editor.minibuffer_pane.set_point(1);
         assert_eq!(
             screen_layout(&editor, Rect::new(0, 0, 6, 9))
                 .minibuffer_area

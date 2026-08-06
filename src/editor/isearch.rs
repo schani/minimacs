@@ -52,9 +52,9 @@ impl Editor {
             return;
         }
         let pane = self.pane_tree.focused_pane();
-        let original_point = pane.point;
-        let original_scroll_top = pane.scroll_top;
-        let original_scroll_row_offset = pane.scroll_row_offset;
+        let original_point = pane.point();
+        let original_scroll_top = pane.scroll_top();
+        let original_scroll_row_offset = pane.scroll_row_offset();
         let text_snapshot = self.current_buffer().text().to_string();
         self.isearch = Some(ISearchState {
             query: String::new(),
@@ -111,7 +111,7 @@ impl Editor {
 
     /// Move point to an isearch match and scroll it into view.
     fn isearch_goto_match(&mut self, char_pos: usize) {
-        self.pane_tree.focused_pane_mut().point = char_pos;
+        self.pane_tree.set_focused_point(char_pos);
         if let Some(ref mut isearch) = self.isearch {
             isearch.current_match = Some(char_pos);
         }
@@ -128,10 +128,11 @@ impl Editor {
         if query.is_empty() {
             // Restore to original position
             if let Some(ref isearch) = self.isearch {
-                let pane = self.pane_tree.focused_pane_mut();
-                pane.point = isearch.original_point;
-                pane.scroll_top = isearch.original_scroll_top;
-                pane.scroll_row_offset = isearch.original_scroll_row_offset;
+                self.pane_tree.restore_focused_view(
+                    isearch.original_point,
+                    isearch.original_scroll_top,
+                    isearch.original_scroll_row_offset,
+                );
             }
             if let Some(ref mut isearch) = self.isearch {
                 isearch.current_match = None;
@@ -176,7 +177,8 @@ impl Editor {
         };
         isearch.query = query;
         self.minibuffer_buffer.reset_transient_text(&isearch.query);
-        self.minibuffer_pane.point = isearch.query.chars().count();
+        self.minibuffer_pane
+            .set_point(isearch.query.chars().count());
         self.isearch_update();
     }
 
@@ -229,7 +231,7 @@ impl Editor {
     pub fn isearch_next(&mut self) {
         let found = match &self.isearch {
             Some(s) if !s.query.is_empty() => {
-                let current_point = self.pane_tree.focused_pane().point;
+                let current_point = self.pane_tree.focused_pane().point();
                 let query_len = s.query.chars().count();
                 match s.direction {
                     SearchDirection::Forward => {

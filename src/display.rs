@@ -98,11 +98,11 @@ pub(crate) fn visual_row_col_in_line(
 /// how the `scroll_top` line wraps; every consumer (renderer, cursor
 /// placement, mouse mapping) clamps through this so they agree.
 pub(crate) fn clamped_row_offset(pane: &Pane, buf: &Buffer, text_width: usize) -> usize {
-    if pane.scroll_row_offset == 0 || pane.scroll_top >= buf.line_count() {
+    if pane.scroll_row_offset() == 0 || pane.scroll_top() >= buf.line_count() {
         return 0;
     }
-    let top_rows = visual_lines_for_length(line_visual_width(buf, pane.scroll_top), text_width);
-    pane.scroll_row_offset.min(top_rows - 1)
+    let top_rows = visual_lines_for_length(line_visual_width(buf, pane.scroll_top()), text_width);
+    pane.scroll_row_offset().min(top_rows - 1)
 }
 
 #[cfg(test)]

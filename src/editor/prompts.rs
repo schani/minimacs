@@ -28,10 +28,10 @@ impl Editor {
     /// scroll), leaving any active prompt untouched.
     fn set_minibuffer_input(&mut self, input: &str) {
         self.minibuffer_buffer.reset_transient_text(input);
-        self.minibuffer_pane.point = input.chars().count();
-        self.minibuffer_pane.mark = None;
-        self.minibuffer_pane.scroll_top = 0;
-        self.minibuffer_pane.preferred_column = None;
+        self.minibuffer_pane.set_point(input.chars().count());
+        self.minibuffer_pane.set_mark(None);
+        self.minibuffer_pane.set_scroll_position(0, 0);
+        self.minibuffer_pane.set_preferred_column(None);
     }
 
     /// Start a minibuffer prompt with initial text. No-op if already active.
@@ -192,7 +192,7 @@ impl Editor {
                     Ok(line_num) if line_num > 0 => {
                         let target_line = line_num - 1;
                         let char_pos = self.current_buffer().line_col_to_char(target_line, 0);
-                        self.pane_tree.focused_pane_mut().point = char_pos;
+                        self.pane_tree.set_focused_point(char_pos);
                     }
                     _ => self
                         .minibuffer

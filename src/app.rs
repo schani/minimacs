@@ -174,7 +174,7 @@ where
             let text_width = rect.width as usize;
             let pane = self.editor.pane_tree.pane_at_focus_path(path);
             dimensions_changed |=
-                pane.viewport_height != text_height || pane.viewport_width != text_width;
+                pane.viewport_height() != text_height || pane.viewport_width() != text_width;
             self.editor
                 .pane_tree
                 .update_pane_viewport(path, text_height, text_width);
@@ -182,10 +182,11 @@ where
 
         let minibuffer_width = layout.minibuffer_area.width as usize;
         let minibuffer_height = layout.minibuffer_area.height as usize;
-        dimensions_changed |= self.editor.minibuffer_pane.viewport_width != minibuffer_width
-            || self.editor.minibuffer_pane.viewport_height != minibuffer_height;
-        self.editor.minibuffer_pane.viewport_width = minibuffer_width;
-        self.editor.minibuffer_pane.viewport_height = minibuffer_height;
+        dimensions_changed |= self.editor.minibuffer_pane.viewport_width() != minibuffer_width
+            || self.editor.minibuffer_pane.viewport_height() != minibuffer_height;
+        self.editor
+            .minibuffer_pane
+            .set_viewport(minibuffer_height, minibuffer_width);
 
         // Reflow can move point below the viewport even though no editing
         // command ran. Apply every new dimension first, then reveal the

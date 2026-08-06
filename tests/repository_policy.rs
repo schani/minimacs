@@ -288,6 +288,18 @@ fn buffer_state_fields_are_private() {
 }
 
 #[test]
+fn pane_state_fields_are_private() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let contents = std::fs::read_to_string(root.join("src/pane.rs")).unwrap();
+    let fields = public_aggregate_fields(&contents, vec!["Pane", "PaneTree"]).unwrap();
+
+    assert!(
+        fields.is_empty(),
+        "Pane and PaneTree mutation-sensitive fields must be private; found {fields:?}"
+    );
+}
+
+#[test]
 fn editor_render_policy_ignores_comments_and_detects_real_dependencies() {
     let dependencies = render_dependencies(
         r#"

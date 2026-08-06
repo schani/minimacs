@@ -308,30 +308,16 @@ cursor, mark, scroll position, viewport dimensions, and remembered per-buffer
 view state. This matches emacs behavior where each window has independent state
 into a shared buffer.
 
-```rust
-struct Pane {
-    buffer_id: BufferId,
-    point: usize,
-    mark: Option<usize>,
-    preferred_column: Option<usize>,
-    scroll_top: usize,        // first (partially) visible buffer line
-    scroll_row_offset: usize, // visual rows of that line scrolled off above
-    viewport_height: usize,
-    viewport_width: usize,
-    last_buffer_id: Option<BufferId>,
-    buffer_states: HashMap<BufferId, BufferViewState>,
-}
-
-enum PaneNode {
-    Leaf(Pane),
-    Split { direction: Direction, children: Vec<PaneNode> },
-}
-
-struct PaneTree {
-    root: PaneNode,
-    focus_path: Vec<usize>,  // indices from root to focused leaf
-}
-```
+`Pane` keeps its buffer identity, point/mark, preferred column, scroll
+position, viewport, alternate buffer, and saved per-buffer views private.
+Immutable accessors supply rendering and geometry. Point/mark movement,
+viewport changes, buffer switching, scroll changes, and edit adjustment are
+explicit transitions. `PaneTree` privately owns both its root and focus path;
+it exposes immutable focused/path queries plus layout results, while focus,
+split/delete, scrolling, viewport updates, buffer replacement, and multi-pane
+edit adjustment stay tree-owned intents. In particular, no module outside
+`pane.rs` receives `&mut Pane`; tree-wide changes traverse private leaves
+inside that module.
 
 The scroll position is sub-line granular: `scroll_top` is the first buffer
 line with any visible content, and `scroll_row_offset` is how many visual rows

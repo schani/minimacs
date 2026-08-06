@@ -180,18 +180,18 @@ fn large_multiline_bracketed_paste_keeps_cursor_visible_and_resets_goal_column()
         .collect::<Vec<_>>()
         .join("\n");
     let (mut app, _) = test_app(20, 6, vec![]);
-    app.editor.pane_tree.focused_pane_mut().preferred_column = Some(17);
+    app.editor.pane_tree.set_focused_preferred_column(Some(17));
     let mut events = TestEventSource::new(vec![Event::Paste(pasted)]);
     app.run_until_idle(&mut events).unwrap();
 
     let pane = app.editor.pane_tree.focused_pane();
-    let (cursor_line, _) = app.editor.current_buffer().char_to_line_col(pane.point);
+    let (cursor_line, _) = app.editor.current_buffer().char_to_line_col(pane.point());
     assert_eq!(cursor_line, 39);
     assert!(
-        pane.scroll_top > 0,
+        pane.scroll_top() > 0,
         "large paste must reveal its final line"
     );
-    assert_eq!(pane.preferred_column, None);
+    assert_eq!(pane.preferred_column(), None);
     let screen = capture_screen(&app.terminal);
     assert!(screen.contains("line 39"), "screen: {screen}");
 }
@@ -209,18 +209,18 @@ fn resize_event_handled() {
 fn resize_applies_new_viewport_before_revealing_cursor() {
     let text = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
     let (mut app, mut events) = test_app_with_text(20, 6, text, vec![]);
-    app.editor.pane_tree.focused_pane_mut().point = text.chars().count();
+    app.editor.pane_tree.set_focused_point(text.chars().count());
     app.run_until_idle(&mut events).unwrap();
-    assert_eq!(app.editor.pane_tree.focused_pane().scroll_row_offset, 0);
+    assert_eq!(app.editor.pane_tree.focused_pane().scroll_row_offset(), 0);
 
     app.terminal.backend_mut().resize(8, 6);
     let mut events = TestEventSource::new(vec![Event::Resize(8, 6)]);
     app.run_until_idle(&mut events).unwrap();
 
     let pane = app.editor.pane_tree.focused_pane();
-    assert_eq!(pane.viewport_width, 8);
+    assert_eq!(pane.viewport_width(), 8);
     assert!(
-        pane.scroll_row_offset > 0,
+        pane.scroll_row_offset() > 0,
         "cursor must be reflowed into the narrower viewport"
     );
     let cursor = app.terminal.get_cursor_position().unwrap();

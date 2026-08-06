@@ -143,14 +143,14 @@ impl Editor {
                 Ok(()) => {
                     opened += 1;
                     if first_buffer_id.is_none() {
-                        first_buffer_id = Some(self.pane_tree.focused_pane().buffer_id);
+                        first_buffer_id = Some(self.pane_tree.focused_pane().buffer_id());
                     }
                 }
                 Err(e) => last_error = Some(format!("{}: {e}", path.display())),
             }
         }
         if let Some(id) = first_buffer_id {
-            if self.pane_tree.focused_pane().buffer_id != id {
+            if self.pane_tree.focused_pane().buffer_id() != id {
                 self.switch_focused_pane_to_buffer(id);
             }
         }
@@ -213,9 +213,7 @@ impl Editor {
 
     fn switch_focused_pane_to_buffer(&mut self, buffer_id: usize) {
         let buffer_len = self.buffer_by_id(buffer_id).char_count();
-        self.pane_tree
-            .focused_pane_mut()
-            .switch_buffer(buffer_id, buffer_len);
+        self.pane_tree.switch_focused_buffer(buffer_id, buffer_len);
     }
 
     pub(super) fn switch_to_buffer(&mut self, name: &str) {
@@ -240,7 +238,7 @@ impl Editor {
         if self.minibuffer.is_active() {
             return;
         }
-        let buffer_id = self.pane_tree.focused_pane().buffer_id;
+        let buffer_id = self.pane_tree.focused_pane().buffer_id();
         let is_modified = self.current_buffer().is_modified();
         let name = self.current_buffer().name().to_string();
 
@@ -270,12 +268,8 @@ impl Editor {
         let new_buffer_len = self.buffer_by_id(new_id).char_count();
 
         // Update all panes that referenced the killed buffer.
-        self.pane_tree.for_each_pane_mut(&mut |pane| {
-            pane.forget_buffer(buffer_id);
-            if pane.buffer_id == buffer_id {
-                pane.restore_buffer_state(new_id, new_buffer_len);
-            }
-        });
+        self.pane_tree
+            .replace_killed_buffer(buffer_id, new_id, new_buffer_len);
     }
 
     // === File operations ===

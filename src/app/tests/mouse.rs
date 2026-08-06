@@ -40,7 +40,7 @@ fn quit_save_after_mouse_focus_marks_saved_undo_version_clean() {
     assert!(!app.editor.should_quit, "q cancels while handling B");
     assert_eq!(std::fs::read_to_string(&file_a).unwrap(), "Aaaa");
     assert_eq!(
-        app.editor.current_buffer().path().as_deref(),
+        app.editor.current_buffer().path(),
         Some(std::fs::canonicalize(&file_a).unwrap().as_path())
     );
     assert_eq!(
@@ -81,12 +81,14 @@ fn mouse_scroll_in_grown_prompt_or_completions_does_not_scroll_pane() {
     app.editor
         .minibuffer_buffer
         .reset_transient_text("a/very/long/prompt/value");
-    app.editor.minibuffer_pane.point = app.editor.minibuffer_buffer.char_count();
+    app.editor
+        .minibuffer_pane
+        .set_point(app.editor.minibuffer_buffer.char_count());
     app.editor.minibuffer.completions = Some(vec!["alpha".into(), "alpine".into()]);
     let mut events = TestEventSource::new(vec![mouse_scroll_down(2, 8)]);
     app.run_until_idle(&mut events).unwrap();
 
-    assert_eq!(app.editor.pane_tree.focused_pane().scroll_top, 0);
+    assert_eq!(app.editor.pane_tree.focused_pane().scroll_top(), 0);
 }
 
 #[test]
@@ -278,7 +280,7 @@ fn mouse_click_ignored_when_minibuffer_active() {
     // Minibuffer should still be active
     assert!(app.editor.minibuffer.is_active());
     // Cursor should not have moved (still at 0 since we were in the minibuffer)
-    assert_eq!(app.editor.pane_tree.focused_pane().point, 0);
+    assert_eq!(app.editor.pane_tree.focused_pane().point(), 0);
 }
 
 #[test]
@@ -318,7 +320,7 @@ fn mouse_scroll_down_scrolls_pane() {
     app.run_until_idle(&mut events).unwrap();
 
     // scroll_top should have advanced (3 scroll events * 3 lines each = 9)
-    assert_eq!(app.editor.pane_tree.focused_pane().scroll_top, 9);
+    assert_eq!(app.editor.pane_tree.focused_pane().scroll_top(), 9);
 }
 
 #[test]
@@ -337,7 +339,7 @@ fn mouse_scroll_up_scrolls_pane() {
     app.run_until_idle(&mut events).unwrap();
 
     // 2 down (6 lines) - 1 up (3 lines) = 3
-    assert_eq!(app.editor.pane_tree.focused_pane().scroll_top, 3);
+    assert_eq!(app.editor.pane_tree.focused_pane().scroll_top(), 3);
 }
 
 #[test]
@@ -363,7 +365,7 @@ fn mouse_scroll_down_hides_cursor_when_point_above_viewport() {
     app.run_until_idle(&mut events).unwrap();
 
     // scroll_top=9, point is at line 5 — cursor is above the viewport
-    assert_eq!(app.editor.pane_tree.focused_pane().scroll_top, 9);
+    assert_eq!(app.editor.pane_tree.focused_pane().scroll_top(), 9);
     let (cursor_line, _) = app
         .editor
         .current_buffer()
@@ -410,7 +412,7 @@ fn mouse_scroll_does_not_change_focus() {
     // But the second pane should have scrolled
     let second_pane = app.editor.pane_tree.pane_at_focus_path(&[1]);
     assert!(
-        second_pane.scroll_top > 0,
+        second_pane.scroll_top() > 0,
         "second pane should have scrolled"
     );
 }

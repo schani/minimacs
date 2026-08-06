@@ -81,7 +81,7 @@ fn minibuffer_content(editor: &Editor) -> (String, Option<usize>) {
     let label = terminal_safe_text(&prompt.label);
     let point_byte = input
         .char_indices()
-        .nth(editor.minibuffer_pane.point)
+        .nth(editor.minibuffer_pane.point())
         .map_or(input.len(), |(byte, _)| byte);
     let mut text = String::with_capacity(label.len() + input.len());
     text.push_str(&label);

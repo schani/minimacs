@@ -10,7 +10,7 @@ fn mark_stays_valid_through_undo() {
     editor.execute(Command::Undo); // back to "hello"
     let pane = editor.pane_tree.focused_pane();
     let len = editor.current_buffer().char_count();
-    assert!(pane.mark.unwrap() <= len, "mark out of bounds after undo");
+    assert!(pane.mark().unwrap() <= len, "mark out of bounds after undo");
     // Region operations on the surviving mark must not panic.
     editor.execute(Command::Copy);
 }
@@ -30,7 +30,7 @@ fn forward_char_moves_over_combining_cluster() {
 #[test]
 fn backward_char_moves_over_combining_cluster() {
     let mut editor = Editor::new_with_text("ae\u{301}b");
-    editor.pane_tree.focused_pane_mut().point = 3;
+    editor.pane_tree.set_focused_point(3);
     editor.execute(Command::BackwardChar);
     assert_eq!(editor.point(), 1);
 }
@@ -38,7 +38,7 @@ fn backward_char_moves_over_combining_cluster() {
 #[test]
 fn delete_backward_removes_whole_combining_cluster() {
     let mut editor = Editor::new_with_text("ae\u{301}b");
-    editor.pane_tree.focused_pane_mut().point = 3;
+    editor.pane_tree.set_focused_point(3);
     editor.execute(Command::DeleteBackward);
     assert_eq!(editor.buffer_text(), "ab");
     assert_eq!(editor.point(), 1);
@@ -47,7 +47,7 @@ fn delete_backward_removes_whole_combining_cluster() {
 #[test]
 fn delete_forward_removes_whole_combining_cluster() {
     let mut editor = Editor::new_with_text("ae\u{301}b");
-    editor.pane_tree.focused_pane_mut().point = 1;
+    editor.pane_tree.set_focused_point(1);
     editor.execute(Command::DeleteForward);
     assert_eq!(editor.buffer_text(), "ab");
     assert_eq!(editor.point(), 1);
@@ -72,7 +72,7 @@ fn forward_char_moves_over_emoji_zwj_sequence() {
 #[test]
 fn next_line_snaps_point_to_cluster_start() {
     let mut editor = Editor::new_with_text("ab\nxe\u{301}z");
-    editor.pane_tree.focused_pane_mut().point = 2; // line 0, col 2
+    editor.pane_tree.set_focused_point(2); // line 0, col 2
     editor.execute(Command::NextLine);
     assert_eq!(
         editor.point(),
@@ -87,7 +87,7 @@ fn next_line_snaps_point_to_cluster_start() {
 #[test]
 fn next_line_snap_keeps_backspace_cluster_safe() {
     let mut editor = Editor::new_with_text("ab\nxe\u{301}z");
-    editor.pane_tree.focused_pane_mut().point = 2;
+    editor.pane_tree.set_focused_point(2);
     editor.execute(Command::NextLine);
     // Backspace at the snapped point deletes the whole preceding grapheme;
     // unsnapped (point 5) it would delete just "e" and orphan the mark.
@@ -100,7 +100,7 @@ fn next_line_snap_keeps_backspace_cluster_safe() {
 fn previous_line_snaps_point_to_cluster_start() {
     // "xe\u{301}z\nab": x(0) e(1) acute(2) z(3) \n(4) a(5) b(6)
     let mut editor = Editor::new_with_text("xe\u{301}z\nab");
-    editor.pane_tree.focused_pane_mut().point = 7; // line 1, col 2
+    editor.pane_tree.set_focused_point(7); // line 1, col 2
     editor.execute(Command::PreviousLine);
     assert_eq!(editor.point(), 1, "point must snap to the cluster start");
 }
@@ -108,7 +108,7 @@ fn previous_line_snaps_point_to_cluster_start() {
 #[test]
 fn page_down_snaps_point_to_cluster_start() {
     let mut editor = Editor::new_with_text("ab\nxe\u{301}z");
-    editor.pane_tree.focused_pane_mut().point = 2;
+    editor.pane_tree.set_focused_point(2);
     editor.execute(Command::PageDown);
     assert_eq!(editor.point(), 4);
 }
@@ -116,7 +116,7 @@ fn page_down_snaps_point_to_cluster_start() {
 #[test]
 fn page_up_snaps_point_to_cluster_start() {
     let mut editor = Editor::new_with_text("xe\u{301}z\nab");
-    editor.pane_tree.focused_pane_mut().point = 7;
+    editor.pane_tree.set_focused_point(7);
     editor.execute(Command::PageUp);
     assert_eq!(editor.point(), 1);
 }
@@ -127,7 +127,7 @@ fn next_line_snaps_out_of_emoji_zwj_sequence() {
     // emoji is one cluster spanning chars 1..6 of the line.
     let text = "ab\nx\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}z";
     let mut editor = Editor::new_with_text(text);
-    editor.pane_tree.focused_pane_mut().point = 2; // line 0, col 2
+    editor.pane_tree.set_focused_point(2); // line 0, col 2
     editor.execute(Command::NextLine);
     assert_eq!(
         editor.point(),
@@ -142,7 +142,7 @@ fn snap_does_not_corrupt_preferred_column() {
     // on the middle line (snapped to col 1); moving on and back down must
     // restore the ORIGINAL column 2, not the snapped one.
     let mut editor = Editor::new_with_text("ab\nxe\u{301}z\nabcd");
-    editor.pane_tree.focused_pane_mut().point = 10; // line 2, col 2
+    editor.pane_tree.set_focused_point(10); // line 2, col 2
     editor.execute(Command::PreviousLine);
     assert_eq!(editor.point(), 4, "snapped to cluster start on line 1");
     editor.execute(Command::PreviousLine);
@@ -209,7 +209,7 @@ fn end_of_line_goes_past_unicode_line_separator() {
 #[test]
 fn kill_line_kills_through_unicode_line_separator() {
     let mut editor = Editor::new_with_text("ab\u{2028}cd");
-    editor.pane_tree.focused_pane_mut().point = 2;
+    editor.pane_tree.set_focused_point(2);
     editor.execute(Command::KillLine);
     assert_eq!(editor.buffer_text(), "ab");
     assert_eq!(editor.clipboard, "\u{2028}cd");
@@ -219,7 +219,7 @@ fn kill_line_kills_through_unicode_line_separator() {
 fn next_line_clamps_column_counting_form_feed_as_content() {
     // Line 1 is "ab\u{0c}x" — four chars, the FF included.
     let mut editor = Editor::new_with_text("hello\nab\u{0c}x");
-    editor.pane_tree.focused_pane_mut().point = 4;
+    editor.pane_tree.set_focused_point(4);
     editor.execute(Command::NextLine);
     assert_eq!(editor.point(), 10, "col 4 exists; the FF counts");
 }
