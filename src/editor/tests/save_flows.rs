@@ -29,14 +29,14 @@ fn save_success_reports_wrote_and_clears_modified() {
     let mut editor = Editor::new();
     editor.open_file(&file).unwrap();
     editor.execute(Command::InsertChar('X'));
-    assert!(editor.current_buffer().modified);
+    assert!(editor.current_buffer().is_modified());
 
     editor.execute(Command::Save);
     assert_eq!(
         editor.minibuffer.message,
         Some("Wrote test.txt".to_string())
     );
-    assert!(!editor.current_buffer().modified);
+    assert!(!editor.current_buffer().is_modified());
 }
 
 #[test]
@@ -58,7 +58,7 @@ fn save_error_reports_message_and_keeps_modified() {
         message.starts_with("Error saving:"),
         "got message: {message}"
     );
-    assert!(editor.current_buffer().modified);
+    assert!(editor.current_buffer().is_modified());
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "original");
 }
 
@@ -85,7 +85,7 @@ fn save_anyway_confirm_yes_reports_wrote_and_clears_modified() {
         editor.minibuffer.message,
         Some("Wrote test.txt".to_string())
     );
-    assert!(!editor.current_buffer().modified);
+    assert!(!editor.current_buffer().is_modified());
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "Xoriginal");
 }
 
@@ -115,7 +115,7 @@ fn save_anyway_confirm_yes_reports_error_when_save_fails() {
         message.starts_with("Error saving:"),
         "got message: {message}"
     );
-    assert!(editor.current_buffer().modified);
+    assert!(editor.current_buffer().is_modified());
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "original");
 }
 
@@ -126,7 +126,7 @@ fn write_file_success_reports_wrote_and_updates_identity() {
 
     let mut editor = Editor::new();
     editor.execute(Command::InsertChar('x'));
-    assert!(editor.current_buffer().modified);
+    assert!(editor.current_buffer().is_modified());
 
     editor.execute(Command::WriteFile);
     editor.set_minibuffer_text(&target.to_string_lossy());
@@ -136,10 +136,10 @@ fn write_file_success_reports_wrote_and_updates_identity() {
         editor.minibuffer.message,
         Some("Wrote output.txt".to_string())
     );
-    assert!(!editor.current_buffer().modified);
-    assert_eq!(editor.current_buffer().name, "output.txt");
+    assert!(!editor.current_buffer().is_modified());
+    assert_eq!(editor.current_buffer().name(), "output.txt");
     assert_eq!(
-        editor.current_buffer().path.as_deref(),
+        editor.current_buffer().path().as_deref(),
         Some(target.as_path())
     );
     assert_eq!(std::fs::read_to_string(&target).unwrap(), "x");
@@ -161,7 +161,7 @@ fn write_file_failure_reports_error_message() {
         message.starts_with("Error saving:"),
         "got message: {message}"
     );
-    assert!(editor.current_buffer().modified);
+    assert!(editor.current_buffer().is_modified());
 }
 
 #[test]
@@ -183,7 +183,7 @@ fn overwrite_confirm_yes_reports_wrote_and_clears_modified() {
         editor.minibuffer.message,
         Some("Wrote target.txt".to_string())
     );
-    assert!(!editor.current_buffer().modified);
+    assert!(!editor.current_buffer().is_modified());
     assert_eq!(std::fs::read_to_string(&target).unwrap(), "x");
 }
 
@@ -244,7 +244,7 @@ fn quit_save_confirm_yes_saves_clears_modified_and_continues_quit() {
     editor.submit_prompt();
 
     assert!(editor.should_quit);
-    assert!(!editor.current_buffer().modified);
+    assert!(!editor.current_buffer().is_modified());
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "Xoriginal");
 }
 
@@ -263,9 +263,9 @@ fn open_files_opens_all_and_focuses_the_first() {
 
     // All files became buffers, in argument order (after the scratch buffer),
     // reachable via C-x b; the FIRST file is the one displayed.
-    let names: Vec<&str> = editor.buffers.iter().map(|b| b.name.as_str()).collect();
+    let names: Vec<&str> = editor.buffers.iter().map(|b| b.name()).collect();
     assert_eq!(names, ["*scratch*", "a.txt", "b.txt", "c.txt"]);
-    assert_eq!(editor.current_buffer().name, "a.txt");
+    assert_eq!(editor.current_buffer().name(), "a.txt");
     assert_eq!(editor.minibuffer.message.as_deref(), Some("Opened 3 files"));
 }
 
@@ -278,7 +278,7 @@ fn open_files_single_file_keeps_the_plain_opened_message() {
     let mut editor = Editor::new();
     editor.open_files(&[a]);
 
-    assert_eq!(editor.current_buffer().name, "a.txt");
+    assert_eq!(editor.current_buffer().name(), "a.txt");
     assert_eq!(editor.minibuffer.message.as_deref(), Some("Opened a.txt"));
 }
 
@@ -294,7 +294,7 @@ fn open_files_failed_path_opens_the_rest_and_keeps_the_error_visible() {
     // The empty path fails (see open_file_empty_path_errors) but the later
     // file still opens and is focused (it is the first successful open);
     // the error message is not papered over by an "Opened N files" summary.
-    assert_eq!(editor.current_buffer().name, "b.txt");
+    assert_eq!(editor.current_buffer().name(), "b.txt");
     let message = editor.minibuffer.message.clone().unwrap();
     assert!(message.contains("empty file path"), "got: {message}");
 }

@@ -141,7 +141,7 @@ fn unbound_key_after_prefix_does_not_self_insert() {
     app.run_until_idle(&mut events).unwrap();
     // The dead-end chord must not insert a literal 'j' or modify the buffer.
     assert_eq!(app.editor.buffer_text(), "");
-    assert!(!app.editor.current_buffer().modified);
+    assert!(!app.editor.current_buffer().is_modified());
     // The user gets feedback instead.
     let screen = capture_screen(&app.terminal);
     assert!(screen.contains("C-x j is undefined"), "screen: {screen}");

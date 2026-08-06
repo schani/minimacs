@@ -21,7 +21,7 @@ fn benchmark_five_megabyte_single_line() {
     assert!(!text.contains('\n'));
 
     let (mut app, mut events) = test_app_with_text(120, 40, &text, vec![]);
-    app.editor.buffers[0].syntax = crate::syntax::SyntaxState::new(crate::syntax::Language::Json);
+    app.editor.buffers[0].enable_syntax(crate::syntax::Language::Json);
     let cold_start = Instant::now();
     app.run_until_idle(&mut events).unwrap();
     let cold_start = cold_start.elapsed();
@@ -744,7 +744,7 @@ fn lone_cr_is_content_and_renders_on_one_row() {
 fn terminal_control_sequences_are_rendered_as_visible_text() {
     let payload = "safe\u{1b}]52;c;clipboard\u{7}tail\u{85}";
     let (mut app, mut events) = test_app_with_text(80, 6, payload, vec![]);
-    app.editor.buffers[0].name = "name\u{1b}]0;owned\u{7}.txt".to_string();
+    app.editor.buffers[0].rename("name\u{1b}]0;owned\u{7}.txt".to_string());
 
     app.run_until_idle(&mut events).unwrap();
 

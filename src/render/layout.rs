@@ -77,7 +77,7 @@ fn minibuffer_content(editor: &Editor) -> (String, Option<usize>) {
         );
     };
 
-    let input = terminal_safe_text(&editor.minibuffer_buffer.text.to_string());
+    let input = terminal_safe_text(&editor.minibuffer_buffer.text().to_string());
     let label = terminal_safe_text(&prompt.label);
     let point_byte = input
         .char_indices()

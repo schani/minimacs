@@ -177,7 +177,7 @@ impl Editor {
         let bid = self.pane_tree.focused_pane().buffer_id;
         self.buffers
             .iter()
-            .find(|b| b.id == bid)
+            .find(|b| b.id() == bid)
             .expect("current buffer must exist")
     }
 
@@ -185,7 +185,7 @@ impl Editor {
         let bid = self.pane_tree.focused_pane().buffer_id;
         self.buffers
             .iter_mut()
-            .find(|b| b.id == bid)
+            .find(|b| b.id() == bid)
             .expect("current buffer must exist")
     }
 
@@ -229,13 +229,13 @@ impl Editor {
     pub fn buffer_by_id(&self, id: usize) -> &Buffer {
         self.buffers
             .iter()
-            .find(|b| b.id == id)
+            .find(|b| b.id() == id)
             .expect("buffer must exist")
     }
 
     #[cfg(test)]
     pub fn buffer_text(&self) -> String {
-        self.current_buffer().text.to_string()
+        self.current_buffer().text().to_string()
     }
 
     #[cfg(test)]
@@ -245,11 +245,11 @@ impl Editor {
 
     #[cfg(test)]
     pub fn commit_undo_group(&mut self) {
-        self.active_buffer_mut().history.commit();
+        self.active_buffer_mut().commit_history();
     }
 
     pub fn buffer_names(&self) -> Vec<String> {
-        self.buffers.iter().map(|b| b.name.clone()).collect()
+        self.buffers.iter().map(|b| b.name().to_string()).collect()
     }
 
     /// Completion lifecycle intent for ordinary minibuffer input.
@@ -270,10 +270,10 @@ impl Editor {
         self.minibuffer.set_completion_candidates(candidates);
 
         if completed != input {
-            self.minibuffer_buffer.history.commit();
+            self.minibuffer_buffer.commit_history();
             let old_len = self.minibuffer_buffer.char_count();
             self.apply_edit(0, old_len, &completed, EditRecord::Replace);
-            self.minibuffer_buffer.history.commit();
+            self.minibuffer_buffer.commit_history();
             self.minibuffer_pane.point = completed.chars().count();
             self.minibuffer.reset_completion_page();
         } else if had_completions && self.minibuffer.has_completions() {
@@ -330,7 +330,7 @@ impl Editor {
             | Command::KillLine => {}
             Command::Undo | Command::Redo => {}
             _ => {
-                self.active_buffer_mut().history.mark_action();
+                self.active_buffer_mut().mark_history_action();
             }
         }
 
@@ -489,7 +489,7 @@ impl Editor {
 
     fn grapheme_is_word(&self, start: usize, end: usize) -> bool {
         self.active_buffer()
-            .text
+            .text()
             .slice(start..end)
             .chars()
             .any(is_word_char)
@@ -713,7 +713,7 @@ impl Editor {
             let start = start.min(len);
             let end = end.min(len).max(start);
             let deleted: String = if end > start {
-                buf.text.slice(start..end).chars().collect()
+                buf.text().slice(start..end).chars().collect()
             } else {
                 String::new()
             };
@@ -724,9 +724,9 @@ impl Editor {
             let first_line = buf.char_to_line_col(start).0;
             let removed_lines = buf.char_to_line_col(end).0 - first_line;
             match record {
-                EditRecord::Insert => buf.history.record_insert(start, text),
-                EditRecord::Delete => buf.history.record_delete(start, &deleted),
-                EditRecord::Replace => buf.history.record_replace(start, &deleted, text),
+                EditRecord::Insert => buf.record_insert(start, text),
+                EditRecord::Delete => buf.record_delete(start, &deleted),
+                EditRecord::Replace => buf.record_history_replace(start, &deleted, text),
                 EditRecord::NoHistory => {}
             }
             buf.replace(start, end, text);
@@ -740,7 +740,7 @@ impl Editor {
                 removed_lines,
                 inserted_lines,
             };
-            (buf.id, delta, deleted)
+            (buf.id(), delta, deleted)
         };
 
         if buffer_id == usize::MAX {
@@ -772,7 +772,7 @@ impl Editor {
         let line_start = buf.line_col_to_char(line, 0);
         let line_len = buf.line_len_chars(line);
         let mut indent = String::new();
-        for ch in buf.text.chars_at(line_start).take(line_len) {
+        for ch in buf.text().chars_at(line_start).take(line_len) {
             if ch == ' ' {
                 indent.push(' ');
             } else if ch == '\t' {
@@ -806,7 +806,7 @@ impl Editor {
         // Get current leading whitespace
         let line_len = buf.line_len_chars(line);
         let ws_len = buf
-            .text
+            .text()
             .chars_at(line_start)
             .take(line_len)
             .take_while(|ch| *ch == ' ')
@@ -821,7 +821,7 @@ impl Editor {
             &new_ws,
             EditRecord::Replace,
         );
-        self.active_buffer_mut().history.commit();
+        self.active_buffer_mut().commit_history();
         let pane = self.active_pane_mut();
         pane.point = old_point + INDENT_WIDTH;
         pane.preferred_column = None;
@@ -838,7 +838,7 @@ impl Editor {
 
         let line_len = buf.line_len_chars(line);
         let remaining_ws_len = buf
-            .text
+            .text()
             .chars_at(line_start)
             .take(line_len)
             .take_while(|ch| *ch == ' ')
@@ -859,7 +859,7 @@ impl Editor {
             &new_ws,
             EditRecord::Replace,
         );
-        self.active_buffer_mut().history.commit();
+        self.active_buffer_mut().commit_history();
 
         let pane = self.active_pane_mut();
         // Adjust point, but don't go before line start
@@ -914,7 +914,7 @@ impl Editor {
                 buf.char_count()
             };
             let line_text: String = buf
-                .text
+                .text()
                 .slice(line_start..next_line_start)
                 .chars()
                 .collect();
@@ -936,7 +936,7 @@ impl Editor {
         }
 
         self.apply_edit(span_start, span_end, &new_text, EditRecord::Replace);
-        self.active_buffer_mut().history.commit();
+        self.active_buffer_mut().commit_history();
 
         let pane = self.active_pane_mut();
         pane.point = new_point;
@@ -982,7 +982,7 @@ impl Editor {
                 buf.char_count()
             };
             let line_text: String = buf
-                .text
+                .text()
                 .slice(line_start..next_line_start)
                 .chars()
                 .collect();
@@ -1026,7 +1026,7 @@ impl Editor {
         }
 
         self.apply_edit(span_start, span_end, &new_text, EditRecord::Replace);
-        self.active_buffer_mut().history.commit();
+        self.active_buffer_mut().commit_history();
 
         let pane = self.active_pane_mut();
         pane.point = new_point;
@@ -1078,7 +1078,7 @@ impl Editor {
                 return false;
             }
             // At EOL, kill the whole line break (one char, or two for CRLF).
-            pos + crate::buffer::line_break_len_chars(buf.text.line(line))
+            pos + crate::buffer::line_break_len_chars(buf.text().line(line))
         } else {
             buf.line_col_to_char(line, line_len)
         };
@@ -1088,7 +1088,7 @@ impl Editor {
         } else {
             self.clipboard = deleted;
         }
-        self.active_buffer_mut().history.commit();
+        self.active_buffer_mut().commit_history();
         self.set_os_clipboard(&self.clipboard.clone());
         self.active_pane_mut().preferred_column = None;
         true
@@ -1097,7 +1097,7 @@ impl Editor {
     // === Undo/Redo ===
 
     fn undo(&mut self) {
-        if let Some(group) = self.active_buffer_mut().history.undo() {
+        if let Some(group) = self.active_buffer_mut().undo() {
             for edit in group.edits.iter().rev() {
                 // Reverse the edit: replace what it inserted with what it
                 // deleted. Lengths are char counts, matching positions.
@@ -1119,7 +1119,7 @@ impl Editor {
     }
 
     fn redo(&mut self) {
-        if let Some(group) = self.active_buffer_mut().history.redo() {
+        if let Some(group) = self.active_buffer_mut().redo() {
             for edit in &group.edits {
                 // Re-apply the edit: replace what it deleted with what it
                 // inserted. Lengths are char counts, matching positions.
@@ -1173,7 +1173,7 @@ impl Editor {
     fn cut(&mut self) {
         if let Some((start, end)) = self.active_region() {
             let text = self.apply_edit(start, end, "", EditRecord::Delete);
-            self.active_buffer_mut().history.commit();
+            self.active_buffer_mut().commit_history();
             self.clipboard = text.clone();
             self.set_os_clipboard(&text);
             let pane = self.active_pane_mut();
@@ -1189,7 +1189,7 @@ impl Editor {
         if let Some((start, end)) = self.active_region() {
             let text: String = self
                 .active_buffer()
-                .text
+                .text()
                 .slice(start..end)
                 .chars()
                 .collect();
@@ -1242,7 +1242,7 @@ impl Editor {
 
         // Preserve bracketed empty-paste semantics: it is an undo boundary
         // and dismisses completions, but does not reset the goal column.
-        self.active_buffer_mut().history.commit();
+        self.active_buffer_mut().commit_history();
         let text = self.normalized_paste(text);
         if !text.is_empty() {
             let pos = self.active_pane().point;
@@ -1250,7 +1250,7 @@ impl Editor {
             self.active_pane_mut().point = pos + text.chars().count();
             self.active_pane_mut().preferred_column = None;
         }
-        self.active_buffer_mut().history.commit();
+        self.active_buffer_mut().commit_history();
         self.ensure_cursor_visible();
     }
 

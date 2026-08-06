@@ -96,7 +96,9 @@ fn minibuffer_grows_upward_and_moves_cursor_to_wrapped_row() {
     app.editor
         .minibuffer
         .start_prompt(crate::minibuffer::PromptKind::FindFile, "I: ");
-    app.editor.minibuffer_buffer.text = ropey::Rope::from_str("abcdefghi");
+    app.editor
+        .minibuffer_buffer
+        .reset_transient_text("abcdefghi");
     app.editor.minibuffer_pane.point = 9;
 
     app.update_viewport();

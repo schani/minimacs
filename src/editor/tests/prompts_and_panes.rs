@@ -71,7 +71,9 @@ fn paste_stays_lf_in_crlf_buffer() {
     // The rope is LF-only regardless of the buffer's save-time line
     // ending; CRLF is produced at save, never stored.
     let mut editor = Editor::new();
-    editor.current_buffer_mut().line_ending = crate::buffer::LineEnding::CrLf;
+    editor
+        .current_buffer_mut()
+        .set_line_ending_for_test(crate::buffer::LineEnding::CrLf);
     editor.clipboard = "a\r\nb".to_string();
     editor.execute(Command::Paste);
     assert_eq!(editor.buffer_text(), "a\nb");
@@ -81,7 +83,9 @@ fn paste_stays_lf_in_crlf_buffer() {
 #[test]
 fn insert_newline_inserts_lf_in_crlf_buffer() {
     let mut editor = Editor::new_with_text("ab");
-    editor.current_buffer_mut().line_ending = crate::buffer::LineEnding::CrLf;
+    editor
+        .current_buffer_mut()
+        .set_line_ending_for_test(crate::buffer::LineEnding::CrLf);
     editor.pane_tree.focused_pane_mut().point = 1;
     editor.execute(Command::InsertNewline);
     assert_eq!(editor.buffer_text(), "a\nb");
@@ -358,7 +362,7 @@ fn write_file_empty_input_reasks() {
 
     // No write, no identity change; the prompt re-asks with the requirement
     // flagged in the label and the default directory prefill restored.
-    assert!(editor.current_buffer().path.is_none());
+    assert!(editor.current_buffer().path().is_none());
     assert!(editor.minibuffer.is_active());
     let prompt = editor.minibuffer.prompt().unwrap();
     assert_eq!(prompt.kind, PromptKind::WriteFile);
@@ -376,7 +380,7 @@ fn write_file_whitespace_input_reasks() {
     editor.set_minibuffer_text("  ");
     editor.submit_prompt();
 
-    assert!(editor.current_buffer().path.is_none());
+    assert!(editor.current_buffer().path().is_none());
     assert!(editor.minibuffer.is_active());
 }
 
@@ -402,7 +406,7 @@ fn switch_buffer_submit() {
     editor.set_minibuffer_text("*scratch*");
     editor.submit_prompt();
 
-    assert_eq!(editor.current_buffer().name, "*scratch*");
+    assert_eq!(editor.current_buffer().name(), "*scratch*");
 }
 
 #[test]
@@ -413,17 +417,17 @@ fn switch_buffer_empty_input_uses_last_buffer_in_window() {
 
     let mut editor = Editor::new();
     editor.open_file(&file).unwrap();
-    assert_eq!(editor.current_buffer().name, "test.txt");
+    assert_eq!(editor.current_buffer().name(), "test.txt");
 
     editor.execute(Command::SwitchBuffer);
     editor.set_minibuffer_text("");
     editor.submit_prompt();
-    assert_eq!(editor.current_buffer().name, "*scratch*");
+    assert_eq!(editor.current_buffer().name(), "*scratch*");
 
     editor.execute(Command::SwitchBuffer);
     editor.set_minibuffer_text("");
     editor.submit_prompt();
-    assert_eq!(editor.current_buffer().name, "test.txt");
+    assert_eq!(editor.current_buffer().name(), "test.txt");
 }
 
 #[test]
@@ -441,13 +445,13 @@ fn switch_buffer_restores_point_in_window() {
     editor.execute(Command::SwitchBuffer);
     editor.set_minibuffer_text("*scratch*");
     editor.submit_prompt();
-    assert_eq!(editor.current_buffer().name, "*scratch*");
+    assert_eq!(editor.current_buffer().name(), "*scratch*");
     assert_eq!(editor.point(), 6);
 
     editor.execute(Command::SwitchBuffer);
     editor.set_minibuffer_text("test.txt");
     editor.submit_prompt();
-    assert_eq!(editor.current_buffer().name, "test.txt");
+    assert_eq!(editor.current_buffer().name(), "test.txt");
     assert_eq!(editor.point(), 4);
 }
 
@@ -477,7 +481,7 @@ fn switch_buffer_restores_point_per_window() {
     assert_eq!(editor.point(), 1);
 
     editor.execute(Command::CycleFocus);
-    assert_eq!(editor.current_buffer().name, "test.txt");
+    assert_eq!(editor.current_buffer().name(), "test.txt");
     assert_eq!(editor.point(), 5);
 
     editor.execute(Command::SwitchBuffer);

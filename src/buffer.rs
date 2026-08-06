@@ -132,15 +132,15 @@ fn is_grapheme_boundary_in_slice(slice: RopeSlice<'_>, char_idx: usize) -> bool 
 }
 
 pub struct Buffer {
-    pub id: BufferId,
-    pub text: Rope,
-    pub path: Option<PathBuf>,
-    pub name: String,
-    pub modified: bool,
-    pub line_ending: LineEnding,
-    pub history: History,
-    pub syntax: Option<SyntaxState>,
-    pub edit_generation: usize,
+    id: BufferId,
+    text: Rope,
+    path: Option<PathBuf>,
+    name: String,
+    modified: bool,
+    line_ending: LineEnding,
+    history: History,
+    syntax: Option<SyntaxState>,
+    edit_generation: usize,
     /// Small generation-keyed cache for the line classification used by
     /// display geometry. It avoids rescanning a giant unchanged line for each
     /// cursor, scroll, and render calculation without adding edit invalidation
@@ -152,6 +152,87 @@ pub struct Buffer {
 }
 
 impl Buffer {
+    pub fn id(&self) -> BufferId {
+        self.id
+    }
+
+    pub fn text(&self) -> &Rope {
+        &self.text
+    }
+
+    pub fn path(&self) -> Option<&Path> {
+        self.path.as_deref()
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn is_modified(&self) -> bool {
+        self.modified
+    }
+
+    pub fn line_ending(&self) -> LineEnding {
+        self.line_ending
+    }
+
+    pub fn syntax(&self) -> Option<&SyntaxState> {
+        self.syntax.as_ref()
+    }
+
+    pub fn edit_generation(&self) -> usize {
+        self.edit_generation
+    }
+
+    pub(crate) fn rename(&mut self, name: String) {
+        self.name = name;
+    }
+
+    pub(crate) fn reset_transient_text(&mut self, text: &str) {
+        self.text = Rope::from_str(text);
+        self.modified = false;
+        self.history = History::new();
+        self.edit_generation = 0;
+        self.line_class_cache.borrow_mut().clear();
+    }
+
+    pub(crate) fn commit_history(&mut self) {
+        self.history.commit();
+    }
+
+    pub(crate) fn mark_history_action(&mut self) {
+        self.history.mark_action();
+    }
+
+    pub(crate) fn record_insert(&mut self, pos: usize, text: &str) {
+        self.history.record_insert(pos, text);
+    }
+
+    pub(crate) fn record_delete(&mut self, pos: usize, text: &str) {
+        self.history.record_delete(pos, text);
+    }
+
+    pub(crate) fn record_history_replace(&mut self, pos: usize, old: &str, new: &str) {
+        self.history.record_replace(pos, old, new);
+    }
+
+    pub(crate) fn undo(&mut self) -> Option<crate::history::EditGroup> {
+        self.history.undo()
+    }
+
+    pub(crate) fn redo(&mut self) -> Option<crate::history::EditGroup> {
+        self.history.redo()
+    }
+
+    pub fn enable_syntax(&mut self, language: crate::syntax::Language) {
+        self.syntax = SyntaxState::new(language);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_line_ending_for_test(&mut self, line_ending: LineEnding) {
+        self.line_ending = line_ending;
+    }
+
     pub fn new_scratch(id: BufferId) -> Self {
         Self {
             id,
@@ -294,7 +375,7 @@ impl Buffer {
                 .write(true)
                 .truncate(true)
                 .open(&physical)?;
-            let fingerprint = write_rope_text(&self.text, self.line_ending, &mut file)?;
+            let fingerprint = write_rope_text(&self.text, self.line_ending(), &mut file)?;
             file.sync_all()?;
             DiskState::Present {
                 modified: file
@@ -309,7 +390,7 @@ impl Buffer {
                 _ => PathBuf::from("."),
             };
             let mut tmp = tempfile::NamedTempFile::new_in(&dir)?;
-            let fingerprint = write_rope_text(&self.text, self.line_ending, &mut tmp)?;
+            let fingerprint = write_rope_text(&self.text, self.line_ending(), &mut tmp)?;
             // Keep the target's permissions; a fresh temp file defaults to 0600.
             if let Ok(meta) = fs::metadata(&physical) {
                 tmp.as_file().set_permissions(meta.permissions())?;

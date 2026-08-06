@@ -10,10 +10,10 @@ fn open_nonexistent_file_creates_buffer() {
     let mut editor = Editor::new();
     editor.open_file(&file).unwrap();
 
-    assert_eq!(editor.current_buffer().name, "new_file.txt");
+    assert_eq!(editor.current_buffer().name(), "new_file.txt");
     assert_eq!(editor.buffer_text(), "");
     assert_eq!(
-        editor.current_buffer().path.as_ref().unwrap().file_name(),
+        editor.current_buffer().path().as_ref().unwrap().file_name(),
         Some(std::ffi::OsStr::new("new_file.txt"))
     );
 }
@@ -28,16 +28,16 @@ fn nonexistent_file_spellings_share_one_buffer_identity() {
 
     let mut editor = Editor::new();
     editor.open_file(&with_parent).unwrap();
-    let first_id = editor.current_buffer().id;
+    let first_id = editor.current_buffer().id();
     editor.open_file(&direct).unwrap();
 
-    assert_eq!(editor.current_buffer().id, first_id);
+    assert_eq!(editor.current_buffer().id(), first_id);
     assert_eq!(editor.buffers.len(), 2, "scratch plus one file buffer");
     let expected = std::fs::canonicalize(dir.path())
         .unwrap()
         .join("future.txt");
     assert_eq!(
-        editor.current_buffer().path.as_deref(),
+        editor.current_buffer().path().as_deref(),
         Some(expected.as_path())
     );
 }
@@ -140,7 +140,7 @@ fn kill_buffer_unmodified() {
     let mut editor = Editor::new_with_text("hello");
     editor.execute(Command::KillBuffer);
     // Killing the only buffer creates a new scratch buffer
-    assert_eq!(editor.current_buffer().name, "*scratch*");
+    assert_eq!(editor.current_buffer().name(), "*scratch*");
     assert_eq!(editor.buffer_text(), "");
 }
 
@@ -148,7 +148,7 @@ fn kill_buffer_unmodified() {
 fn kill_buffer_modified_prompts() {
     let mut editor = Editor::new_with_text("");
     editor.execute(Command::InsertChar('x'));
-    assert!(editor.current_buffer().modified);
+    assert!(editor.current_buffer().is_modified());
     editor.execute(Command::KillBuffer);
     assert!(editor.minibuffer.is_active());
     let prompt = editor.minibuffer.prompt().unwrap();
@@ -164,7 +164,7 @@ fn kill_confirm_yes_kills_buffer_without_quitting() {
     editor.set_minibuffer_text("y");
     editor.submit_prompt();
     assert!(!editor.should_quit);
-    assert!(editor.buffers.iter().all(|b| b.id != old_id));
+    assert!(editor.buffers.iter().all(|b| b.id() != old_id));
 }
 
 #[test]
@@ -176,7 +176,7 @@ fn kill_confirm_no_keeps_buffer() {
     editor.set_minibuffer_text("n");
     editor.submit_prompt();
     assert!(!editor.should_quit);
-    assert!(editor.buffers.iter().any(|b| b.id == old_id));
+    assert!(editor.buffers.iter().any(|b| b.id() == old_id));
     assert_eq!(editor.buffer_text(), "x");
 }
 
@@ -195,7 +195,7 @@ fn kill_buffer_with_others_remaining() {
     let current_id = editor.pane_tree.focused_pane().buffer_id;
     editor.execute(Command::KillBuffer);
     // Buffer was killed, switched to first remaining
-    assert!(editor.buffers.iter().all(|b| b.id != current_id));
+    assert!(editor.buffers.iter().all(|b| b.id() != current_id));
 }
 
 #[test]
@@ -484,14 +484,14 @@ fn save_over_externally_modified_file_prompts() {
     editor.set_minibuffer_text("n");
     editor.submit_prompt();
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "external change");
-    assert!(editor.current_buffer().modified);
+    assert!(editor.current_buffer().is_modified());
 
     // Confirming overwrites.
     editor.execute(Command::Save);
     editor.set_minibuffer_text("y");
     editor.submit_prompt();
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "Xoriginal");
-    assert!(!editor.current_buffer().modified);
+    assert!(!editor.current_buffer().is_modified());
 }
 
 #[test]
@@ -589,8 +589,8 @@ fn quit_save_anyway_declined_cancels_quit() {
     assert!(editor.minibuffer.prompt().is_none());
     assert_eq!(std::fs::read_to_string(&file1).unwrap(), "external");
     assert_eq!(std::fs::read_to_string(&file2).unwrap(), "bbb");
-    let buf_a = editor.buffers.iter().find(|b| b.name == "a.txt").unwrap();
-    assert!(buf_a.modified);
+    let buf_a = editor.buffers.iter().find(|b| b.name() == "a.txt").unwrap();
+    assert!(buf_a.is_modified());
 
     // A fresh quit starts the flow over from the first modified buffer.
     editor.execute(Command::Quit);
@@ -610,7 +610,7 @@ fn write_file_to_own_externally_modified_path_prompts() {
     editor.execute(Command::InsertChar('X'));
     // Use the buffer's own (canonicalized) path so this is the
     // save-to-own-path case, not the overwrite-another-file case.
-    let own_path = editor.current_buffer().path.clone().unwrap();
+    let own_path = editor.current_buffer().path().unwrap().to_path_buf();
 
     externally_modify(&file, "external");
 
@@ -624,7 +624,7 @@ fn write_file_to_own_externally_modified_path_prompts() {
     editor.set_minibuffer_text("n");
     editor.submit_prompt();
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "external");
-    assert!(editor.current_buffer().modified);
+    assert!(editor.current_buffer().is_modified());
 
     // Confirming overwrites.
     editor.execute(Command::WriteFile);
@@ -633,7 +633,7 @@ fn write_file_to_own_externally_modified_path_prompts() {
     editor.set_minibuffer_text("y");
     editor.submit_prompt();
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "Xoriginal");
-    assert!(!editor.current_buffer().modified);
+    assert!(!editor.current_buffer().is_modified());
 }
 
 #[test]
@@ -683,8 +683,8 @@ fn write_file_to_existing_path_prompts_before_overwriting() {
     editor.set_minibuffer_text("n");
     editor.submit_prompt();
     assert_eq!(std::fs::read_to_string(&target).unwrap(), "precious");
-    assert_eq!(editor.current_buffer().name, "*scratch*");
-    assert!(editor.current_buffer().path.is_none());
+    assert_eq!(editor.current_buffer().name(), "*scratch*");
+    assert!(editor.current_buffer().path().is_none());
 
     // Confirming overwrites and renames the buffer.
     editor.execute(Command::WriteFile);
@@ -693,7 +693,7 @@ fn write_file_to_existing_path_prompts_before_overwriting() {
     editor.set_minibuffer_text("y");
     editor.submit_prompt();
     assert_eq!(std::fs::read_to_string(&target).unwrap(), "new content");
-    assert_eq!(editor.current_buffer().name, "target.txt");
+    assert_eq!(editor.current_buffer().name(), "target.txt");
 }
 
 #[test]
@@ -708,9 +708,9 @@ fn write_file_failure_keeps_buffer_identity() {
     editor.submit_prompt();
 
     // The save failed; the buffer must not have been renamed/re-pathed.
-    assert_eq!(editor.current_buffer().name, "*scratch*");
-    assert!(editor.current_buffer().path.is_none());
-    assert!(editor.current_buffer().modified);
+    assert_eq!(editor.current_buffer().name(), "*scratch*");
+    assert!(editor.current_buffer().path().is_none());
+    assert!(editor.current_buffer().is_modified());
 }
 
 #[test]
@@ -719,12 +719,12 @@ fn write_file_redetects_syntax_for_new_extension() {
     let target = dir.path().join("code.rs");
 
     let mut editor = Editor::new_with_text("fn main() {}");
-    assert!(editor.current_buffer().syntax.is_none());
+    assert!(editor.current_buffer().syntax().is_none());
     editor.execute(Command::WriteFile);
     editor.set_minibuffer_text(&target.to_string_lossy());
     editor.submit_prompt();
     assert!(
-        editor.current_buffer().syntax.is_some(),
+        editor.current_buffer().syntax().is_some(),
         "writing to .rs must enable rust highlighting"
     );
 }
@@ -738,7 +738,7 @@ fn write_file_to_own_path_does_not_prompt() {
     let mut editor = Editor::new();
     editor.open_file(&file).unwrap();
     editor.execute(Command::InsertChar('X'));
-    let own_path = editor.current_buffer().path.clone().unwrap();
+    let own_path = editor.current_buffer().path().unwrap().to_path_buf();
     editor.execute(Command::WriteFile);
     editor.set_minibuffer_text(&own_path.to_string_lossy());
     editor.submit_prompt();
@@ -774,10 +774,10 @@ fn write_file_to_symlink_keeps_link_and_buffer_identity() {
     // The buffer's identity is the logical path the user typed, not the
     // resolved target.
     assert_eq!(
-        editor.current_buffer().path.as_deref(),
+        editor.current_buffer().path().as_deref(),
         Some(link.as_path())
     );
-    assert_eq!(editor.current_buffer().name, "link.txt");
+    assert_eq!(editor.current_buffer().name(), "link.txt");
 }
 
 #[cfg(unix)]
@@ -796,7 +796,7 @@ fn save_through_symlink_detects_external_target_modification() {
     editor.submit_prompt();
     editor.set_minibuffer_text("y");
     editor.submit_prompt();
-    assert!(!editor.current_buffer().modified);
+    assert!(!editor.current_buffer().is_modified());
 
     editor.execute(Command::InsertChar('X'));
     externally_modify(&target, "external");
@@ -835,7 +835,7 @@ fn duplicate_basenames_get_uniquified_names() {
     editor.open_file(&file1).unwrap();
     editor.open_file(&file2).unwrap();
 
-    let names: Vec<&str> = editor.buffers.iter().map(|b| b.name.as_str()).collect();
+    let names: Vec<&str> = editor.buffers.iter().map(|b| b.name()).collect();
     assert_eq!(names.iter().filter(|n| **n == "mod.rs").count(), 1);
     assert!(
         names.contains(&"mod.rs<b>"),
@@ -886,7 +886,7 @@ fn three_way_name_collision_yields_distinct_names() {
     let mut names: Vec<&str> = editor
         .buffers
         .iter()
-        .map(|b| b.name.as_str())
+        .map(|b| b.name())
         .filter(|n| n.starts_with("mod.rs"))
         .collect();
     names.sort();

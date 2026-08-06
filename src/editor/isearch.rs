@@ -55,7 +55,7 @@ impl Editor {
         let original_point = pane.point;
         let original_scroll_top = pane.scroll_top;
         let original_scroll_row_offset = pane.scroll_row_offset;
-        let text_snapshot = self.current_buffer().text.to_string();
+        let text_snapshot = self.current_buffer().text().to_string();
         self.isearch = Some(ISearchState {
             query: String::new(),
             text_snapshot,
@@ -175,7 +175,7 @@ impl Editor {
             return;
         };
         isearch.query = query;
-        self.minibuffer_buffer.text = ropey::Rope::from_str(&isearch.query);
+        self.minibuffer_buffer.reset_transient_text(&isearch.query);
         self.minibuffer_pane.point = isearch.query.chars().count();
         self.isearch_update();
     }

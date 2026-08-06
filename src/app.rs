@@ -215,17 +215,14 @@ where
         for completion in self.syntax_worker.take_completions() {
             let Some(buffer) = self.editor.buffers.iter().find(|buffer| {
                 buffer
-                    .syntax
-                    .as_ref()
+                    .syntax()
                     .is_some_and(|syntax| syntax.background_key() == completion.key)
             }) else {
                 continue;
             };
-            let syntax = buffer
-                .syntax
-                .as_ref()
-                .expect("matching syntax state disappeared");
-            let accepted = syntax.accept_background_completion(completion, buffer.edit_generation);
+            let syntax = buffer.syntax().expect("matching syntax state disappeared");
+            let accepted =
+                syntax.accept_background_completion(completion, buffer.edit_generation());
             if accepted && syntax.take_disabled_message() {
                 self.editor
                     .minibuffer

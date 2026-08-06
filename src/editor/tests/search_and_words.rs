@@ -21,7 +21,7 @@ fn isearch_snapshots_a_multi_chunk_buffer_once() {
     let prefix = "λ".repeat(2_000);
     let source = format!("{prefix} needle終");
     let mut editor = Editor::new_with_text(&source);
-    assert!(editor.current_buffer().text.chunks().count() > 1);
+    assert!(editor.current_buffer().text().chunks().count() > 1);
 
     editor.execute(Command::ISearchForward);
     assert_eq!(editor.isearch.as_ref().unwrap().text_snapshot, source);
@@ -190,7 +190,7 @@ fn word_commands_cross_rope_chunks() {
     let source = format!("{punctuation}λ_word");
     let mut editor = Editor::new_with_text(&source);
     assert!(
-        editor.current_buffer().text.chunks().count() > 1,
+        editor.current_buffer().text().chunks().count() > 1,
         "fixture must span rope chunks"
     );
 

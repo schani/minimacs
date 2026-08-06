@@ -40,7 +40,7 @@ fn quit_save_after_mouse_focus_marks_saved_undo_version_clean() {
     assert!(!app.editor.should_quit, "q cancels while handling B");
     assert_eq!(std::fs::read_to_string(&file_a).unwrap(), "Aaaa");
     assert_eq!(
-        app.editor.current_buffer().path.as_deref(),
+        app.editor.current_buffer().path().as_deref(),
         Some(std::fs::canonicalize(&file_a).unwrap().as_path())
     );
     assert_eq!(
@@ -49,7 +49,7 @@ fn quit_save_after_mouse_focus_marks_saved_undo_version_clean() {
         "undo removes A's saved edit"
     );
     assert!(
-        app.editor.current_buffer().modified,
+        app.editor.current_buffer().is_modified(),
         "after undo, A differs from its saved contents and must be modified"
     );
 }
@@ -78,7 +78,9 @@ fn mouse_scroll_in_grown_prompt_or_completions_does_not_scroll_pane() {
         .join("\n");
     let (mut app, _) = test_app_with_text(12, 12, &text, vec![]);
     app.editor.execute(crate::command::Command::FindFile);
-    app.editor.minibuffer_buffer.text = ropey::Rope::from_str("a/very/long/prompt/value");
+    app.editor
+        .minibuffer_buffer
+        .reset_transient_text("a/very/long/prompt/value");
     app.editor.minibuffer_pane.point = app.editor.minibuffer_buffer.char_count();
     app.editor.minibuffer.completions = Some(vec!["alpha".into(), "alpine".into()]);
     let mut events = TestEventSource::new(vec![mouse_scroll_down(2, 8)]);

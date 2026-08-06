@@ -350,7 +350,7 @@ fn kill_last_buffer_creates_scratch() {
     assert_eq!(editor.buffers.len(), 1);
     editor.do_kill_buffer(0);
     assert_eq!(editor.buffers.len(), 1);
-    assert_eq!(editor.current_buffer().name, "*scratch*");
+    assert_eq!(editor.current_buffer().name(), "*scratch*");
 }
 
 #[test]

@@ -1,7 +1,7 @@
 use std::path::{Component, Path, PathBuf};
 
 use syn::visit::{self, Visit};
-use syn::{Attribute, Expr, ItemMod, Lit, Macro, Meta};
+use syn::{Attribute, Expr, ItemMod, Lit, Macro, Meta, Visibility};
 
 #[derive(Debug, Default, PartialEq, Eq)]
 struct BinarySourceViolations {
@@ -13,6 +13,12 @@ struct BinarySourceViolations {
 #[derive(Debug, Default, PartialEq, Eq)]
 struct RenderDependencies {
     paths: Vec<String>,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct PublicAggregateFields {
+    aggregate_names: Vec<&'static str>,
+    fields: Vec<String>,
 }
 
 impl BinarySourceViolations {
@@ -63,6 +69,24 @@ impl<'ast> Visit<'ast> for BinarySourceViolations {
             }
         }
         visit::visit_macro(self, macro_call);
+    }
+}
+
+impl<'ast> Visit<'ast> for PublicAggregateFields {
+    fn visit_item_struct(&mut self, item: &'ast syn::ItemStruct) {
+        let name = item.ident.to_string();
+        if self.aggregate_names.iter().any(|target| *target == name) {
+            for (index, field) in item.fields.iter().enumerate() {
+                if !matches!(field.vis, Visibility::Inherited) {
+                    let field_name = field
+                        .ident
+                        .as_ref()
+                        .map_or_else(|| index.to_string(), ToString::to_string);
+                    self.fields.push(format!("{name}.{field_name}"));
+                }
+            }
+        }
+        visit::visit_item_struct(self, item);
     }
 }
 
@@ -118,6 +142,19 @@ fn render_dependencies(contents: &str) -> syn::Result<RenderDependencies> {
     let mut dependencies = RenderDependencies::default();
     dependencies.visit_file(&file);
     Ok(dependencies)
+}
+
+fn public_aggregate_fields(
+    contents: &str,
+    aggregate_names: Vec<&'static str>,
+) -> syn::Result<Vec<String>> {
+    let file = syn::parse_file(contents)?;
+    let mut fields = PublicAggregateFields {
+        aggregate_names,
+        fields: Vec::new(),
+    };
+    fields.visit_file(&file);
+    Ok(fields.fields)
 }
 
 fn binary_sources(root: &Path) -> Vec<PathBuf> {
@@ -217,6 +254,37 @@ fn binary_source_policy_detects_duplicate_ownership_without_reading_comments() {
     assert!(binary_source_violations(comments_and_strings)
         .unwrap()
         .is_empty());
+}
+
+#[test]
+fn aggregate_privacy_policy_uses_rust_syntax_not_comments_or_strings() {
+    let fields = public_aggregate_fields(
+        r#"
+            // pub struct Buffer { pub text: Rope }
+            const EXAMPLE: &str = "pub struct Buffer { pub text: Rope }";
+            pub struct Buffer {
+                text: Rope,
+                pub(crate) path: PathBuf,
+                pub name: String,
+            }
+        "#,
+        vec!["Buffer"],
+    )
+    .unwrap();
+
+    assert_eq!(fields, ["Buffer.path", "Buffer.name"]);
+}
+
+#[test]
+fn buffer_state_fields_are_private() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let contents = std::fs::read_to_string(root.join("src/buffer.rs")).unwrap();
+    let fields = public_aggregate_fields(&contents, vec!["Buffer"]).unwrap();
+
+    assert!(
+        fields.is_empty(),
+        "Buffer mutation-sensitive fields must be private; found {fields:?}"
+    );
 }
 
 #[test]

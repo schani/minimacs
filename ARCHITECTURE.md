@@ -289,18 +289,17 @@ suffix (`mod.rs<2>`). `Editor::unique_buffer_name` enforces this when opening
 files and when renaming via `C-x C-w`, so name-based lookup (`C-x b`) is
 unambiguous.
 
-```rust
-struct Buffer {
-    id: BufferId,       // usize, monotonically increasing, never reused
-    text: Rope,
-    path: Option<PathBuf>,
-    name: String,
-    modified: bool,
-    line_ending: LineEnding,
-    history: History,
-    syntax: Option<SyntaxState>,
-}
-```
+`Buffer` keeps its rope, file identity, modified/line-ending metadata, undo
+history, syntax state, and edit generation private. Readers use immutable
+queries such as `text()`, `path()`, `name()`, `is_modified()`, `syntax()`, and
+`edit_generation()`. Mutations express a transition instead of borrowing the
+storage: `replace` is the text/edit-generation choke point, save methods update
+file identity and clean history together, history recording/replay uses narrow
+buffer intents, and syntax installation/redetection cannot expose a mutable
+syntax slot. Transient minibuffer setup resets text, history, generation, and
+modified state as one operation. Tests use fixture helpers for exceptional
+setup such as choosing a line-ending encoding; no caller receives mutable Rope
+or History access.
 
 ### PaneTree
 

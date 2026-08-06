@@ -109,13 +109,13 @@ fn buffer_names_list() {
 #[test]
 fn undo_restores_unmodified_state() {
     let mut editor = Editor::new_with_text("hello");
-    assert!(!editor.current_buffer().modified);
+    assert!(!editor.current_buffer().is_modified());
     editor.execute(Command::InsertChar('X'));
-    assert!(editor.current_buffer().modified);
+    assert!(editor.current_buffer().is_modified());
     editor.commit_undo_group();
     editor.execute(Command::Undo);
     assert!(
-        !editor.current_buffer().modified,
+        !editor.current_buffer().is_modified(),
         "Buffer should be unmodified after undoing to original state"
     );
 }
@@ -128,22 +128,22 @@ fn undo_redo_preserves_modified_after_save() {
 
     let mut editor = Editor::new();
     editor.open_file(&file).unwrap();
-    assert!(!editor.current_buffer().modified);
+    assert!(!editor.current_buffer().is_modified());
 
     // Make an edit and save
     editor.execute(Command::InsertChar('X'));
     editor.execute(Command::Save);
-    assert!(!editor.current_buffer().modified);
+    assert!(!editor.current_buffer().is_modified());
 
     // Make another edit
     editor.execute(Command::InsertChar('Y'));
-    assert!(editor.current_buffer().modified);
+    assert!(editor.current_buffer().is_modified());
 
     // Undo back to saved state
     editor.commit_undo_group();
     editor.execute(Command::Undo);
     assert!(
-        !editor.current_buffer().modified,
+        !editor.current_buffer().is_modified(),
         "Should be unmodified after undoing to last save point"
     );
 }
@@ -155,7 +155,7 @@ fn insert_newline_copies_indentation_across_rope_chunks() {
     let indentation = " ".repeat(2_000);
     let source = format!("{indentation}value");
     let mut editor = Editor::new_with_text(&source);
-    assert!(editor.current_buffer().text.chunks().count() > 1);
+    assert!(editor.current_buffer().text().chunks().count() > 1);
     editor.pane_tree.focused_pane_mut().point = source.chars().count();
 
     editor.execute(Command::InsertNewline);

@@ -327,7 +327,7 @@ fn pick_replacement(language: Language, rng: &mut Rng, flags: &FuzzFlags) -> Str
 
 /// Char offset and char length of a randomly chosen hotspot token occurrence.
 fn pick_hotspot(language: Language, buf: &Buffer, rng: &mut Rng) -> Option<(usize, usize)> {
-    let text = buf.text.to_string();
+    let text = buf.text().to_string();
     let tokens = hotspot_tokens(language);
     for _ in 0..4 {
         let token = tokens[rng.below(tokens.len())];
@@ -336,7 +336,7 @@ fn pick_hotspot(language: Language, buf: &Buffer, rng: &mut Rng) -> Option<(usiz
             continue;
         }
         let byte = occurrences[rng.below(occurrences.len())];
-        let start = buf.text.byte_to_char(byte);
+        let start = buf.text().byte_to_char(byte);
         return Some((start, token.chars().count()));
     }
     None
@@ -349,7 +349,7 @@ fn choose_edit(
     rng: &mut Rng,
     flags: &FuzzFlags,
 ) -> (usize, usize, String) {
-    let len = buf.text.len_chars();
+    let len = buf.text().len_chars();
     if !(MIN_BUFFER_CHARS..=MAX_BUFFER_CHARS).contains(&len) || rng.chance(64) {
         // Whole-buffer replacement: what select-all-paste produces.
         return (0, len, initial_source(language, rng));
@@ -527,8 +527,8 @@ fn compare_after_edit(
     edit: &Range<usize>,
     replacement: &str,
 ) -> Option<Divergence> {
-    let syntax = buf.syntax.as_ref().expect("fuzz buffer has syntax");
-    let len_bytes = buf.text.len_bytes();
+    let syntax = buf.syntax().expect("fuzz buffer has syntax");
+    let len_bytes = buf.text().len_bytes();
     let fresh = SyntaxState::new(language).expect("fresh syntax state");
     let mut failed = Vec::new();
     let mut detail = String::new();
@@ -542,8 +542,8 @@ fn compare_after_edit(
         let window_end = (window_start + 256 + rng.below(2048)).min(len_bytes);
         let window = window_start..window_end;
         let incremental =
-            syntax.highlight_rope(buf.text.slice(..), window.clone(), buf.edit_generation);
-        let full = fresh.highlight_rope(buf.text.slice(..), window.clone(), 0);
+            syntax.highlight_rope(buf.text().slice(..), window.clone(), buf.edit_generation());
+        let full = fresh.highlight_rope(buf.text().slice(..), window.clone(), 0);
         let incremental = clipped_merged(&incremental, &window);
         let full = clipped_merged(&full, &window);
         if incremental != full {
@@ -556,8 +556,9 @@ fn compare_after_edit(
         }
     }
 
-    let incremental = syntax.highlight_rope(buf.text.slice(..), 0..len_bytes, buf.edit_generation);
-    let full = fresh.highlight_rope(buf.text.slice(..), 0..len_bytes, 0);
+    let incremental =
+        syntax.highlight_rope(buf.text().slice(..), 0..len_bytes, buf.edit_generation());
+    let full = fresh.highlight_rope(buf.text().slice(..), 0..len_bytes, 0);
     let incremental = signature(&incremental);
     let full = signature(&full);
     if incremental != full {
@@ -578,7 +579,7 @@ fn compare_after_edit(
         edit: edit.clone(),
         replacement: replacement.to_string(),
         window: window_range,
-        source: buf.text.to_string(),
+        source: buf.text().to_string(),
     })
 }
 
@@ -590,18 +591,18 @@ fn fuzz_run(
 ) -> Result<RunOutcome, String> {
     let mut rng = Rng::new(seed ^ ((cli_name(language).len() as u64) << 32));
     let mut buf = Buffer::from_str(0, "fuzz", &initial_source(language, &mut rng));
-    buf.syntax = SyntaxState::new(language);
-    if buf.syntax.is_none() {
+    buf.enable_syntax(language);
+    if buf.syntax().is_none() {
         return Err(format!("no syntax configuration for {language:?}"));
     }
     // Establish the persistent tree before editing, like an opened buffer.
-    buf.syntax.as_ref().unwrap().highlight_rope(
-        buf.text.slice(..),
-        0..buf.text.len_bytes(),
-        buf.edit_generation,
+    buf.syntax().unwrap().highlight_rope(
+        buf.text().slice(..),
+        0..buf.text().len_bytes(),
+        buf.edit_generation(),
     );
     let mut raw = if flags.raw {
-        RawTracker::new(language, buf.text.slice(..))
+        RawTracker::new(language, buf.text().slice(..))
     } else {
         None
     };
@@ -614,7 +615,7 @@ fn fuzz_run(
         let (start, end, replacement) = choose_edit(language, &buf, &mut rng, flags);
         let input_edit = buf.replace(start, end, &replacement);
         if let (Some(tracker), Some(edit)) = (raw.as_mut(), input_edit) {
-            tracker.apply_edit(buf.text.slice(..), &edit);
+            tracker.apply_edit(buf.text().slice(..), &edit);
         }
         steps_applied = step + 1;
         let edit = start..end;
@@ -626,7 +627,7 @@ fn fuzz_run(
             // structural differences are common upstream behavior and would
             // drown the highlight oracle if gated on directly.
             if let Some(tracker) = raw.as_ref() {
-                let attribution = match tracker.diff_from_fresh(buf.text.slice(..)) {
+                let attribution = match tracker.diff_from_fresh(buf.text().slice(..)) {
                     Some(diff) => {
                         found.comparison.push_str("+raw-tree");
                         format!("raw-tree also diverged ({diff})")
@@ -652,7 +653,7 @@ fn fuzz_run(
         steps_applied,
         divergent_steps,
         last_divergent_step,
-        final_checksum: text_checksum(&buf.text.to_string()),
+        final_checksum: text_checksum(&buf.text().to_string()),
         divergence,
     })
 }

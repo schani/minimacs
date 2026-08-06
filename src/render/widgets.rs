@@ -346,7 +346,7 @@ fn compute_visible_syntax_spans(
     rows: &[(usize, VisualRow)],
     syntax_worker: &SyntaxWorker,
 ) -> Vec<crate::syntax::StyledSpan> {
-    let Some(syntax) = buf.syntax.as_ref() else {
+    let Some(syntax) = buf.syntax() else {
         return Vec::new();
     };
     if syntax.is_disabled() {
@@ -358,15 +358,15 @@ fn compute_visible_syntax_spans(
         return Vec::new();
     };
     let requested = first.buffer_byte_start..last.buffer_byte_end;
-    let cached = syntax.background_spans(requested.clone(), buf.edit_generation);
+    let cached = syntax.background_spans(requested.clone(), buf.edit_generation());
     if !cached.exact {
-        let (base_generation, edits) = syntax.background_update_for(buf.edit_generation);
+        let (base_generation, edits) = syntax.background_update_for(buf.edit_generation());
         syntax_worker.submit(SyntaxJob {
             key: syntax.background_key(),
             language: syntax.language,
             base_generation,
-            generation: buf.edit_generation,
-            source: buf.text.clone(),
+            generation: buf.edit_generation(),
+            source: buf.text().clone(),
             edits,
             requested,
         });
@@ -404,8 +404,8 @@ fn render_pane_mode_line(
 ) {
     let (line, col) = buf.char_to_line_col(pane.point);
 
-    let modified_indicator = if buf.modified { "**" } else { "--" };
-    let name = &buf.name;
+    let modified_indicator = if buf.is_modified() { "**" } else { "--" };
+    let name = buf.name();
 
     // Position percentage
     let total_lines = buf.line_count();
@@ -420,7 +420,7 @@ fn render_pane_mode_line(
     };
 
     let language_display = buf
-        .syntax
+        .syntax()
         .as_ref()
         .map(|s| format!("  ({})", s.language.name()))
         .unwrap_or_default();
@@ -733,7 +733,7 @@ mod tests {
         editor
             .minibuffer
             .start_prompt(crate::minibuffer::PromptKind::FindFile, label);
-        editor.minibuffer_buffer.text = ropey::Rope::from_str(input);
+        editor.minibuffer_buffer.reset_transient_text(input);
         editor.minibuffer_pane.point = point;
         editor
     }
@@ -819,7 +819,7 @@ mod tests {
             1
         );
 
-        editor.minibuffer_buffer.text = ropey::Rope::from_str("a");
+        editor.minibuffer_buffer.reset_transient_text("a");
         editor.minibuffer_pane.point = 1;
         assert_eq!(
             screen_layout(&editor, Rect::new(0, 0, 6, 9))
@@ -953,7 +953,7 @@ mod tests {
     fn line_visual_width_crosses_rope_chunks() {
         let prefix = "a".repeat(2_000);
         let buf = Buffer::from_str(0, "test", &format!("{prefix}\t你e\u{301}\n"));
-        assert!(buf.text.line(0).chunks().count() > 1);
+        assert!(buf.text().line(0).chunks().count() > 1);
         assert_eq!(line_visual_width(&buf, 0), 2_000 + 4 + 2 + 1);
     }
 
@@ -1138,7 +1138,7 @@ mod tests {
     /// not as code.
     #[test]
     fn markdown_highlight_consistent_when_scrolled_into_code_block() {
-        use crate::syntax::{Language, SyntaxState};
+        use crate::syntax::Language;
         use ratatui::style::Modifier;
 
         // Build a markdown document with a code block in the middle.
@@ -1161,29 +1161,29 @@ fn main() {\n\
 Some *emphasis* here.\n";
 
         let mut buf = Buffer::from_str(0, "test.md", markdown);
-        buf.syntax = SyntaxState::new(Language::Markdown);
+        buf.enable_syntax(Language::Markdown);
 
-        let syntax = buf.syntax.as_ref().unwrap();
+        let syntax = buf.syntax().unwrap();
         // Case 1: scroll_top=0, see everything.
         let styles_full = syntax.highlight_rope(
-            buf.text.slice(..),
-            0..buf.text.len_bytes(),
-            buf.edit_generation,
+            buf.text().slice(..),
+            0..buf.text().len_bytes(),
+            buf.edit_generation(),
         );
 
         // Case 2: viewport starts inside the code block.
-        let scrolled_start = buf.text.line_to_byte(6);
+        let scrolled_start = buf.text().line_to_byte(6);
         let styles_scrolled = syntax.highlight_rope(
-            buf.text.slice(..),
-            scrolled_start..buf.text.len_bytes(),
-            buf.edit_generation,
+            buf.text().slice(..),
+            scrolled_start..buf.text().len_bytes(),
+            buf.edit_generation(),
         );
 
         // Line 10 is "# After Code Block" — the '#' and heading text should have
         // the heading style (bold + blue) regardless of scroll position.
         let heading_line = 10;
-        let heading_start = buf.text.line_to_byte(heading_line);
-        let heading_end = buf.text.line_to_byte(heading_line + 1);
+        let heading_start = buf.text().line_to_byte(heading_line);
+        let heading_end = buf.text().line_to_byte(heading_line + 1);
 
         // With full context (scroll_top=0), the heading should be styled
         let has_heading_style_full = styles_full.iter().any(|span| {
