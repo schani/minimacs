@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use ratatui::layout::Direction;
 
@@ -97,20 +97,22 @@ pub(crate) enum EditRecord {
     NoHistory,
 }
 
+pub const MINIBUFFER_BUFFER_ID: usize = usize::MAX;
+
 pub struct Editor {
-    pub buffers: Vec<Buffer>,
-    pub next_buffer_id: usize,
-    pub pane_tree: PaneTree,
-    pub clipboard: String,
-    pub cwd: PathBuf,
-    pub should_quit: bool,
+    buffers: Vec<Buffer>,
+    next_buffer_id: usize,
+    pane_tree: PaneTree,
+    clipboard: String,
+    cwd: PathBuf,
+    should_quit: bool,
     /// Set when the user aborts via the quit prompt's `a` answer; main exits
     /// non-zero so callers like git abandon the operation.
-    pub quit_abort: bool,
-    pub minibuffer: Minibuffer,
-    pub minibuffer_buffer: Buffer,
-    pub minibuffer_pane: Pane,
-    pub isearch: Option<ISearchState>,
+    quit_abort: bool,
+    minibuffer: Minibuffer,
+    minibuffer_buffer: Buffer,
+    minibuffer_pane: Pane,
+    isearch: Option<ISearchState>,
     /// Persistent OS clipboard connection (see [`OsClipboard`]).
     os_clipboard: OsClipboard,
     /// Tracks the previously executed command (for consecutive-command detection).
@@ -122,9 +124,147 @@ pub struct Editor {
 }
 
 impl Editor {
+    pub fn buffers(&self) -> &[Buffer] {
+        &self.buffers
+    }
+
+    pub fn clipboard(&self) -> &str {
+        &self.clipboard
+    }
+
+    pub fn pane_tree(&self) -> &PaneTree {
+        &self.pane_tree
+    }
+
+    pub fn minibuffer(&self) -> &Minibuffer {
+        &self.minibuffer
+    }
+
+    pub fn minibuffer_buffer(&self) -> &Buffer {
+        &self.minibuffer_buffer
+    }
+
+    pub fn minibuffer_pane(&self) -> &Pane {
+        &self.minibuffer_pane
+    }
+
+    pub fn cwd(&self) -> &Path {
+        &self.cwd
+    }
+
+    pub fn should_quit(&self) -> bool {
+        self.should_quit
+    }
+
+    pub fn quit_aborted(&self) -> bool {
+        self.quit_abort
+    }
+
+    pub fn isearch(&self) -> Option<&ISearchState> {
+        self.isearch.as_ref()
+    }
+
+    pub(crate) fn set_pending_display_message(&mut self, message: String) {
+        self.minibuffer.show_message(message);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_clipboard_for_test(&mut self, text: &str) {
+        self.clipboard = text.to_string();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_cwd_for_test(&mut self, cwd: PathBuf) {
+        self.cwd = cwd;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn enable_buffer_syntax_for_test(
+        &mut self,
+        index: usize,
+        language: crate::syntax::Language,
+    ) {
+        self.buffers[index].enable_syntax(language);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn rename_buffer_for_test(&mut self, index: usize, name: &str) {
+        self.buffers[index].rename(name.to_string());
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_minibuffer_fixture(&mut self, text: &str, point: usize) {
+        self.minibuffer_buffer.reset_transient_text(text);
+        self.minibuffer_pane.set_point(point);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_focused_preferred_column_for_test(&mut self, column: Option<usize>) {
+        self.pane_tree.set_focused_preferred_column(column);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_minibuffer_completions_for_test(&mut self, candidates: Vec<String>) {
+        self.minibuffer.set_completion_candidates(candidates);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn start_prompt_for_test(
+        &mut self,
+        kind: crate::minibuffer::PromptKind,
+        label: &str,
+    ) {
+        self.minibuffer.start_prompt(kind, label);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn show_message_for_test(&mut self, message: &str) {
+        self.minibuffer.show_message(message.to_string());
+    }
+
+    pub(crate) fn set_pane_focus(&mut self, path: Vec<usize>) {
+        self.pane_tree.set_focus_path(path);
+    }
+
+    pub(crate) fn set_focused_point(&mut self, point: usize) {
+        self.pane_tree.set_focused_point(point);
+    }
+
+    pub(crate) fn clear_focused_preferred_column(&mut self) {
+        self.pane_tree.set_focused_preferred_column(None);
+    }
+
+    pub(crate) fn set_pane_scroll_position(&mut self, path: &[usize], top: usize, offset: usize) {
+        self.pane_tree.set_pane_scroll_position(path, top, offset);
+    }
+
+    pub(crate) fn update_pane_viewport(&mut self, path: &[usize], height: usize, width: usize) {
+        self.pane_tree.update_pane_viewport(path, height, width);
+    }
+
+    pub(crate) fn update_minibuffer_viewport(&mut self, height: usize, width: usize) {
+        self.minibuffer_pane.set_viewport(height, width);
+    }
+
+    pub(crate) fn accept_syntax_completion(
+        &self,
+        completion: crate::syntax::SyntaxCompletion,
+    ) -> (bool, bool) {
+        let Some(buffer) = self.buffers.iter().find(|buffer| {
+            buffer
+                .syntax()
+                .is_some_and(|syntax| syntax.background_key() == completion.key)
+        }) else {
+            return (false, false);
+        };
+        let syntax = buffer.syntax().expect("matching syntax state disappeared");
+        let accepted = syntax.accept_background_completion(completion, buffer.edit_generation());
+        (accepted, accepted && syntax.take_disabled_message())
+    }
+
     pub fn new() -> Self {
         let buf = Buffer::new_scratch(0);
-        let mut mb_pane = Pane::new(usize::MAX);
+        let mut mb_pane = Pane::new(MINIBUFFER_BUFFER_ID);
         mb_pane.set_viewport(1, mb_pane.viewport_width());
         Self {
             buffers: vec![buf],
@@ -135,7 +275,7 @@ impl Editor {
             should_quit: false,
             quit_abort: false,
             minibuffer: Minibuffer::new(),
-            minibuffer_buffer: Buffer::from_str(usize::MAX, "*minibuffer*", ""),
+            minibuffer_buffer: Buffer::from_str(MINIBUFFER_BUFFER_ID, "*minibuffer*", ""),
             minibuffer_pane: mb_pane,
             isearch: None,
             os_clipboard: OsClipboard::new(),
@@ -148,7 +288,7 @@ impl Editor {
     #[cfg(test)]
     pub fn new_with_text(text: &str) -> Self {
         let buf = Buffer::from_str(0, "*scratch*", text);
-        let mut mb_pane = Pane::new(usize::MAX);
+        let mut mb_pane = Pane::new(MINIBUFFER_BUFFER_ID);
         mb_pane.set_viewport(1, mb_pane.viewport_width());
         Self {
             buffers: vec![buf],
@@ -159,7 +299,7 @@ impl Editor {
             should_quit: false,
             quit_abort: false,
             minibuffer: Minibuffer::new(),
-            minibuffer_buffer: Buffer::from_str(usize::MAX, "*minibuffer*", ""),
+            minibuffer_buffer: Buffer::from_str(MINIBUFFER_BUFFER_ID, "*minibuffer*", ""),
             minibuffer_pane: mb_pane,
             isearch: None,
             os_clipboard: OsClipboard::new(),
@@ -181,7 +321,7 @@ impl Editor {
             .expect("current buffer must exist")
     }
 
-    pub fn current_buffer_mut(&mut self) -> &mut Buffer {
+    fn current_buffer_mut(&mut self) -> &mut Buffer {
         let bid = self.pane_tree.focused_pane().buffer_id();
         self.buffers
             .iter_mut()
@@ -199,7 +339,7 @@ impl Editor {
     }
 
     /// Get the active buffer mutably.
-    pub fn active_buffer_mut(&mut self) -> &mut Buffer {
+    fn active_buffer_mut(&mut self) -> &mut Buffer {
         if self.minibuffer.is_active() {
             &mut self.minibuffer_buffer
         } else {
@@ -297,7 +437,10 @@ impl Editor {
     }
 
     pub fn buffer_names(&self) -> Vec<String> {
-        self.buffers.iter().map(|b| b.name().to_string()).collect()
+        self.buffers()
+            .iter()
+            .map(|b| b.name().to_string())
+            .collect()
     }
 
     /// Completion lifecycle intent for ordinary minibuffer input.
@@ -762,7 +905,7 @@ impl Editor {
             (buf.id(), delta, deleted)
         };
 
-        if buffer_id == usize::MAX {
+        if buffer_id == MINIBUFFER_BUFFER_ID {
             // The minibuffer buffer is viewed only by the minibuffer pane.
             self.minibuffer_pane.adjust_for_edit(buffer_id, delta);
         } else {
@@ -1221,7 +1364,7 @@ impl Editor {
     fn paste(&mut self) {
         let text = self
             .get_os_clipboard()
-            .unwrap_or_else(|| self.clipboard.clone());
+            .unwrap_or_else(|| self.clipboard().to_string());
         if text.is_empty() {
             // Preserve C-y's existing empty-paste behavior: it resets the
             // goal column but does not create an edit or undo boundary.

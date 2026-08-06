@@ -21,7 +21,8 @@ fn benchmark_five_megabyte_single_line() {
     assert!(!text.contains('\n'));
 
     let (mut app, mut events) = test_app_with_text(120, 40, &text, vec![]);
-    app.editor.buffers[0].enable_syntax(crate::syntax::Language::Json);
+    app.editor
+        .enable_buffer_syntax_for_test(0, crate::syntax::Language::Json);
     let cold_start = Instant::now();
     app.run_until_idle(&mut events).unwrap();
     let cold_start = cold_start.elapsed();
@@ -33,7 +34,7 @@ fn benchmark_five_megabyte_single_line() {
     let repeated_start = repeated_start.elapsed() / ITERATIONS;
 
     let end = app.editor.current_buffer().char_count();
-    app.editor.pane_tree.set_focused_point(end);
+    app.editor.set_focused_point(end);
     let end_layout = Instant::now();
     app.editor.ensure_cursor_visible();
     let end_layout = end_layout.elapsed();
@@ -47,12 +48,12 @@ fn benchmark_five_megabyte_single_line() {
     let mut backward_command = Duration::ZERO;
     let mut backward_interaction = Duration::ZERO;
     for _ in 0..ITERATIONS {
-        app.editor.pane_tree.set_focused_point(end);
+        app.editor.set_focused_point(end);
         let command = Instant::now();
         app.editor.execute(crate::command::Command::BackwardChar);
         backward_command += command.elapsed();
 
-        app.editor.pane_tree.set_focused_point(end);
+        app.editor.set_focused_point(end);
         let interaction = Instant::now();
         app.editor.execute(crate::command::Command::BackwardChar);
         app.render().unwrap();
@@ -323,7 +324,7 @@ fn cursor_wrap_at_viewport_bottom_scrolls_one_row() {
     let events = vec![ctrl('n'), ctrl('n'), ctrl('n'), ctrl('e')];
     let (mut app, mut events) = test_app_with_text(20, 6, text, events);
     app.run_until_idle(&mut events).unwrap();
-    let pane = app.editor.pane_tree.focused_pane();
+    let pane = app.editor.pane_tree().focused_pane();
     assert_eq!((pane.scroll_top(), pane.scroll_row_offset()), (1, 0));
     let pos = app.terminal.get_cursor_position().unwrap();
     assert_eq!((pos.x, pos.y), (0, 3));
@@ -412,7 +413,7 @@ fn scroll_accounts_for_tab_expanded_visual_width() {
     assert_eq!(line, 2);
     // Scrolling is visual-row granular: sub-line scrolling within the
     // wrapped first line counts, as long as the cursor's line shows.
-    let pane = app.editor.pane_tree.focused_pane();
+    let pane = app.editor.pane_tree().focused_pane();
     assert!(
         pane.scroll_top() > 0 || pane.scroll_row_offset() > 0,
         "viewport must scroll when wrapped tab lines push the cursor below it"
@@ -714,7 +715,7 @@ fn cl_recenter_via_app() {
         .char_to_line_col(app.editor.point());
     assert_eq!(line, 10);
     // After center: scroll_top = 10 - 10/2 = 5
-    assert_eq!(app.editor.pane_tree.focused_pane().scroll_top(), 5);
+    assert_eq!(app.editor.pane_tree().focused_pane().scroll_top(), 5);
 }
 
 #[test]
@@ -744,7 +745,8 @@ fn lone_cr_is_content_and_renders_on_one_row() {
 fn terminal_control_sequences_are_rendered_as_visible_text() {
     let payload = "safe\u{1b}]52;c;clipboard\u{7}tail\u{85}";
     let (mut app, mut events) = test_app_with_text(80, 6, payload, vec![]);
-    app.editor.buffers[0].rename("name\u{1b}]0;owned\u{7}.txt".to_string());
+    app.editor
+        .rename_buffer_for_test(0, "name\u{1b}]0;owned\u{7}.txt");
 
     app.run_until_idle(&mut events).unwrap();
 

@@ -28,7 +28,7 @@ fn key_release_does_not_start_isearch() {
     let events = vec![release(KeyCode::Char('s'), KeyModifiers::CONTROL)];
     let (mut app, mut events) = test_app(40, 10, events);
     app.run_until_idle(&mut events).unwrap();
-    assert!(app.editor.isearch.is_none());
+    assert!(app.editor.isearch().is_none());
 }
 
 #[test]
@@ -41,12 +41,12 @@ fn key_release_does_not_advance_pending_chord() {
     ];
     let (mut app, mut events) = test_app(40, 10, events);
     app.run_until_idle(&mut events).unwrap();
-    assert!(!app.editor.should_quit);
+    assert!(!app.editor.should_quit());
     assert_eq!(app.input.render_view(), "C-x ");
 
     let mut events = TestEventSource::new(vec![ctrl('c')]);
     app.run_until_idle(&mut events).unwrap();
-    assert!(app.editor.should_quit);
+    assert!(app.editor.should_quit());
 }
 
 /// Event source scripted with an explicit sequence of poll outcomes,
@@ -121,7 +121,7 @@ fn run_exits_cleanly_on_quit_before_source_closes() {
     // gets a chance to close the source.
     let (mut app, mut events) = test_app(40, 10, vec![ctrl('x'), ctrl('c')]);
     app.run(&mut events).unwrap();
-    assert!(app.editor.should_quit);
+    assert!(app.editor.should_quit());
 }
 
 #[test]
@@ -129,7 +129,7 @@ fn cg_cancels_pending_keys() {
     let events = vec![ctrl('x'), ctrl('g')];
     let (mut app, mut events) = test_app(40, 10, events);
     app.run_until_idle(&mut events).unwrap();
-    assert!(!app.editor.should_quit);
+    assert!(!app.editor.should_quit());
     assert_eq!(app.input.render_view(), "");
 }
 
@@ -279,7 +279,7 @@ fn paste_cancels_pending_chord() {
 
     assert_eq!(app.editor.buffer_text(), "Yoriginal", "paste was inserted");
     assert!(
-        app.editor.isearch.is_some(),
+        app.editor.isearch().is_some(),
         "C-s after the paste starts isearch instead of completing C-x C-s"
     );
     assert_eq!(app.input.render_view(), "", "no pending prefix remains");
@@ -305,7 +305,7 @@ fn mouse_click_cancels_pending_chord() {
 
     assert_eq!(app.input.render_view(), "", "the click cancelled the chord");
     assert_eq!(
-        app.editor.pane_tree.focus_path(),
+        app.editor.pane_tree().focus_path(),
         &[1],
         "the click still switched focus to the second pane"
     );

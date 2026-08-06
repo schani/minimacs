@@ -20,7 +20,7 @@ fn mark_set_during_prompt_does_not_reappear_after_finish() {
     app.run_until_idle(&mut events).unwrap();
     assert_eq!(app.editor.buffer_text(), "content");
     // The legit post-finish message shows; the stale "Mark set" doesn't.
-    assert_eq!(app.editor.minibuffer.message(), Some("Opened marked.txt"));
+    assert_eq!(app.editor.minibuffer().message(), Some("Opened marked.txt"));
     let screen = capture_screen(&app.terminal);
     assert!(!screen.contains("Mark set"), "screen: {screen}");
 }
@@ -64,7 +64,7 @@ fn minibuffer_navigation_via_app() {
     ];
     let (mut app, mut events) = test_app(40, 10, events);
     app.run_until_idle(&mut events).unwrap();
-    assert!(!app.editor.minibuffer.is_active());
+    assert!(!app.editor.minibuffer().is_active());
 }
 
 #[test]
@@ -91,12 +91,8 @@ fn minibuffer_tab_completion_via_app() {
 fn minibuffer_grows_upward_and_moves_cursor_to_wrapped_row() {
     let (mut app, _) = test_app(8, 8, vec![]);
     app.editor
-        .minibuffer
-        .start_prompt(crate::minibuffer::PromptKind::FindFile, "I: ");
-    app.editor
-        .minibuffer_buffer
-        .reset_transient_text("abcdefghi");
-    app.editor.minibuffer_pane.set_point(9);
+        .start_prompt_for_test(crate::minibuffer::PromptKind::FindFile, "I: ");
+    app.editor.set_minibuffer_fixture("abcdefghi", 9);
 
     app.update_viewport();
     app.render().unwrap();
@@ -106,8 +102,8 @@ fn minibuffer_grows_upward_and_moves_cursor_to_wrapped_row() {
     assert_eq!(rows[6], "I: abcde");
     assert_eq!(rows[7], "fghi");
     assert_eq!(app.terminal.get_cursor_position().unwrap(), (4, 7).into());
-    assert_eq!(app.editor.minibuffer_pane.viewport_height(), 2);
-    assert_eq!(app.editor.pane_tree.focused_pane().viewport_height(), 5);
+    assert_eq!(app.editor.minibuffer_pane().viewport_height(), 2);
+    assert_eq!(app.editor.pane_tree().focused_pane().viewport_height(), 5);
 }
 
 // === Minibuffer-as-real-buffer integration tests ===
@@ -128,7 +124,7 @@ fn minibuffer_word_movement() {
     // After M-b from end of "hello world", cursor at 6 (start of "world")
     // But we cancelled, so minibuffer is inactive. Check that it was at 6.
     // We can verify indirectly: cancel restores, buffer text is still "hello"
-    assert!(!app.editor.minibuffer.is_active());
+    assert!(!app.editor.minibuffer().is_active());
 }
 
 #[test]
@@ -144,9 +140,9 @@ fn minibuffer_kill_line() {
     events.push(ctrl('k')); // kill line
     let (mut app, mut events) = test_app(40, 10, events);
     app.run_until_idle(&mut events).unwrap();
-    assert!(app.editor.minibuffer.is_active());
+    assert!(app.editor.minibuffer().is_active());
     assert_eq!(app.editor.minibuffer_text(), "");
-    assert_eq!(app.editor.clipboard, "hello world");
+    assert_eq!(app.editor.clipboard(), "hello world");
 }
 
 #[test]
@@ -161,7 +157,7 @@ fn minibuffer_delete_forward() {
     events.push(ctrl('d')); // delete forward
     let (mut app, mut events) = test_app(40, 10, events);
     app.run_until_idle(&mut events).unwrap();
-    assert!(app.editor.minibuffer.is_active());
+    assert!(app.editor.minibuffer().is_active());
     assert_eq!(app.editor.minibuffer_text(), "ello");
 }
 
@@ -178,7 +174,7 @@ fn minibuffer_undo() {
     events.push(ctrl('/')); // undo
     let (mut app, mut events) = test_app(40, 10, events);
     app.run_until_idle(&mut events).unwrap();
-    assert!(app.editor.minibuffer.is_active());
+    assert!(app.editor.minibuffer().is_active());
     assert_eq!(app.editor.minibuffer_text(), "");
 }
 
@@ -203,7 +199,7 @@ fn minibuffer_undo_tab_completion() {
     events.push(ctrl('/')); // undo tab completion
     let (mut app, mut events) = test_app(40, 10, events);
     app.run_until_idle(&mut events).unwrap();
-    assert!(app.editor.minibuffer.is_active());
+    assert!(app.editor.minibuffer().is_active());
     assert_eq!(app.editor.minibuffer_text(), prefix);
 }
 
@@ -222,9 +218,9 @@ fn minibuffer_mark_and_cut() {
     events.push(ctrl('w')); // cut
     let (mut app, mut events) = test_app(40, 10, events);
     app.run_until_idle(&mut events).unwrap();
-    assert!(app.editor.minibuffer.is_active());
+    assert!(app.editor.minibuffer().is_active());
     assert_eq!(app.editor.minibuffer_text(), "llo");
-    assert_eq!(app.editor.clipboard, "he");
+    assert_eq!(app.editor.clipboard(), "he");
 }
 
 #[test]
@@ -235,13 +231,13 @@ fn minibuffer_paste() {
         events.push(key(KeyCode::Backspace));
     }
     let (mut app, mut events_src) = test_app(40, 10, events);
-    app.editor.clipboard = "pasted".to_string();
+    app.editor.set_clipboard_for_test("pasted");
     app.run_until_idle(&mut events_src).unwrap();
     // Now open prompt is active with empty input. Send C-y.
     let paste_events = vec![ctrl('y')];
     let mut paste_src = TestEventSource::new(paste_events);
     app.run_until_idle(&mut paste_src).unwrap();
-    assert!(app.editor.minibuffer.is_active());
+    assert!(app.editor.minibuffer().is_active());
     assert_eq!(app.editor.minibuffer_text(), "pasted");
 }
 
@@ -253,8 +249,8 @@ fn minibuffer_prompt_guard_prevents_nesting() {
     events.push(ctrl('f')); // try to open another prompt
     let (mut app, mut events) = test_app(40, 10, events);
     app.run_until_idle(&mut events).unwrap();
-    assert!(app.editor.minibuffer.is_active());
-    let prompt = app.editor.minibuffer.prompt().unwrap();
+    assert!(app.editor.minibuffer().is_active());
+    let prompt = app.editor.minibuffer().prompt().unwrap();
     assert_eq!(prompt.kind(), crate::minibuffer::PromptKind::FindFile);
 }
 
@@ -268,8 +264,8 @@ fn minibuffer_isearch_guard() {
     ];
     let (mut app, mut events) = test_app(40, 10, events);
     app.run_until_idle(&mut events).unwrap();
-    assert!(app.editor.minibuffer.is_active());
-    assert!(app.editor.isearch.is_none());
+    assert!(app.editor.minibuffer().is_active());
+    assert!(app.editor.isearch().is_none());
 }
 
 #[test]
@@ -283,9 +279,9 @@ fn minibuffer_kill_buffer_guard() {
     ];
     let (mut app, mut events) = test_app(40, 10, events);
     app.run_until_idle(&mut events).unwrap();
-    assert!(app.editor.minibuffer.is_active());
+    assert!(app.editor.minibuffer().is_active());
     // Buffer should still be there
-    assert_eq!(app.editor.buffers.len(), 1);
+    assert_eq!(app.editor.buffers().len(), 1);
 }
 
 #[test]
@@ -299,8 +295,8 @@ fn minibuffer_quit_guard() {
     ];
     let (mut app, mut events) = test_app(40, 10, events);
     app.run_until_idle(&mut events).unwrap();
-    assert!(!app.editor.should_quit);
-    assert!(app.editor.minibuffer.is_active());
+    assert!(!app.editor.should_quit());
+    assert!(app.editor.minibuffer().is_active());
 }
 
 #[test]
@@ -313,7 +309,7 @@ fn minibuffer_paste_sanitizes_newlines() {
     events.push(Event::Paste("hello\nworld".to_string()));
     let (mut app, mut events) = test_app(40, 10, events);
     app.run_until_idle(&mut events).unwrap();
-    assert!(app.editor.minibuffer.is_active());
+    assert!(app.editor.minibuffer().is_active());
     assert_eq!(app.editor.minibuffer_text(), "hello world");
 }
 
@@ -343,7 +339,7 @@ fn minibuffer_delete_word_backward() {
     events.push(alt(KeyCode::Backspace)); // delete word backward
     let (mut app, mut events) = test_app(40, 10, events);
     app.run_until_idle(&mut events).unwrap();
-    assert!(app.editor.minibuffer.is_active());
+    assert!(app.editor.minibuffer().is_active());
     assert_eq!(app.editor.minibuffer_text(), "hello ");
 }
 
@@ -389,7 +385,7 @@ fn find_file_relative_dotdot_resolves_against_editor_cwd() {
     events.push(key(KeyCode::Enter));
 
     let (mut app, mut events) = test_app(60, 10, events);
-    app.editor.cwd = sub.clone();
+    app.editor.set_cwd_for_test(sub.clone());
     app.run_until_idle(&mut events).unwrap();
     assert_eq!(app.editor.buffer_text(), "parent copy");
 }
@@ -411,7 +407,7 @@ fn write_file_relative_dotdot_resolves_against_editor_cwd() {
     events.push(key(KeyCode::Enter));
 
     let (mut app, mut events) = test_app_with_text(60, 10, "the text", events);
-    app.editor.cwd = sub.clone();
+    app.editor.set_cwd_for_test(sub.clone());
     app.run_until_idle(&mut events).unwrap();
     assert_eq!(
         std::fs::read_to_string(dir.path().join("saved.txt")).unwrap(),
@@ -427,6 +423,6 @@ fn find_file_falls_back_to_cwd_for_scratch_buffer() {
     let (mut app, mut events) = test_app(60, 10, events);
     app.run_until_idle(&mut events).unwrap();
 
-    let expected = format!("{}/", app.editor.cwd.display());
+    let expected = format!("{}/", app.editor.cwd().display());
     assert_eq!(app.editor.minibuffer_text(), expected);
 }

@@ -14,8 +14,8 @@ mod mouse;
 use input::InputState;
 
 pub struct App<B: Backend> {
-    pub editor: Editor,
-    pub terminal: Terminal<B>,
+    editor: Editor,
+    terminal: Terminal<B>,
     input: InputState,
     syntax_worker: SyntaxWorker,
     /// Number of `render()` calls, so tests can assert that discarded
@@ -28,6 +28,10 @@ impl<B: Backend> App<B>
 where
     B::Error: Send + Sync + 'static,
 {
+    pub fn editor(&self) -> &Editor {
+        &self.editor
+    }
+
     pub fn new(terminal: Terminal<B>, editor: Editor) -> Self {
         Self {
             editor,
@@ -63,7 +67,7 @@ where
             };
             let state_changed = self.dispatch_event(event);
             let syntax_changed = self.apply_syntax_completions();
-            if self.editor.should_quit {
+            if self.editor.should_quit() {
                 break;
             }
 
@@ -88,7 +92,7 @@ where
 
         while let Poll::Event(event) = event_source.next_event() {
             let state_changed = self.dispatch_event(event);
-            if self.editor.should_quit {
+            if self.editor.should_quit() {
                 break;
             }
             if state_changed {
@@ -131,7 +135,7 @@ where
                 self.input.reset();
                 // Paste during isearch extends the query (isearch-yank)
                 // instead of inserting into a buffer.
-                if self.editor.isearch.is_some() {
+                if self.editor.isearch().is_some() {
                     self.editor.isearch_yank(&text);
                 } else {
                     self.editor.paste_supplied_text(&text);
@@ -166,27 +170,25 @@ where
             ratatui::layout::Rect::new(0, 0, size.width, size.height),
         );
 
-        let (pane_rects, _separators) = self.editor.pane_tree.calculate_rects(layout.pane_area);
+        let (pane_rects, _separators) = self.editor.pane_tree().calculate_rects(layout.pane_area);
         let mut dimensions_changed = false;
         for (path, rect) in &pane_rects {
             // Each pane rect includes 1 row for mode line
             let text_height = rect.height.saturating_sub(1) as usize;
             let text_width = rect.width as usize;
-            let pane = self.editor.pane_tree.pane_at_focus_path(path);
+            let pane = self.editor.pane_tree().pane_at_focus_path(path);
             dimensions_changed |=
                 pane.viewport_height() != text_height || pane.viewport_width() != text_width;
             self.editor
-                .pane_tree
                 .update_pane_viewport(path, text_height, text_width);
         }
 
         let minibuffer_width = layout.minibuffer_area.width as usize;
         let minibuffer_height = layout.minibuffer_area.height as usize;
-        dimensions_changed |= self.editor.minibuffer_pane.viewport_width() != minibuffer_width
-            || self.editor.minibuffer_pane.viewport_height() != minibuffer_height;
+        dimensions_changed |= self.editor.minibuffer_pane().viewport_width() != minibuffer_width
+            || self.editor.minibuffer_pane().viewport_height() != minibuffer_height;
         self.editor
-            .minibuffer_pane
-            .set_viewport(minibuffer_height, minibuffer_width);
+            .update_minibuffer_viewport(minibuffer_height, minibuffer_width);
 
         // Reflow can move point below the viewport even though no editing
         // command ran. Apply every new dimension first, then reveal the
@@ -214,20 +216,12 @@ where
     fn apply_syntax_completions(&mut self) -> bool {
         let mut changed = false;
         for completion in self.syntax_worker.take_completions() {
-            let Some(buffer) = self.editor.buffers.iter().find(|buffer| {
-                buffer
-                    .syntax()
-                    .is_some_and(|syntax| syntax.background_key() == completion.key)
-            }) else {
-                continue;
-            };
-            let syntax = buffer.syntax().expect("matching syntax state disappeared");
-            let accepted =
-                syntax.accept_background_completion(completion, buffer.edit_generation());
-            if accepted && syntax.take_disabled_message() {
-                self.editor
-                    .minibuffer
-                    .show_message("Syntax highlighting disabled (parse timeout)".to_string());
+            let (accepted, show_disabled_message) =
+                self.editor.accept_syntax_completion(completion);
+            if show_disabled_message {
+                self.editor.set_pending_display_message(
+                    "Syntax highlighting disabled (parse timeout)".to_string(),
+                );
             }
             changed |= accepted;
         }

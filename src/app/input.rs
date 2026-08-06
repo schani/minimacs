@@ -92,13 +92,13 @@ where
         };
 
         // If isearch is active, route keys to isearch handler
-        if self.editor.isearch.is_some() {
+        if self.editor.isearch().is_some() {
             self.handle_isearch_key(key);
             return;
         }
 
         // If minibuffer is active, intercept Enter/Tab then route through keymap
-        if self.editor.minibuffer.is_active() {
+        if self.editor.minibuffer().is_active() {
             match (key.modifiers, key.code) {
                 (KeyModifiers::NONE, KeyCode::Enter) => {
                     self.editor.submit_prompt();
@@ -126,8 +126,7 @@ where
                     // A dead-end chord (e.g. C-x j) must not self-insert.
                     let chord = format!("{pending_before}{}", Key::from_event(key).display());
                     self.editor
-                        .minibuffer
-                        .show_message(format!("{chord} is undefined"));
+                        .set_pending_display_message(format!("{chord} is undefined"));
                     return;
                 }
                 // Self-insert fallback for printable chars
@@ -177,11 +176,11 @@ where
     fn handle_minibuffer_tab(&mut self) {
         use crate::minibuffer::{complete_buffer_with_candidates, complete_path_with_candidates};
 
-        let kind = self.editor.minibuffer.prompt().map(|p| p.kind());
+        let kind = self.editor.minibuffer().prompt().map(|p| p.kind());
         let input = self.editor.minibuffer_text();
         let (completed, candidates) = match kind {
             Some(PromptKind::FindFile) | Some(PromptKind::WriteFile) => {
-                complete_path_with_candidates(&input, &self.editor.cwd)
+                complete_path_with_candidates(&input, self.editor.cwd())
             }
             Some(PromptKind::SwitchBuffer) => {
                 let names = self.editor.buffer_names();

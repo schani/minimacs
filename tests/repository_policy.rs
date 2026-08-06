@@ -318,6 +318,19 @@ fn prompt_and_search_state_fields_are_private() {
 }
 
 #[test]
+fn editor_and_app_state_fields_are_private() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    for (source, aggregate) in [("src/editor.rs", "Editor"), ("src/app.rs", "App")] {
+        let contents = std::fs::read_to_string(root.join(source)).unwrap();
+        let fields = public_aggregate_fields(&contents, vec![aggregate]).unwrap();
+        assert!(
+            fields.is_empty(),
+            "{source} {aggregate} mutation-sensitive fields must be private; found {fields:?}"
+        );
+    }
+}
+
+#[test]
 fn editor_render_policy_ignores_comments_and_detects_real_dependencies() {
     let dependencies = render_dependencies(
         r#"

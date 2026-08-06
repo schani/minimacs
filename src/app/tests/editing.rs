@@ -58,7 +58,7 @@ fn cx_cc_quits() {
     let events = vec![ctrl('x'), ctrl('c')];
     let (mut app, mut events) = test_app(40, 10, events);
     app.run_until_idle(&mut events).unwrap();
-    assert!(app.editor.should_quit);
+    assert!(app.editor.should_quit());
 }
 
 #[test]
@@ -148,7 +148,7 @@ fn paste_is_single_undo_group() {
 #[test]
 fn cy_paste_is_its_own_undo_group_after_typing() {
     let (mut app, _) = test_app(40, 10, vec![]);
-    app.editor.clipboard = "hé".to_string();
+    app.editor.set_clipboard_for_test("hé");
     let mut events = TestEventSource::new(vec![char_key('x'), ctrl('y'), ctrl('/')]);
     app.run_until_idle(&mut events).unwrap();
 
@@ -163,7 +163,7 @@ fn bracketed_paste_matches_cy_for_unicode_normalization_and_point() {
     bracketed.run_until_idle(&mut events).unwrap();
 
     let (mut yanked, _) = test_app(40, 10, vec![]);
-    yanked.editor.clipboard = supplied.to_string();
+    yanked.editor.set_clipboard_for_test(supplied);
     let mut events = TestEventSource::new(vec![ctrl('y')]);
     yanked.run_until_idle(&mut events).unwrap();
 
@@ -180,11 +180,11 @@ fn large_multiline_bracketed_paste_keeps_cursor_visible_and_resets_goal_column()
         .collect::<Vec<_>>()
         .join("\n");
     let (mut app, _) = test_app(20, 6, vec![]);
-    app.editor.pane_tree.set_focused_preferred_column(Some(17));
+    app.editor.set_focused_preferred_column_for_test(Some(17));
     let mut events = TestEventSource::new(vec![Event::Paste(pasted)]);
     app.run_until_idle(&mut events).unwrap();
 
-    let pane = app.editor.pane_tree.focused_pane();
+    let pane = app.editor.pane_tree().focused_pane();
     let (cursor_line, _) = app.editor.current_buffer().char_to_line_col(pane.point());
     assert_eq!(cursor_line, 39);
     assert!(
@@ -202,22 +202,22 @@ fn resize_event_handled() {
     let (mut app, mut events) = test_app(40, 10, events);
     app.run_until_idle(&mut events).unwrap();
     // Should not crash — resize is a no-op
-    assert!(!app.editor.should_quit);
+    assert!(!app.editor.should_quit());
 }
 
 #[test]
 fn resize_applies_new_viewport_before_revealing_cursor() {
     let text = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
     let (mut app, mut events) = test_app_with_text(20, 6, text, vec![]);
-    app.editor.pane_tree.set_focused_point(text.chars().count());
+    app.editor.set_focused_point(text.chars().count());
     app.run_until_idle(&mut events).unwrap();
-    assert_eq!(app.editor.pane_tree.focused_pane().scroll_row_offset(), 0);
+    assert_eq!(app.editor.pane_tree().focused_pane().scroll_row_offset(), 0);
 
     app.terminal.backend_mut().resize(8, 6);
     let mut events = TestEventSource::new(vec![Event::Resize(8, 6)]);
     app.run_until_idle(&mut events).unwrap();
 
-    let pane = app.editor.pane_tree.focused_pane();
+    let pane = app.editor.pane_tree().focused_pane();
     assert_eq!(pane.viewport_width(), 8);
     assert!(
         pane.scroll_row_offset() > 0,

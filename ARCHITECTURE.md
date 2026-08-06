@@ -136,22 +136,17 @@ submission, or cursor reveal after viewport reflow). These entry points keep
 state transitions inside `Editor` without exposing broad mutable access to
 `App`.
 
-```rust
-struct Editor {
-    buffers: Vec<Buffer>,
-    next_buffer_id: usize,
-    pane_tree: PaneTree,
-    clipboard: String,
-    cwd: PathBuf,
-    should_quit: bool,
-    minibuffer: Minibuffer,
-    minibuffer_buffer: Buffer,  // id=usize::MAX, not in buffers vec
-    minibuffer_pane: Pane,      // viewport_height=1
-    isearch: Option<ISearchState>,
-    last_command: Option<Command>,
-    last_recenter_position: Option<RecenterPosition>,
-}
-```
+`Editor` keeps every owned aggregate and lifecycle flag private: buffer
+storage/identity allocation, pane tree, clipboard, cwd, quit state,
+minibuffer buffer/pane/state, isearch, command sequencing, and pending quit
+work. Rendering and input use immutable queries for buffers, panes,
+minibuffer/search state, cwd, and quit status. Changes use narrow editor
+intents for edits/history, messages, background-syntax completion, pane focus
+and viewport geometry, and prompt/search lifecycles. Production code receives
+neither generic mutable buffer collections nor generic mutable aggregate
+access; exceptional setup is confined to cfg(test) fixture methods. `App`
+follows the same rule for its editor, terminal, input state, syntax worker, and
+render counter; runtime gets only the editor's read-only quit result.
 
 `active_buffer()` / `active_pane()` return the minibuffer buffer/pane when the
 minibuffer is active, otherwise the focused pane's buffer. All editing and
@@ -795,8 +790,9 @@ it with "Quit". Handlers that want a result message ("Wrote file.txt",
 
 ### Minibuffer as a Real Buffer
 
-The minibuffer uses a real `Buffer` (`minibuffer_buffer`, id=`usize::MAX`) and
-`Pane` (`minibuffer_pane`) owned by `Editor`. Its viewport starts at one row
+The minibuffer uses a real `Buffer` (`minibuffer_buffer`, id=
+`MINIBUFFER_BUFFER_ID`) and `Pane` (`minibuffer_pane`) owned by `Editor`. The
+named constant replaces an editor-side sentinel literal. Its viewport starts at one row
 and `App::update_viewport()` refreshes both dimensions from `screen_layout()`.
 When a prompt is active, `active_buffer()` / `active_pane()` return the
 minibuffer's buffer/pane instead of the focused pane's. This means all editing
