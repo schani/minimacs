@@ -961,8 +961,10 @@ All production modules and their unit tests belong to the single library
 target. The three binaries only call the library's narrow entry functions, so
 `cargo test --all-targets` executes each unit test once instead of rebuilding
 parent-relative module trees in the syntax harness binaries. The repository
-policy test requires `src/lib.rs` and rejects parent-relative `#[path]` module
-inclusion from `src/bin/*.rs`, keeping that ownership boundary intact.
+policy test requires `src/lib.rs` and parses `src/main.rs` plus `src/bin/*.rs`
+as Rust syntax, rejecting active module declarations, parent-relative `#[path]`
+attributes, and source-inclusion macros (`include!`, `include_str!`, and
+`include_bytes!`). Comments and string contents are not treated as active code.
 
 The editor is generic over `ratatui::Backend`. Production uses
 `CrosstermBackend<Stdout>`, tests use ratatui's `TestBackend`. Input is
