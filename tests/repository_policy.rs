@@ -37,6 +37,29 @@ fn active_yaml_list_contains(contents: &str, key: &str, expected: &str) -> bool 
 }
 
 #[test]
+fn library_owns_shared_modules_and_binary_wrappers_do_not_reinclude_them() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+
+    assert!(
+        root.join("src/lib.rs").is_file(),
+        "shared modules must have one owner in src/lib.rs"
+    );
+
+    for entry in std::fs::read_dir(root.join("src/bin")).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().and_then(|extension| extension.to_str()) != Some("rs") {
+            continue;
+        }
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            !contents.contains("#[path = \"../"),
+            "{} must use the minimacs library instead of parent-relative module inclusion",
+            path.display()
+        );
+    }
+}
+
+#[test]
 fn cargo_builds_do_not_manage_git_hooks() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
 
