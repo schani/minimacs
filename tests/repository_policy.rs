@@ -27,3 +27,30 @@ fn hook_opt_in_is_documented_for_users_and_agents() {
         );
     }
 }
+
+#[test]
+fn rustfmt_check_is_mirrored_and_runs_before_expensive_checks() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let format_command = "cargo fmt --all -- --check";
+
+    for policy_file in [".github/workflows/ci.yml", ".githooks/pre-commit"] {
+        let contents = std::fs::read_to_string(root.join(policy_file)).unwrap();
+        let format_position = contents
+            .find(format_command)
+            .unwrap_or_else(|| panic!("{policy_file} must run `{format_command}`"));
+        let build_position = contents
+            .find("cargo build")
+            .unwrap_or_else(|| panic!("{policy_file} must run the build check"));
+
+        assert!(
+            format_position < build_position,
+            "{policy_file} must run `{format_command}` before the expensive checks"
+        );
+    }
+
+    let ci = std::fs::read_to_string(root.join(".github/workflows/ci.yml")).unwrap();
+    assert!(
+        ci.contains("components: rustfmt, clippy, llvm-tools-preview"),
+        "stable CI must explicitly request the rustfmt component"
+    );
+}

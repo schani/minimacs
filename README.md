@@ -217,8 +217,9 @@ drive the full editor through a `TestBackend`, and snapshot tests for rendered
 output. Ignored manual performance tests are documented with their relevant
 benchmark commands above.
 
-An optional, versioned pre-commit hook runs the same build, test/coverage, and
-Clippy checks. After cloning, enable it once for each checkout with:
+An optional, versioned pre-commit hook runs the same formatting, build,
+test/coverage, and Clippy checks. After cloning, enable it once for each
+checkout with:
 
 ```sh
 git config core.hooksPath .githooks
@@ -227,10 +228,11 @@ git config core.hooksPath .githooks
 This is an explicit opt-in: Cargo builds never install or overwrite Git hooks.
 
 CI (GitHub Actions, `.github/workflows/ci.yml`) runs on every pull request and
-on pushes to `main`. It mirrors the optional pre-commit hook — build, tests behind the
-90% line-coverage threshold (`cargo llvm-cov`), and `cargo clippy -D warnings`
-— plus a syntax-subsystem smoke check: a short `syntax-fuzz` sweep and a
-`syntax-bench` checksum run.
+on pushes to `main`. It mirrors the optional pre-commit hook —
+`cargo fmt --all -- --check`, build, tests behind the 90% line-coverage
+threshold (`cargo llvm-cov`), and `cargo clippy -D warnings` — plus a
+syntax-subsystem smoke check: a short `syntax-fuzz` sweep and a `syntax-bench`
+checksum run.
 
 ## License
 
