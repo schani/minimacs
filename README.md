@@ -63,6 +63,24 @@ To build without OS clipboard support (removes the `arboard` dependency):
 cargo build --release --no-default-features
 ```
 
+### Native macOS app
+
+On macOS 12 or newer with Xcode installed, build the native AppKit frontend:
+
+```sh
+macos/build.sh
+open target/macos/Minimacs.app
+```
+
+The script builds the Rust core as a release `staticlib`, compiles the
+programmatic Swift/AppKit shell, creates an ad-hoc-signed app bundle at
+`target/macos/Minimacs.app`, and does not use SwiftUI or a web runtime. The app
+uses a custom Core Text grid view while sharing minimacs' Rust editor, keymap,
+panes, prompts, rendering, and background syntax worker. Files can be opened
+from Finder, the File menu, or as command-line arguments to the bundle's
+`Contents/MacOS/Minimacs` executable. Standard macOS Open/Save/Undo/Redo/Paste
+menu shortcuts and the documented Emacs bindings are available.
+
 ### Syntax edit benchmark
 
 The `syntax-bench` CLI compares the cost of applying the same deterministic

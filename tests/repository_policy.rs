@@ -15,6 +15,20 @@ fn cargo_builds_do_not_manage_git_hooks() {
 }
 
 #[test]
+fn native_macos_frontend_sources_are_versioned() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+
+    for path in [
+        "macos/MinimacsApp.swift",
+        "macos/Info.plist",
+        "macos/build.sh",
+        "macos/include/minimacs_native.h",
+    ] {
+        assert!(root.join(path).is_file(), "missing native frontend file: {path}");
+    }
+}
+
+#[test]
 fn hook_opt_in_is_documented_for_users_and_agents() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let command = "git config core.hooksPath .githooks";

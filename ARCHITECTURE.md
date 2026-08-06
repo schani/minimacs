@@ -50,6 +50,13 @@ Terminal input (crossterm)
 ## Module Map
 
 ```
+macos/
+  MinimacsApp.swift Programmatic AppKit lifecycle, menus, NSTextInputClient,
+                    mouse input, and Core Text grid view
+  include/minimacs_native.h
+                    Stable C declarations matching src/native.rs
+  build.sh          Builds/ad-hoc-signs target/macos/Minimacs.app
+
 src/
   lib.rs            Library module root; re-exports Editor and Command for
                     frontends that do not own a terminal
@@ -405,7 +412,11 @@ discarded branch, `clean_version` is set to `None` (unreachable).
 
 ## Native Frontend Bridge
 
-The macOS frontend links the library's `staticlib` output through
+The macOS frontend is a programmatic Swift/AppKit application with no SwiftUI
+or web runtime. Its custom flipped `NSView` batches equal-style cells into Core
+Text runs, draws the cursor itself, implements `NSTextInputClient` for composed
+input, and translates native key, click, scroll, menu, Finder-open, and
+command-line-open events. It links the library's `staticlib` output through
 `macos/include/minimacs_native.h`. `native.rs` owns an `App<TestBackend>` and
 exposes the rendered viewport as borrowed `MmCell` values containing UTF-8 cell
 text, RGB colors, and text modifiers. This deliberately reuses the established
