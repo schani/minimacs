@@ -755,8 +755,10 @@ validation on submit: input that is blank or normalizes to the empty path
 (`.`, `a/..`) re-asks instead of acting — the requirement is flagged in the
 live prompt label ("Find file (path required): ", the same mechanism as the
 failing-isearch label, since queued messages are invisible while a prompt is
-active) and the default directory prefill is restored. `open_file` and the
-`write_buffer` choke point also reject empty paths outright (defense in depth
+active) and the default directory prefill is restored. The prefill ends in
+exactly one platform path separator, including when its directory is the
+filesystem root. `open_file` and the `write_buffer` choke point also reject
+empty paths outright (defense in depth
 for non-prompt callers like CLI arguments).
 Before opening, `Editor::open_file` anchors relative paths to the editor cwd,
 lexically removes `.`/`..`, and canonicalizes the longest existing ancestor.

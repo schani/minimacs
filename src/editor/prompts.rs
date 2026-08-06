@@ -82,7 +82,7 @@ impl Editor {
     }
 
     /// The initial input of a path prompt: the current buffer's directory
-    /// (or the editor's `cwd`), with a trailing `/`.
+    /// (or the editor's `cwd`), with one trailing platform path separator.
     fn default_path_prompt_input(&self) -> String {
         let dir = self
             .current_buffer()
@@ -90,7 +90,11 @@ impl Editor {
             .as_ref()
             .and_then(|p| p.parent())
             .unwrap_or(&self.cwd);
-        format!("{}/", dir.display())
+        let mut input = dir.display().to_string();
+        if !input.ends_with(std::path::MAIN_SEPARATOR) {
+            input.push(std::path::MAIN_SEPARATOR);
+        }
+        input
     }
 
     /// Re-ask an active path prompt whose input didn't validate: flag the

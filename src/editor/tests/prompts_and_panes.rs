@@ -269,6 +269,28 @@ fn find_file_submit_normalizes_dotdot() {
 }
 
 #[test]
+fn find_file_at_filesystem_root_has_one_trailing_separator() {
+    let root = std::path::PathBuf::from(std::path::MAIN_SEPARATOR.to_string());
+    let mut editor = Editor::new();
+    editor.cwd = root.clone();
+
+    editor.execute(Command::FindFile);
+
+    assert_eq!(editor.minibuffer_text(), root.to_string_lossy());
+}
+
+#[test]
+fn write_file_at_filesystem_root_has_one_trailing_separator() {
+    let root = std::path::PathBuf::from(std::path::MAIN_SEPARATOR.to_string());
+    let mut editor = Editor::new_with_text("content");
+    editor.cwd = root.clone();
+
+    editor.execute(Command::WriteFile);
+
+    assert_eq!(editor.minibuffer_text(), root.to_string_lossy());
+}
+
+#[test]
 fn find_file_empty_input_reasks() {
     let mut editor = Editor::new();
     let buffer_count = editor.buffers.len();
