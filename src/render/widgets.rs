@@ -5,12 +5,12 @@ use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
 use crate::buffer::Buffer;
+use crate::display::*;
 use crate::editor::Editor;
 use crate::pane::{visual_lines_for_length, Pane};
 use crate::syntax_worker::{SyntaxJob, SyntaxWorker};
 
 use super::layout::*;
-use super::visual_line::*;
 
 /// Render the entire editor UI into the given frame.
 pub fn render(frame: &mut Frame, editor: &Editor, syntax_worker: &SyntaxWorker) {

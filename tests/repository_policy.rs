@@ -10,6 +10,11 @@ struct BinarySourceViolations {
     include_macros: Vec<String>,
 }
 
+#[derive(Debug, Default, PartialEq, Eq)]
+struct RenderDependencies {
+    paths: Vec<String>,
+}
+
 impl BinarySourceViolations {
     fn is_empty(&self) -> bool {
         self.module_declarations.is_empty()
@@ -61,11 +66,58 @@ impl<'ast> Visit<'ast> for BinarySourceViolations {
     }
 }
 
+impl<'ast> Visit<'ast> for RenderDependencies {
+    fn visit_item_use(&mut self, item: &'ast syn::ItemUse) {
+        if use_tree_starts_with_crate_render(&item.tree) {
+            self.paths.push("use crate::render".to_string());
+        }
+        visit::visit_item_use(self, item);
+    }
+
+    fn visit_path(&mut self, path: &'ast syn::Path) {
+        let mut segments = path.segments.iter();
+        if segments
+            .next()
+            .is_some_and(|segment| segment.ident == "crate")
+            && segments
+                .next()
+                .is_some_and(|segment| segment.ident == "render")
+        {
+            self.paths.push("crate::render".to_string());
+        }
+        visit::visit_path(self, path);
+    }
+}
+
+fn use_tree_starts_with_crate_render(tree: &syn::UseTree) -> bool {
+    let syn::UseTree::Path(crate_path) = tree else {
+        return false;
+    };
+    crate_path.ident == "crate" && use_tree_has_render_branch(&crate_path.tree)
+}
+
+fn use_tree_has_render_branch(tree: &syn::UseTree) -> bool {
+    match tree {
+        syn::UseTree::Path(path) => path.ident == "render",
+        syn::UseTree::Name(name) => name.ident == "render",
+        syn::UseTree::Rename(rename) => rename.ident == "render",
+        syn::UseTree::Group(group) => group.items.iter().any(use_tree_has_render_branch),
+        syn::UseTree::Glob(_) => false,
+    }
+}
+
 fn binary_source_violations(contents: &str) -> syn::Result<BinarySourceViolations> {
     let file = syn::parse_file(contents)?;
     let mut violations = BinarySourceViolations::default();
     violations.visit_file(&file);
     Ok(violations)
+}
+
+fn render_dependencies(contents: &str) -> syn::Result<RenderDependencies> {
+    let file = syn::parse_file(contents)?;
+    let mut dependencies = RenderDependencies::default();
+    dependencies.visit_file(&file);
+    Ok(dependencies)
 }
 
 fn binary_sources(root: &Path) -> Vec<PathBuf> {
@@ -76,6 +128,24 @@ fn binary_sources(root: &Path) -> Vec<PathBuf> {
             .map(|entry| entry.unwrap().path())
             .filter(|path| path.extension().and_then(|extension| extension.to_str()) == Some("rs")),
     );
+    paths.sort();
+    paths
+}
+
+fn editor_sources(root: &Path) -> Vec<PathBuf> {
+    fn collect(directory: &Path, paths: &mut Vec<PathBuf>) {
+        for entry in std::fs::read_dir(directory).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                collect(&path, paths);
+            } else if path.extension().and_then(|extension| extension.to_str()) == Some("rs") {
+                paths.push(path);
+            }
+        }
+    }
+
+    let mut paths = vec![root.join("src/editor.rs")];
+    collect(&root.join("src/editor"), &mut paths);
     paths.sort();
     paths
 }
@@ -147,6 +217,41 @@ fn binary_source_policy_detects_duplicate_ownership_without_reading_comments() {
     assert!(binary_source_violations(comments_and_strings)
         .unwrap()
         .is_empty());
+}
+
+#[test]
+fn editor_render_policy_ignores_comments_and_detects_real_dependencies() {
+    let dependencies = render_dependencies(
+        r#"
+            // crate::render::line_visual_width(buffer, 0);
+            const EXAMPLE: &str = "use crate::render::visual_row_count;";
+            use crate::render::{line_visual_width, visual_row_count};
+            use crate::{buffer::Buffer, render as drawing};
+            fn geometry() {
+                crate::render::visual_row_col_in_line(buffer, 0, 0, 80);
+            }
+        "#,
+    )
+    .unwrap();
+
+    assert_eq!(dependencies.paths.len(), 3, "{dependencies:?}");
+}
+
+#[test]
+fn editor_does_not_depend_on_render() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+
+    for path in editor_sources(root) {
+        let contents = std::fs::read_to_string(&path).unwrap();
+        let dependencies = render_dependencies(&contents)
+            .unwrap_or_else(|error| panic!("failed to parse {}: {error}", path.display()));
+        assert!(
+            dependencies.paths.is_empty(),
+            "{} must depend on neutral display geometry, not crate::render; found {:?}",
+            path.display(),
+            dependencies.paths
+        );
+    }
 }
 
 #[test]

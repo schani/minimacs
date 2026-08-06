@@ -2,7 +2,7 @@ use ratatui::layout::Rect;
 
 use crate::editor::Editor;
 
-use super::visual_line::{char_width, terminal_safe_text};
+use crate::display::{char_width, terminal_safe_text};
 
 pub fn completions_layout(
     num_candidates: usize,

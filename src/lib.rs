@@ -1,6 +1,7 @@
 mod app;
 mod buffer;
 mod command;
+mod display;
 mod editor;
 mod event;
 mod history;

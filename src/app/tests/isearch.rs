@@ -3,6 +3,34 @@ use super::*;
 // === Isearch integration tests ===
 
 #[test]
+fn isearch_reveal_matches_normal_cursor_reveal_geometry() {
+    let text = format!("{}\t你好e\u{301} needle", "ascii".repeat(30));
+    let match_pos = text.find("needle").unwrap();
+    let match_char = text[..match_pos].chars().count();
+
+    let (mut normal, mut normal_events) = test_app_with_text(12, 6, &text, vec![]);
+    normal.run_until_idle(&mut normal_events).unwrap();
+    normal.editor.pane_tree.focused_pane_mut().point = match_char;
+    normal.editor.ensure_cursor_visible();
+    let normal_scroll = {
+        let pane = normal.editor.pane_tree.focused_pane();
+        (pane.scroll_top, pane.scroll_row_offset)
+    };
+
+    let events = vec![ctrl('s'), Event::Paste("needle".to_string())];
+    let (mut searching, mut search_events) = test_app_with_text(12, 6, &text, events);
+    searching.run_until_idle(&mut search_events).unwrap();
+    let search_scroll = {
+        let pane = searching.editor.pane_tree.focused_pane();
+        (pane.scroll_top, pane.scroll_row_offset)
+    };
+
+    assert!(searching.editor.minibuffer.is_active());
+    assert_eq!(searching.editor.point(), match_char);
+    assert_eq!(search_scroll, normal_scroll);
+}
+
+#[test]
 fn isearch_forward_via_app() {
     let text = "hello world hello";
     let events = vec![
