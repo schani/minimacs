@@ -38,6 +38,12 @@ enum EditKind {
     Other,
 }
 
+impl Default for History {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl History {
     pub fn new() -> Self {
         Self {

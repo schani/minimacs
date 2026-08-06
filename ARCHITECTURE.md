@@ -4,8 +4,11 @@ This document describes the internal architecture of minimacs.
 
 ## Overview
 
-minimacs has a synchronous main/UI thread and one lazily started background
-syntax thread. There is no async runtime. The event loop polls for terminal
+minimacs is built as a reusable Rust library plus its terminal binary. The
+library owns the editor model, commands, rendering support, and syntax worker;
+`src/main.rs` is a thin terminal lifecycle/CLI frontend. minimacs has a
+synchronous main/UI thread and one lazily started background syntax thread.
+There is no async runtime. The terminal event loop polls for terminal
 events with a 100ms timeout;
 when an event arrives it is processed and the UI re-renders. Poll timeouts
 and events that cannot have changed state (bare mouse motion, key releases,
@@ -48,8 +51,10 @@ Terminal input (crossterm)
 
 ```
 src/
-  main.rs           CLI parsing (parse_args), terminal setup/teardown (Drop
-                    guard + panic hook), runs the event loop
+  lib.rs            Library module root; re-exports Editor and Command for
+                    frontends that do not own a terminal
+  main.rs           Terminal frontend: CLI parsing (parse_args), terminal
+                    setup/teardown (Drop guard + panic hook), runs the event loop
   app.rs            App<B: Backend> -- event loop, dispatch_event, viewport update
   app/input.rs        InputState (chord + pending ESC) and key routing:
                       handle_key, isearch keys, minibuffer Tab, paste
@@ -91,7 +96,7 @@ src/
 ### Dependency Graph
 
 ```
-main ──> app ──> editor ──> buffer
+terminal main ──> library app ──> editor ──> buffer
                     |          |
                     |          +──> history
                     |          +──> syntax

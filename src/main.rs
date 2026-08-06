@@ -1,17 +1,3 @@
-mod app;
-mod buffer;
-mod command;
-mod editor;
-mod event;
-mod history;
-mod indent;
-mod keymap;
-mod minibuffer;
-mod pane;
-mod render;
-mod syntax;
-mod syntax_worker;
-
 use std::io;
 use std::path::PathBuf;
 
@@ -27,9 +13,9 @@ use crossterm::{
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 
-use app::App;
-use editor::Editor;
-use event::TerminalEventSource;
+use minimacs::app::App;
+use minimacs::editor::Editor;
+use minimacs::event::TerminalEventSource;
 
 /// Best-effort terminal restoration. Used by both the normal exit path and
 /// the panic hook, so every step must run even if earlier ones fail.

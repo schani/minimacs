@@ -280,6 +280,12 @@ pub struct Minibuffer {
     pub completion_page: usize,
 }
 
+impl Default for Minibuffer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Minibuffer {
     pub fn new() -> Self {
         Self {

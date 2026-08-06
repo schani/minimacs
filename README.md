@@ -3,7 +3,9 @@
 A terminal text editor with emacs keybindings, written in Rust.
 
 minimacs aims to be a fast, lightweight editor that feels familiar to emacs
-users. It is not extensible -- it ships one good editor, not a platform.
+users. It is not extensible -- it ships one good editor, not a platform. Its
+Rust library target exposes the shared `Editor` and `Command` model used by
+frontends; the default binary is the terminal frontend.
 
 ![screenshot](screenshot.png)
 
