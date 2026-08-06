@@ -55,6 +55,39 @@ fn quit_save_after_mouse_focus_marks_saved_undo_version_clean() {
 }
 
 #[test]
+fn mouse_click_in_multiline_idle_message_does_not_hit_pane() {
+    let text = (0..20)
+        .map(|line| format!("line {line}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let (mut app, _) = test_app_with_text(8, 9, &text, vec![]);
+    app.editor
+        .minibuffer
+        .show_message("a message that wraps over rows".to_string());
+    let mut events = TestEventSource::new(vec![mouse_click(2, 6)]);
+    app.run_until_idle(&mut events).unwrap();
+
+    assert_eq!(app.editor.point(), 0, "message rows are outside pane input");
+}
+
+#[test]
+fn mouse_scroll_in_grown_prompt_or_completions_does_not_scroll_pane() {
+    let text = (0..30)
+        .map(|line| format!("line {line}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let (mut app, _) = test_app_with_text(12, 12, &text, vec![]);
+    app.editor.execute(crate::command::Command::FindFile);
+    app.editor.minibuffer_buffer.text = ropey::Rope::from_str("a/very/long/prompt/value");
+    app.editor.minibuffer_pane.point = app.editor.minibuffer_buffer.char_count();
+    app.editor.minibuffer.completions = Some(vec!["alpha".into(), "alpine".into()]);
+    let mut events = TestEventSource::new(vec![mouse_scroll_down(2, 8)]);
+    app.run_until_idle(&mut events).unwrap();
+
+    assert_eq!(app.editor.pane_tree.focused_pane().scroll_top, 0);
+}
+
+#[test]
 fn mouse_click_places_cursor() {
     // 3-line text. Click on line 2, column 2.
     let text = "hello\nworld\nfoo";

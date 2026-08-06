@@ -205,6 +205,31 @@ fn resize_event_handled() {
     assert!(!app.editor.should_quit);
 }
 
+#[test]
+fn resize_applies_new_viewport_before_revealing_cursor() {
+    let text = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    let (mut app, mut events) = test_app_with_text(20, 6, text, vec![]);
+    app.editor.pane_tree.focused_pane_mut().point = text.chars().count();
+    app.run_until_idle(&mut events).unwrap();
+    assert_eq!(app.editor.pane_tree.focused_pane().scroll_row_offset, 0);
+
+    app.terminal.backend_mut().resize(8, 6);
+    let mut events = TestEventSource::new(vec![Event::Resize(8, 6)]);
+    app.run_until_idle(&mut events).unwrap();
+
+    let pane = app.editor.pane_tree.focused_pane();
+    assert_eq!(pane.viewport_width, 8);
+    assert!(
+        pane.scroll_row_offset > 0,
+        "cursor must be reflowed into the narrower viewport"
+    );
+    let cursor = app.terminal.get_cursor_position().unwrap();
+    assert!(
+        cursor.y < 5,
+        "cursor must remain in the text viewport: {cursor:?}"
+    );
+}
+
 // === Multi-pane rendering ===
 
 #[test]

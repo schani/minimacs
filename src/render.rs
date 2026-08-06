@@ -8,7 +8,6 @@ pub struct PendingInput<'a> {
     pub display: &'a str,
 }
 
-pub use layout::completions_height;
 pub use widgets::render;
 
 pub(crate) use layout::screen_layout;

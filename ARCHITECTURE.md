@@ -512,9 +512,12 @@ moving the mouse over the terminal must not cancel a chord in progress.
 `Event::Paste(text)` inserts the pasted text at point as a single undo group.
 When incremental search is active, the dispatcher instead routes the paste to
 `Editor::isearch_yank` (see the Incremental Search section).
-`Event::Mouse` handles left-button clicks. When the minibuffer is not active,
-a click determines which pane was clicked (using `calculate_rects()`), focuses
-that pane, and places the cursor at the clicked position. The position
+`Event::Mouse` handles left-button clicks. Both click and wheel paths use the
+canonical `screen_layout().pane_area` also consumed by viewport update and
+rendering; neither reconstructs a one-row minibuffer, so multi-row idle
+messages, prompts, and completion areas are outside pane mouse boundaries.
+When the minibuffer is not active, a click determines which pane was clicked
+(using `calculate_rects()`), focuses that pane, and places the cursor at the clicked position. The position
 calculation accounts for line wrapping, scroll position — including the
 pane's `scroll_row_offset`, added to the clicked screen row so wrap segments
 of a partially scrolled-off top line map correctly — and display-only tab
@@ -526,14 +529,18 @@ cursor by 3 **visual rows** (`scroll_down_visual_rows` /
 so the wheel moves smoothly through wrapped lines and can scroll within a
 single line taller than the viewport.
 `Event::Resize` is handled implicitly by the viewport update; it deliberately
-does not cancel a chord in progress.
+does not cancel a chord in progress. Whenever resize or dynamic
+minibuffer/completion layout changes pane dimensions, `update_viewport()`
+applies all new dimensions first and then calls `ensure_cursor_visible()` for
+the focused pane. Unchanged dimensions skip that reveal so intentional mouse
+scrolling can leave point off-screen.
 
 ## Rendering
 
 `render::render(frame, &editor)` is called when visible state changes. It:
 
-1. Calls the shared `screen_layout()` calculation used by both rendering and
-   `App::update_viewport()`. It divides the terminal into the pane region, an
+1. Calls the shared `screen_layout()` calculation used by rendering,
+   `App::update_viewport()`, and both mouse paths. It divides the terminal into the pane region, an
    optional completion list, and a dynamically sized minibuffer.
 2. Walks `pane_tree.calculate_rects()` to get per-pane rectangles.
 3. For each pane:
