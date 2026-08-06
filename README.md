@@ -81,6 +81,25 @@ from Finder, the File menu, or as command-line arguments to the bundle's
 `Contents/MacOS/Minimacs` executable. Standard macOS Open/Save/Undo/Redo/Paste
 menu shortcuts and the documented Emacs bindings are available.
 
+To inspect the final AppKit rasterization—not just the shared cell-grid
+snapshots—capture a deterministic native window with:
+
+```sh
+# The optional trailing numbers are macOS virtual key codes sent before capture.
+# 119 is End, so this puts point after the script's default long line.
+macos/capture-ui.sh target/ui-tests/native.png "" 119
+```
+
+The script builds and launches an isolated process, fixes its window geometry,
+sends optional keys through AppKit, and uses `screencapture` on that process's
+Core Graphics window ID. It prints the PNG path and then closes the process.
+The invoking terminal needs Accessibility permission for scripted keys and
+Screen Recording permission for capture. Pass a file as the second argument to
+use it instead of the default fixture; set `MINIMACS_CAPTURE_SKIP_BUILD=1` to
+reuse an existing app bundle. This complements the existing `TestBackend`
+text snapshots: they verify the shared Rust renderer, while the PNG exposes
+native font metrics, cell placement, colors, and cursor alignment.
+
 ### Syntax edit benchmark
 
 The `syntax-bench` CLI compares the cost of applying the same deterministic

@@ -56,6 +56,8 @@ macos/
   include/minimacs_native.h
                     Stable C declarations matching src/native.rs
   build.sh          Builds/ad-hoc-signs target/macos/Minimacs.app
+  capture-ui.sh     Launches a fixed native window, scripts optional keys, and
+                    captures its Core Graphics window for visual inspection
 
 src/
   lib.rs            Library module root; re-exports Editor and Command for

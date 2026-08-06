@@ -22,6 +22,7 @@ fn native_macos_frontend_sources_are_versioned() {
         "macos/MinimacsApp.swift",
         "macos/Info.plist",
         "macos/build.sh",
+        "macos/capture-ui.sh",
         "macos/include/minimacs_native.h",
     ] {
         assert!(root.join(path).is_file(), "missing native frontend file: {path}");
