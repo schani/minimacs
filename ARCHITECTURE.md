@@ -53,15 +53,17 @@ src/
   main.rs           Thin minimacs binary wrapper
   runtime.rs        Editor CLI parsing (parse_args), terminal setup/teardown
                     (Drop guard + panic hook), runs the event loop
-  app.rs            App<B: Backend> -- event loop, dispatch_event, viewport update
-  app/input.rs        InputState (chord + pending ESC) and key routing:
-                      handle_key, isearch keys, minibuffer Tab, paste
+  app.rs            App<B: Backend> -- event loop, event/paste dispatch,
+                    viewport update
+  app/input.rs        InputState (chord + pending ESC), key routing, isearch
+                      keys, and minibuffer Tab
   app/mouse.rs        Mouse click-to-point mapping and wheel scrolling
   app/tests.rs        Integration-test harness (test_app, event/screen helpers)
                       and the screen snapshot tests
   app/tests/*.rs      Integration tests by topic: editing, visual, input_state,
                       isearch, minibuffer, completions, mouse
-  editor.rs         Editor -- struct, apply_edit, movement/editing, dispatch
+  editor.rs         Editor -- struct, apply_edit, movement/editing, command
+                    dispatch, and the Editor-owned paste transaction
   editor/isearch.rs   Incremental search state and commands
   editor/prompts.rs   Prompt starters, submit_prompt, confirm/quit flows
   editor/fileops.rs   open_file, the write_buffer save choke point, kill-buffer,
