@@ -872,9 +872,12 @@ Completion replaces the buffer contents as a single undo group using
 
 ### Completion List
 
-When Tab is pressed and multiple matches exist, `minibuffer.completions` is set
-to `Some(Vec<String>)` containing the display candidates. The completions field
-is cleared:
+When Tab is pressed App computes candidate strings, then passes one completion
+intent to `Editor::apply_minibuffer_completion`. Editor/Minibuffer own candidate
+replacement, prefix editing and undo boundaries, minibuffer point movement,
+and page reset/advance; App never assigns those fields. Multiple matches store
+the display candidates in `minibuffer.completions`. The list is cleared through
+Minibuffer lifecycle/intent methods:
 - Before keymap processing on any non-Tab/Enter key when minibuffer is active
 - On paste events
 - In `cancel()`, `finish()`, and `start_prompt()` lifecycle methods

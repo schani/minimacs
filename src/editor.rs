@@ -252,6 +252,37 @@ impl Editor {
         self.buffers.iter().map(|b| b.name.clone()).collect()
     }
 
+    /// Completion lifecycle intent for ordinary minibuffer input.
+    pub(crate) fn dismiss_minibuffer_completions(&mut self) {
+        self.minibuffer.dismiss_completions();
+    }
+
+    /// Apply one Tab-completion result while keeping candidate display,
+    /// prefix replacement, undo history, minibuffer point, and paging under
+    /// Editor/Minibuffer ownership.
+    pub(crate) fn apply_minibuffer_completion(
+        &mut self,
+        input: &str,
+        completed: String,
+        candidates: Vec<String>,
+    ) {
+        let had_completions = self.minibuffer.has_completions();
+        self.minibuffer.set_completion_candidates(candidates);
+
+        if completed != input {
+            self.minibuffer_buffer.history.commit();
+            let old_len = self.minibuffer_buffer.char_count();
+            self.apply_edit(0, old_len, &completed, EditRecord::Replace);
+            self.minibuffer_buffer.history.commit();
+            self.minibuffer_pane.point = completed.chars().count();
+            self.minibuffer.reset_completion_page();
+        } else if had_completions && self.minibuffer.has_completions() {
+            self.minibuffer.advance_completion_page();
+        } else {
+            self.minibuffer.reset_completion_page();
+        }
+    }
+
     /// Get the ordered region (start, end) for the focused pane.
     pub fn region(&self) -> Option<(usize, usize)> {
         let pane = self.pane_tree.focused_pane();

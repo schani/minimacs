@@ -2,7 +2,6 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::backend::Backend;
 
 use crate::command::Command;
-use crate::editor::EditRecord;
 use crate::keymap::{default_keymap, Key, KeymapResult, KeymapState};
 use crate::minibuffer::PromptKind;
 
@@ -110,8 +109,7 @@ where
                     return;
                 }
                 _ => {
-                    self.editor.minibuffer.completions = None;
-                    self.editor.minibuffer.completion_page = 0;
+                    self.editor.dismiss_minibuffer_completions();
                     // Fall through to normal keymap processing
                 }
             }
@@ -179,7 +177,6 @@ where
     fn handle_minibuffer_tab(&mut self) {
         use crate::minibuffer::{complete_buffer_with_candidates, complete_path_with_candidates};
 
-        let had_completions = self.editor.minibuffer.completions.is_some();
         let kind = self.editor.minibuffer.prompt().map(|p| p.kind.clone());
         let input = self.editor.minibuffer_text();
         let (completed, candidates) = match kind {
@@ -193,27 +190,7 @@ where
             _ => return,
         };
 
-        // Always update completions list
-        self.editor.minibuffer.completions = if candidates.is_empty() {
-            None
-        } else {
-            Some(candidates)
-        };
-
-        // Only replace buffer text if the completion advanced the prefix
-        if completed != input {
-            self.editor.minibuffer_buffer.history.commit();
-            let old_len = self.editor.minibuffer_buffer.char_count();
-            self.editor
-                .apply_edit(0, old_len, &completed, EditRecord::Replace);
-            self.editor.minibuffer_buffer.history.commit();
-            self.editor.minibuffer_pane.point = completed.chars().count();
-            self.editor.minibuffer.completion_page = 0;
-        } else if had_completions && self.editor.minibuffer.completions.is_some() {
-            // Completions were already showing and prefix didn't change: advance page
-            self.editor.minibuffer.completion_page += 1;
-        } else {
-            self.editor.minibuffer.completion_page = 0;
-        }
+        self.editor
+            .apply_minibuffer_completion(&input, completed, candidates);
     }
 }
