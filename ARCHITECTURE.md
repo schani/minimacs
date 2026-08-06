@@ -55,6 +55,8 @@ src/
                     frontends that do not own a terminal
   main.rs           Terminal frontend: CLI parsing (parse_args), terminal
                     setup/teardown (Drop guard + panic hook), runs the event loop
+  native.rs         C ABI for the AppKit frontend; translates native input and
+                    exposes a borrowed, viewport-sized styled cell frame
   app.rs            App<B: Backend> -- event loop, dispatch_event, viewport update
   app/input.rs        InputState (chord + pending ESC) and key routing:
                       handle_key, isearch keys, minibuffer Tab, paste
@@ -96,7 +98,9 @@ src/
 ### Dependency Graph
 
 ```
-terminal main ──> library app ──> editor ──> buffer
+terminal main ─┐
+               ├──> library app ──> editor ──> buffer
+AppKit C ABI ──┘
                     |          |
                     |          +──> history
                     |          +──> syntax
@@ -398,6 +402,22 @@ a `clean_version` recording the version at last save/load. `is_clean()` returns
 true when no uncommitted edits exist and the current version matches the clean
 version. When the redo stack is cleared and the clean version was on the
 discarded branch, `clean_version` is set to `None` (unreachable).
+
+## Native Frontend Bridge
+
+The macOS frontend links the library's `staticlib` output through
+`macos/include/minimacs_native.h`. `native.rs` owns an `App<TestBackend>` and
+exposes the rendered viewport as borrowed `MmCell` values containing UTF-8 cell
+text, RGB colors, and text modifiers. This deliberately reuses the established
+wrapping, panes, mode-line, minibuffer, and background syntax paths while the
+AppKit side owns windowing, Core Text drawing, and platform events. The frame is
+bounded by the current window grid rather than buffer size and remains valid
+until the next mutating C call.
+
+The scratch buffer's first frame starts no worker and initializes no parser.
+Opening a recognized source file still constructs the shared tree-house loader
+synchronously; parsing and subsequent highlighting run on the existing lazy
+syntax worker.
 
 ## Terminal Lifecycle
 

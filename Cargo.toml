@@ -6,6 +6,9 @@ rust-version = "1.88"
 license = "MIT"
 default-run = "minimacs"
 
+[lib]
+crate-type = ["rlib", "staticlib"]
+
 [features]
 default = ["clipboard"]
 clipboard = ["arboard"]

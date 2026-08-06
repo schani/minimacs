@@ -114,7 +114,7 @@ where
     /// skips the redraw when it did not. Key presses conservatively report
     /// true — whether a command actually changed anything is the editor's
     /// business, and over-rendering a keystroke is cheap.
-    fn dispatch_event(&mut self, event: Event) -> bool {
+    pub(crate) fn dispatch_event(&mut self, event: Event) -> bool {
         match event {
             Event::Key(key_event) => {
                 // Act only on Press and Repeat (a held key must still
@@ -159,20 +159,21 @@ where
         }
     }
 
-    fn update_viewport(&mut self) {
+    pub(crate) fn update_viewport(&mut self) {
         let size = self.terminal.size().unwrap_or_default();
         let layout = render::screen_layout(
             &self.editor,
             ratatui::layout::Rect::new(0, 0, size.width, size.height),
         );
 
-        let (pane_rects, _separators) =
-            self.editor.pane_tree.calculate_rects(layout.pane_area);
+        let (pane_rects, _separators) = self.editor.pane_tree.calculate_rects(layout.pane_area);
         for (path, rect) in &pane_rects {
             // Each pane rect includes 1 row for mode line
             let text_height = rect.height.saturating_sub(1) as usize;
             let text_width = rect.width as usize;
-            self.editor.pane_tree.update_pane_viewport(path, text_height, text_width);
+            self.editor
+                .pane_tree
+                .update_pane_viewport(path, text_height, text_width);
         }
 
         self.editor.minibuffer_pane.viewport_width = layout.minibuffer_area.width as usize;
@@ -191,7 +192,7 @@ where
         Ok(())
     }
 
-    fn apply_syntax_completions(&mut self) -> bool {
+    pub(crate) fn apply_syntax_completions(&mut self) -> bool {
         let mut changed = false;
         for completion in self.syntax_worker.take_completions() {
             let Some(buffer) = self.editor.buffers.iter().find(|buffer| {
@@ -206,12 +207,11 @@ where
                 .syntax
                 .as_ref()
                 .expect("matching syntax state disappeared");
-            let accepted =
-                syntax.accept_background_completion(completion, buffer.edit_generation);
+            let accepted = syntax.accept_background_completion(completion, buffer.edit_generation);
             if accepted && syntax.take_disabled_message() {
-                self.editor.minibuffer.show_message(
-                    "Syntax highlighting disabled (parse timeout)".to_string(),
-                );
+                self.editor
+                    .minibuffer
+                    .show_message("Syntax highlighting disabled (parse timeout)".to_string());
             }
             changed |= accepted;
         }

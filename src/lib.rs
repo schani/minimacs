@@ -13,6 +13,7 @@ pub mod history;
 mod indent;
 mod keymap;
 pub mod minibuffer;
+mod native;
 pub mod pane;
 mod render;
 pub mod syntax;
