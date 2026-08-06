@@ -161,15 +161,11 @@ impl Editor {
             return;
         }
 
-        let matches = Self::compute_matches_for_query(
-            &self.isearch.as_ref().unwrap().text_snapshot,
-            &query,
-        );
+        let matches =
+            Self::compute_matches_for_query(&self.isearch.as_ref().unwrap().text_snapshot, &query);
         let query_len = query.chars().count();
         let found = match direction {
-            SearchDirection::Forward => {
-                matches.iter().copied().find(|&p| p >= original_point)
-            }
+            SearchDirection::Forward => matches.iter().copied().find(|&p| p >= original_point),
             SearchDirection::Backward => matches
                 .iter()
                 .copied()

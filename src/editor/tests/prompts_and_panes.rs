@@ -158,7 +158,10 @@ fn save_anyway_confirm_reasks_on_invalid_answer() {
     drop(f);
 
     editor.execute(Command::Save);
-    assert!(editor.minibuffer.is_active(), "expected save-anyway confirm");
+    assert!(
+        editor.minibuffer.is_active(),
+        "expected save-anyway confirm"
+    );
 
     editor.set_minibuffer_text("z");
     editor.submit_prompt();

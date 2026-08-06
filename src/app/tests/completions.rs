@@ -144,11 +144,27 @@ fn completions_render_shows_candidates() {
     assert!(app.editor.minibuffer.completions.is_some());
     let screen = capture_screen(&app.terminal);
     // Completions should appear in the rendered output
-    assert!(screen.contains("alpha.txt"), "should show alpha.txt: {}", screen);
-    assert!(screen.contains("ants.txt"), "should show ants.txt: {}", screen);
-    assert!(screen.contains("apple.txt"), "should show apple.txt: {}", screen);
+    assert!(
+        screen.contains("alpha.txt"),
+        "should show alpha.txt: {}",
+        screen
+    );
+    assert!(
+        screen.contains("ants.txt"),
+        "should show ants.txt: {}",
+        screen
+    );
+    assert!(
+        screen.contains("apple.txt"),
+        "should show apple.txt: {}",
+        screen
+    );
     // Minibuffer prompt should still be visible
-    assert!(screen.contains("Find file:"), "should show prompt: {}", screen);
+    assert!(
+        screen.contains("Find file:"),
+        "should show prompt: {}",
+        screen
+    );
 }
 
 #[test]
@@ -277,7 +293,11 @@ fn multi_column_completions_in_wide_terminal() {
             .count();
         count > 1
     });
-    assert!(has_multi, "should show multiple candidates per line:\n{}", screen);
+    assert!(
+        has_multi,
+        "should show multiple candidates per line:\n{}",
+        screen
+    );
 }
 
 #[test]
@@ -296,7 +316,10 @@ fn repeated_tab_advances_page() {
     events.push(key(KeyCode::Tab)); // second tab should advance page
     let (mut app, mut events) = test_app(40, 12, events);
     app.run_until_idle(&mut events).unwrap();
-    assert!(app.editor.minibuffer.completion_page > 0, "page should advance on repeated tab");
+    assert!(
+        app.editor.minibuffer.completion_page > 0,
+        "page should advance on repeated tab"
+    );
 }
 
 #[test]
@@ -312,7 +335,7 @@ fn repeated_tab_wraps_around() {
         events.push(char_key(c));
     }
     events.push(key(KeyCode::Tab)); // show completions
-    // Tab many times to cycle through all pages and wrap around
+                                    // Tab many times to cycle through all pages and wrap around
     for _ in 0..100 {
         events.push(key(KeyCode::Tab));
     }
@@ -396,7 +419,11 @@ fn page_indicator_shown_when_multiple_pages() {
     let (mut app, mut events) = test_app(40, 12, events);
     app.run_until_idle(&mut events).unwrap();
     let screen = capture_screen(&app.terminal);
-    assert!(screen.contains("[Page"), "should show page indicator:\n{}", screen);
+    assert!(
+        screen.contains("[Page"),
+        "should show page indicator:\n{}",
+        screen
+    );
 }
 
 #[test]
@@ -413,5 +440,9 @@ fn no_page_indicator_when_single_page() {
     let (mut app, mut events) = test_app(80, 24, events);
     app.run_until_idle(&mut events).unwrap();
     let screen = capture_screen(&app.terminal);
-    assert!(!screen.contains("[Page"), "should not show page indicator:\n{}", screen);
+    assert!(
+        !screen.contains("[Page"),
+        "should not show page indicator:\n{}",
+        screen
+    );
 }

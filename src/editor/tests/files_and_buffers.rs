@@ -36,7 +36,10 @@ fn nonexistent_file_spellings_share_one_buffer_identity() {
     let expected = std::fs::canonicalize(dir.path())
         .unwrap()
         .join("future.txt");
-    assert_eq!(editor.current_buffer().path.as_deref(), Some(expected.as_path()));
+    assert_eq!(
+        editor.current_buffer().path.as_deref(),
+        Some(expected.as_path())
+    );
 }
 
 #[test]
@@ -875,7 +878,9 @@ fn three_way_name_collision_yields_distinct_names() {
 
     let mut editor = Editor::new();
     for sub in ["x", "y", "z"] {
-        editor.open_file(&dir.path().join(sub).join("mod.rs")).unwrap();
+        editor
+            .open_file(&dir.path().join(sub).join("mod.rs"))
+            .unwrap();
     }
 
     let mut names: Vec<&str> = editor

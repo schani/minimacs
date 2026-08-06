@@ -203,7 +203,10 @@ fn mouse_click_wrapped_line_with_tab_uses_visual_column() {
         .current_buffer()
         .char_to_line_col(app.editor.point());
     assert_eq!(line, 0);
-    assert_eq!(col, 7, "click should land before 'g', after the single tab character");
+    assert_eq!(
+        col, 7,
+        "click should land before 'g', after the single tab character"
+    );
 }
 
 #[test]
@@ -247,7 +250,8 @@ fn mouse_click_ignored_when_minibuffer_active() {
 fn mouse_click_switches_pane_focus() {
     let text = "hello\nworld";
     let mut events = vec![
-        ctrl('x'), key(KeyCode::Char('2')), // split horizontal
+        ctrl('x'),
+        key(KeyCode::Char('2')), // split horizontal
     ];
     // After split, top pane is focused. Click on the bottom half
     // to switch focus. In a 10-row terminal with 1-row minibuffer,
@@ -265,7 +269,10 @@ fn mouse_click_switches_pane_focus() {
 #[test]
 fn mouse_scroll_down_scrolls_pane() {
     // Create a buffer with enough lines to scroll
-    let text = (0..30).map(|i| format!("line {}", i)).collect::<Vec<_>>().join("\n");
+    let text = (0..30)
+        .map(|i| format!("line {}", i))
+        .collect::<Vec<_>>()
+        .join("\n");
     // Scroll down 3 times over the pane
     let events = vec![
         mouse_scroll_down(5, 3),
@@ -281,7 +288,10 @@ fn mouse_scroll_down_scrolls_pane() {
 
 #[test]
 fn mouse_scroll_up_scrolls_pane() {
-    let text = (0..30).map(|i| format!("line {}", i)).collect::<Vec<_>>().join("\n");
+    let text = (0..30)
+        .map(|i| format!("line {}", i))
+        .collect::<Vec<_>>()
+        .join("\n");
     // First scroll down, then scroll back up
     let events = vec![
         mouse_scroll_down(5, 3),
@@ -300,7 +310,10 @@ fn mouse_scroll_down_hides_cursor_when_point_above_viewport() {
     // Move cursor to line 5 first (C-n * 5), then scroll down past it.
     // With the bug, the cursor snaps to row 0; with the fix, it stays
     // at the last-set position (row 5 from the previous render frame).
-    let text = (0..30).map(|i| format!("line {}", i)).collect::<Vec<_>>().join("\n");
+    let text = (0..30)
+        .map(|i| format!("line {}", i))
+        .collect::<Vec<_>>()
+        .join("\n");
     let mut events: Vec<Event> = vec![];
     // Move cursor down 5 lines
     for _ in 0..5 {
@@ -316,7 +329,10 @@ fn mouse_scroll_down_hides_cursor_when_point_above_viewport() {
 
     // scroll_top=9, point is at line 5 — cursor is above the viewport
     assert_eq!(app.editor.pane_tree.focused_pane().scroll_top, 9);
-    let (cursor_line, _) = app.editor.current_buffer().char_to_line_col(app.editor.point());
+    let (cursor_line, _) = app
+        .editor
+        .current_buffer()
+        .char_to_line_col(app.editor.point());
     assert_eq!(cursor_line, 5);
 
     // With the fix, the cursor is hidden (not set during draw), so
@@ -332,9 +348,13 @@ fn mouse_scroll_down_hides_cursor_when_point_above_viewport() {
 
 #[test]
 fn mouse_scroll_does_not_change_focus() {
-    let text = (0..30).map(|i| format!("line {}", i)).collect::<Vec<_>>().join("\n");
+    let text = (0..30)
+        .map(|i| format!("line {}", i))
+        .collect::<Vec<_>>()
+        .join("\n");
     let mut events = vec![
-        ctrl('x'), key(KeyCode::Char('2')), // split vertically (top/bottom)
+        ctrl('x'),
+        key(KeyCode::Char('2')), // split vertically (top/bottom)
     ];
     // Focus is on top pane [0]. Scroll on the bottom pane area.
     // In 10-row terminal: pane area = 9 rows, each pane ~4-5 rows.
@@ -345,9 +365,17 @@ fn mouse_scroll_does_not_change_focus() {
 
     // Focus should still be on the first pane
     let focus = app.editor.pane_tree.focus_path();
-    assert_eq!(focus, &[0], "focus should not change on scroll, got {:?}", focus);
+    assert_eq!(
+        focus,
+        &[0],
+        "focus should not change on scroll, got {:?}",
+        focus
+    );
 
     // But the second pane should have scrolled
     let second_pane = app.editor.pane_tree.pane_at_focus_path(&[1]);
-    assert!(second_pane.scroll_top > 0, "second pane should have scrolled");
+    assert!(
+        second_pane.scroll_top > 0,
+        "second pane should have scrolled"
+    );
 }

@@ -37,7 +37,7 @@ fn minibuffer_find_file_via_app() {
     std::fs::write(&file, "file content").unwrap();
 
     let mut events = vec![ctrl('x'), ctrl('f')]; // C-x C-f to open find-file
-    // Clear the default input (cwd/) with many backspaces
+                                                 // Clear the default input (cwd/) with many backspaces
     for _ in 0..200 {
         events.push(key(KeyCode::Backspace));
     }
@@ -56,7 +56,8 @@ fn minibuffer_find_file_via_app() {
 fn minibuffer_navigation_via_app() {
     // Test C-f, C-b, C-a, C-e, Backspace in minibuffer
     let events = vec![
-        ctrl('x'), ctrl('f'),    // open find-file prompt
+        ctrl('x'),
+        ctrl('f'),               // open find-file prompt
         ctrl('a'),               // go to start of input
         ctrl('e'),               // go to end of input
         ctrl('b'),               // back one char
@@ -75,7 +76,7 @@ fn minibuffer_tab_completion_via_app() {
     std::fs::write(dir.path().join("unique_file.txt"), "hello").unwrap();
 
     let mut events = vec![ctrl('x'), ctrl('f')]; // open find-file
-    // Clear the default input
+                                                 // Clear the default input
     for _ in 0..200 {
         events.push(key(KeyCode::Backspace));
     }
@@ -116,13 +117,13 @@ fn minibuffer_grows_upward_and_moves_cursor_to_wrapped_row() {
 fn minibuffer_word_movement() {
     // Open prompt, type "hello world", M-b to go back one word
     let mut events = vec![ctrl('x'), ctrl('f')]; // open find-file
-    // Clear default input
+                                                 // Clear default input
     for _ in 0..200 {
         events.push(key(KeyCode::Backspace));
     }
     events.extend(key_events("hello world"));
     events.push(alt(KeyCode::Char('b'))); // backward word
-    events.push(ctrl('g'));               // cancel
+    events.push(ctrl('g')); // cancel
     let (mut app, mut events) = test_app(40, 10, events);
     app.run_until_idle(&mut events).unwrap();
     // After M-b from end of "hello world", cursor at 6 (start of "world")
@@ -135,7 +136,7 @@ fn minibuffer_word_movement() {
 fn minibuffer_kill_line() {
     // Open prompt, type "hello world", C-a then C-k
     let mut events = vec![ctrl('x'), ctrl('f')]; // open find-file
-    // Clear default input
+                                                 // Clear default input
     for _ in 0..200 {
         events.push(key(KeyCode::Backspace));
     }
@@ -215,7 +216,7 @@ fn minibuffer_mark_and_cut() {
         events.push(key(KeyCode::Backspace));
     }
     events.extend(key_events("hello"));
-    events.push(ctrl('a'));  // beginning
+    events.push(ctrl('a')); // beginning
     events.push(ctrl(' ')); // set mark
     events.push(ctrl('f')); // forward
     events.push(ctrl('f')); // forward
@@ -262,8 +263,9 @@ fn minibuffer_prompt_guard_prevents_nesting() {
 fn minibuffer_isearch_guard() {
     // Open prompt, then C-s should NOT activate isearch
     let events = vec![
-        ctrl('x'), ctrl('f'), // open find-file
-        ctrl('s'),            // try isearch
+        ctrl('x'),
+        ctrl('f'), // open find-file
+        ctrl('s'), // try isearch
     ];
     let (mut app, mut events) = test_app(40, 10, events);
     app.run_until_idle(&mut events).unwrap();
@@ -275,8 +277,10 @@ fn minibuffer_isearch_guard() {
 fn minibuffer_kill_buffer_guard() {
     // Open prompt, then C-x k should NOT kill buffer
     let events = vec![
-        ctrl('x'), ctrl('f'), // open find-file
-        ctrl('x'), char_key('k'), // try kill buffer
+        ctrl('x'),
+        ctrl('f'), // open find-file
+        ctrl('x'),
+        char_key('k'), // try kill buffer
     ];
     let (mut app, mut events) = test_app(40, 10, events);
     app.run_until_idle(&mut events).unwrap();
@@ -289,8 +293,10 @@ fn minibuffer_kill_buffer_guard() {
 fn minibuffer_quit_guard() {
     // Open prompt, then C-x C-c should NOT quit
     let events = vec![
-        ctrl('x'), ctrl('f'), // open find-file
-        ctrl('x'), ctrl('c'), // try quit
+        ctrl('x'),
+        ctrl('f'), // open find-file
+        ctrl('x'),
+        ctrl('c'), // try quit
     ];
     let (mut app, mut events) = test_app(40, 10, events);
     app.run_until_idle(&mut events).unwrap();

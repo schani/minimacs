@@ -228,11 +228,8 @@ fn run_mode(mode: BenchMode, workload: &Workload, edits: usize) -> RunResult {
                 black_box(state.parse_rope(rope.slice(..)));
                 parse_elapsed += parse_started.elapsed();
                 let highlight_started = Instant::now();
-                let spans = state.highlight_rope(
-                    rope.slice(..),
-                    workload.viewport.clone(),
-                    generation,
-                );
+                let spans =
+                    state.highlight_rope(rope.slice(..), workload.viewport.clone(), generation);
                 highlight_elapsed += highlight_started.elapsed();
                 spans
             }
@@ -242,11 +239,8 @@ fn run_mode(mode: BenchMode, workload: &Workload, edits: usize) -> RunResult {
                 state.apply_edit(rope.slice(..), edit);
                 parse_elapsed += parse_started.elapsed();
                 let highlight_started = Instant::now();
-                let spans = state.highlight_rope(
-                    rope.slice(..),
-                    workload.viewport.clone(),
-                    generation,
-                );
+                let spans =
+                    state.highlight_rope(rope.slice(..), workload.viewport.clone(), generation);
                 highlight_elapsed += highlight_started.elapsed();
                 spans
             }
@@ -288,11 +282,9 @@ fn run_mode(mode: BenchMode, workload: &Workload, edits: usize) -> RunResult {
     let elapsed = started.elapsed();
     black_box(&highlight_results);
 
-    let highlight_checksum = highlight_results
-        .iter()
-        .fold(0_u64, |checksum, spans| {
-            checksum.rotate_left(1) ^ spans_checksum(spans)
-        });
+    let highlight_checksum = highlight_results.iter().fold(0_u64, |checksum, spans| {
+        checksum.rotate_left(1) ^ spans_checksum(spans)
+    });
 
     RunResult {
         mode,
@@ -322,7 +314,10 @@ fn wait_for_completion(
                 return completion;
             }
         }
-        assert!(Instant::now() < deadline, "syntax worker benchmark timed out");
+        assert!(
+            Instant::now() < deadline,
+            "syntax worker benchmark timed out"
+        );
         std::thread::yield_now();
     }
 }
@@ -331,7 +326,10 @@ fn spans_checksum(spans: &[StyledSpan]) -> u64 {
     let mut checksum = 0xcbf29ce484222325_u64;
     for span in spans {
         let style = format!("{:?}", span.style);
-        for byte in span.start.to_le_bytes().iter()
+        for byte in span
+            .start
+            .to_le_bytes()
+            .iter()
             .chain(span.end.to_le_bytes().iter())
             .chain(style.as_bytes())
         {
@@ -431,7 +429,9 @@ pub(crate) fn main() {
         eprintln!("error: benchmark modes produced different final text");
         std::process::exit(1);
     }
-    let full = results.iter().find(|result| matches!(result.mode, BenchMode::Full));
+    let full = results
+        .iter()
+        .find(|result| matches!(result.mode, BenchMode::Full));
     let incremental = results
         .iter()
         .find(|result| matches!(result.mode, BenchMode::Incremental));
@@ -513,7 +513,10 @@ mod tests {
         assert_eq!(none.text_checksum, full.text_checksum);
         assert_eq!(full.text_checksum, incremental.text_checksum);
         assert_eq!(full.highlight_checksum, incremental.highlight_checksum);
-        assert_eq!(incremental.highlight_checksum, background.highlight_checksum);
+        assert_eq!(
+            incremental.highlight_checksum,
+            background.highlight_checksum
+        );
         // The phase columns are measured inside the totaled loop, so they can
         // never exceed it; checksum work happens outside the timed region.
         for result in [&none, &full, &incremental, &background] {

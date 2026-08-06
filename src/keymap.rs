@@ -122,7 +122,10 @@ impl KeymapNode {
             self.command = Some(command);
             return;
         }
-        let child = self.children.entry(keys[0].clone()).or_insert_with(KeymapNode::new);
+        let child = self
+            .children
+            .entry(keys[0].clone())
+            .or_insert_with(KeymapNode::new);
         child.bind(&keys[1..], command);
     }
 
@@ -295,10 +298,7 @@ pub fn default_keymap() -> KeymapNode {
     root.bind(&[ctrl('k')], Command::KillLine);
     root.bind(&[plain(KeyCode::Tab)], Command::IndentLine);
     root.bind(&[plain(KeyCode::BackTab)], Command::DedentLine);
-    root.bind(
-        &[alt_key(KeyCode::Backspace)],
-        Command::DeleteWordBackward,
-    );
+    root.bind(&[alt_key(KeyCode::Backspace)], Command::DeleteWordBackward);
 
     // Undo/Redo
     root.bind(&[ctrl('/')], Command::Undo);
@@ -331,10 +331,7 @@ pub fn default_keymap() -> KeymapNode {
         &[ctrl('x'), plain(KeyCode::Char('b'))],
         Command::SwitchBuffer,
     );
-    root.bind(
-        &[ctrl('x'), plain(KeyCode::Char('k'))],
-        Command::KillBuffer,
-    );
+    root.bind(&[ctrl('x'), plain(KeyCode::Char('k'))], Command::KillBuffer);
     root.bind(
         &[ctrl('x'), plain(KeyCode::Char('2'))],
         Command::SplitVertical,
@@ -343,18 +340,12 @@ pub fn default_keymap() -> KeymapNode {
         &[ctrl('x'), plain(KeyCode::Char('3'))],
         Command::SplitHorizontal,
     );
-    root.bind(
-        &[ctrl('x'), plain(KeyCode::Char('0'))],
-        Command::DeletePane,
-    );
+    root.bind(&[ctrl('x'), plain(KeyCode::Char('0'))], Command::DeletePane);
     root.bind(
         &[ctrl('x'), plain(KeyCode::Char('1'))],
         Command::DeleteOtherPanes,
     );
-    root.bind(
-        &[ctrl('x'), plain(KeyCode::Char('o'))],
-        Command::CycleFocus,
-    );
+    root.bind(&[ctrl('x'), plain(KeyCode::Char('o'))], Command::CycleFocus);
     root.bind(&[ctrl('x'), ctrl('x')], Command::SwapPointAndMark);
 
     // Display
@@ -368,10 +359,7 @@ pub fn default_keymap() -> KeymapNode {
     root.bind(&[ctrl('g')], Command::Cancel);
 
     // M-g g → goto-line
-    root.bind(
-        &[alt('g'), plain(KeyCode::Char('g'))],
-        Command::GotoLine,
-    );
+    root.bind(&[alt('g'), plain(KeyCode::Char('g'))], Command::GotoLine);
 
     root
 }
@@ -504,8 +492,7 @@ mod tests {
     fn redo_bound_to_ctrl_meta_underscore_all_variants() {
         for c in ['_', '-', '7', '/'] {
             let mut state = KeymapState::new(default_keymap());
-            let event =
-                KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL | KeyModifiers::ALT);
+            let event = KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL | KeyModifiers::ALT);
             match state.process_key(event) {
                 KeymapResult::Matched(cmd) => assert_eq!(cmd, Command::Redo),
                 other => panic!("Expected Matched(Redo) for C-M-{c}, got {other:?}"),
@@ -537,10 +524,16 @@ mod tests {
         // Kitty protocol: terminal sends base key '-' with Ctrl+Shift,
         // which Key::from_event resolves to ctrl('_')
         let mut state = KeymapState::new(keymap.clone());
-        let event = KeyEvent::new(KeyCode::Char('-'), KeyModifiers::CONTROL | KeyModifiers::SHIFT);
+        let event = KeyEvent::new(
+            KeyCode::Char('-'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        );
         match state.process_key(event) {
             KeymapResult::Matched(cmd) => assert_eq!(cmd, Command::Undo),
-            other => panic!("Expected Matched(Undo) for ctrl('-') (Kitty protocol), got {:?}", other),
+            other => panic!(
+                "Expected Matched(Undo) for ctrl('-') (Kitty protocol), got {:?}",
+                other
+            ),
         }
     }
 
@@ -552,20 +545,14 @@ mod tests {
     #[test]
     fn meta_angle_brackets_from_kitty_base_keys() {
         let mut state = KeymapState::new(default_keymap());
-        let event = KeyEvent::new(
-            KeyCode::Char(','),
-            KeyModifiers::ALT | KeyModifiers::SHIFT,
-        );
+        let event = KeyEvent::new(KeyCode::Char(','), KeyModifiers::ALT | KeyModifiers::SHIFT);
         match state.process_key(event) {
             KeymapResult::Matched(cmd) => assert_eq!(cmd, Command::BufferBeginning),
             other => panic!("Expected Matched(BufferBeginning) for Alt+Shift+',', got {other:?}"),
         }
 
         let mut state = KeymapState::new(default_keymap());
-        let event = KeyEvent::new(
-            KeyCode::Char('.'),
-            KeyModifiers::ALT | KeyModifiers::SHIFT,
-        );
+        let event = KeyEvent::new(KeyCode::Char('.'), KeyModifiers::ALT | KeyModifiers::SHIFT);
         match state.process_key(event) {
             KeymapResult::Matched(cmd) => assert_eq!(cmd, Command::BufferEnd),
             other => panic!("Expected Matched(BufferEnd) for Alt+Shift+'.', got {other:?}"),
@@ -587,18 +574,17 @@ mod tests {
             let mut state = KeymapState::new(default_keymap());
             match state.process_key(KeyEvent::new(KeyCode::Char('>'), modifiers)) {
                 KeymapResult::Matched(cmd) => assert_eq!(cmd, Command::BufferEnd),
-                other => panic!(
-                    "Expected Matched(BufferEnd) for '>' with {modifiers:?}, got {other:?}"
-                ),
+                other => {
+                    panic!("Expected Matched(BufferEnd) for '>' with {modifiers:?}, got {other:?}")
+                }
             }
         }
     }
 
     #[test]
     fn from_event_resolves_shift_into_char_keys() {
-        let shifted = |c: char| {
-            Key::from_event(KeyEvent::new(KeyCode::Char(c), KeyModifiers::SHIFT)).code
-        };
+        let shifted =
+            |c: char| Key::from_event(KeyEvent::new(KeyCode::Char(c), KeyModifiers::SHIFT)).code;
         // US-layout punctuation
         assert_eq!(shifted(','), KeyCode::Char('<'));
         assert_eq!(shifted('.'), KeyCode::Char('>'));
