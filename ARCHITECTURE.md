@@ -945,9 +945,10 @@ by tracking the cumulative character delta per line.
 
 The package declares Rust 1.88 as its minimum supported Rust version. CI runs
 `cargo check --locked --all-targets --all-features` on exactly 1.88 in addition
-to the stable-toolchain test, coverage, Clippy, fuzz-smoke, and benchmark-smoke
-jobs, preventing the manifest and installation documentation from drifting
-below the compiler required by source or locked dependencies.
+to the stable-toolchain formatting, build, coverage, Clippy, fuzz-smoke, and
+benchmark-smoke checks, preventing the manifest and installation documentation
+from drifting below the compiler required by source or locked dependencies.
+Formatting runs before the more expensive build, test, and lint checks.
 
 The editor is generic over `ratatui::Backend`. Production uses
 `CrosstermBackend<Stdout>`, tests use ratatui's `TestBackend`. Input is
@@ -989,5 +990,6 @@ queue is drained, which is how `run_until_idle` terminates in tests.
 4. **Repository policy tests** (under `tests/`): protect source-tree invariants
    that Cargo itself cannot express. In particular, a normal Cargo build has no
    build script and therefore cannot install or overwrite Git hooks. The
-   versioned `.githooks/pre-commit` check suite is strictly opt-in via the
-   checkout-local `core.hooksPath` configuration.
+   versioned `.githooks/pre-commit` suite runs formatting before its build,
+   test/coverage, and Clippy checks; it is strictly opt-in via the checkout-local
+   `core.hooksPath` configuration. CI mirrors these checks.

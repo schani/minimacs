@@ -1,5 +1,41 @@
 use std::path::Path;
 
+fn active_command_line(contents: &str, command: &str, actions_run: bool) -> Option<usize> {
+    contents
+        .lines()
+        .enumerate()
+        .find_map(|(line_number, line)| {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                return None;
+            }
+
+            let command_line = if actions_run {
+                line.strip_prefix("run:")?.trim()
+            } else {
+                line
+            };
+            (command_line == command || command_line.starts_with(&format!("{command} ")))
+                .then_some(line_number)
+        })
+}
+
+fn active_yaml_list_contains(contents: &str, key: &str, expected: &str) -> bool {
+    contents.lines().any(|line| {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            return false;
+        }
+
+        line.strip_prefix(key).is_some_and(|value| {
+            value
+                .trim_start_matches(':')
+                .split(',')
+                .any(|item| item.trim() == expected)
+        })
+    })
+}
+
 #[test]
 fn cargo_builds_do_not_manage_git_hooks() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -33,24 +69,25 @@ fn rustfmt_check_is_mirrored_and_runs_before_expensive_checks() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let format_command = "cargo fmt --all -- --check";
 
-    for policy_file in [".github/workflows/ci.yml", ".githooks/pre-commit"] {
+    for (policy_file, actions_run) in [
+        (".github/workflows/ci.yml", true),
+        (".githooks/pre-commit", false),
+    ] {
         let contents = std::fs::read_to_string(root.join(policy_file)).unwrap();
-        let format_position = contents
-            .find(format_command)
-            .unwrap_or_else(|| panic!("{policy_file} must run `{format_command}`"));
-        let build_position = contents
-            .find("cargo build")
-            .unwrap_or_else(|| panic!("{policy_file} must run the build check"));
+        let format_line = active_command_line(&contents, format_command, actions_run)
+            .unwrap_or_else(|| panic!("{policy_file} must actively run `{format_command}`"));
+        let build_line = active_command_line(&contents, "cargo build", actions_run)
+            .unwrap_or_else(|| panic!("{policy_file} must actively run the build check"));
 
         assert!(
-            format_position < build_position,
+            format_line < build_line,
             "{policy_file} must run `{format_command}` before the expensive checks"
         );
     }
 
     let ci = std::fs::read_to_string(root.join(".github/workflows/ci.yml")).unwrap();
     assert!(
-        ci.contains("components: rustfmt, clippy, llvm-tools-preview"),
-        "stable CI must explicitly request the rustfmt component"
+        active_yaml_list_contains(&ci, "components", "rustfmt"),
+        "stable CI must actively request the rustfmt component"
     );
 }
