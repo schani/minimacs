@@ -84,7 +84,9 @@ fn mouse_scroll_in_grown_prompt_or_completions_does_not_scroll_pane() {
     app.editor
         .minibuffer_pane
         .set_point(app.editor.minibuffer_buffer.char_count());
-    app.editor.minibuffer.completions = Some(vec!["alpha".into(), "alpine".into()]);
+    app.editor
+        .minibuffer
+        .set_completion_candidates(vec!["alpha".into(), "alpine".into()]);
     let mut events = TestEventSource::new(vec![mouse_scroll_down(2, 8)]);
     app.run_until_idle(&mut events).unwrap();
 

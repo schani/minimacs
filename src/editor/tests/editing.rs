@@ -5,14 +5,14 @@ fn isearch_no_match() {
     let mut editor = Editor::new_with_text("hello world");
     editor.execute(Command::ISearchForward);
     if let Some(ref mut isearch) = editor.isearch {
-        isearch.query = "xyz".to_string();
+        isearch.set_query_for_test("xyz");
     }
     editor.isearch_update();
     // A failing search shows in the prompt label, not as a queued message.
-    assert_eq!(editor.minibuffer.message, None);
-    assert!(editor.isearch.as_ref().unwrap().failing);
+    assert_eq!(editor.minibuffer.message(), None);
+    assert!(editor.isearch.as_ref().unwrap().is_failing());
     assert_eq!(
-        editor.minibuffer.prompt().unwrap().label,
+        editor.minibuffer.prompt().unwrap().label(),
         "Failing I-search: "
     );
 }
@@ -22,18 +22,18 @@ fn isearch_next_no_more_matches() {
     let mut editor = Editor::new_with_text("hello world");
     editor.execute(Command::ISearchForward);
     if let Some(ref mut isearch) = editor.isearch {
-        isearch.query = "hello".to_string();
+        isearch.set_query_for_test("hello");
     }
     editor.isearch_update();
-    assert_eq!(editor.minibuffer.prompt().unwrap().label, "I-search: ");
+    assert_eq!(editor.minibuffer.prompt().unwrap().label(), "I-search: ");
     // Try to cycle — no more matches
     editor.isearch_next();
-    assert!(editor.isearch.as_ref().unwrap().failing);
+    assert!(editor.isearch.as_ref().unwrap().is_failing());
     assert!(editor
         .minibuffer
         .prompt()
         .unwrap()
-        .label
+        .label()
         .contains("Failing"));
 }
 
@@ -44,7 +44,7 @@ fn isearch_backward_finds_match() {
     editor.pane_tree.set_focused_point(17);
     editor.execute(Command::ISearchBackward);
     if let Some(ref mut isearch) = editor.isearch {
-        isearch.query = "hello".to_string();
+        isearch.set_query_for_test("hello");
     }
     editor.isearch_update();
     // rfind from position 17 finds the last "hello" before cursor = position 12
@@ -57,7 +57,7 @@ fn isearch_next_backward() {
     editor.pane_tree.set_focused_point(8);
     editor.execute(Command::ISearchBackward);
     if let Some(ref mut isearch) = editor.isearch {
-        isearch.query = "ab".to_string();
+        isearch.set_query_for_test("ab");
     }
     editor.isearch_update();
     // First backward match from end
@@ -68,7 +68,7 @@ fn isearch_next_backward() {
         editor.point() < first
             || editor
                 .minibuffer
-                .message
+                .message()
                 .as_ref()
                 .unwrap()
                 .contains("Failing")
@@ -81,13 +81,13 @@ fn isearch_empty_query_restores() {
     editor.pane_tree.set_focused_point(5);
     editor.execute(Command::ISearchForward);
     if let Some(ref mut isearch) = editor.isearch {
-        isearch.query = "world".to_string();
+        isearch.set_query_for_test("world");
     }
     editor.isearch_update();
     assert_eq!(editor.point(), 6);
     // Clear query → should restore
     if let Some(ref mut isearch) = editor.isearch {
-        isearch.query = String::new();
+        isearch.set_query_for_test("");
     }
     editor.isearch_update();
     assert_eq!(editor.point(), 5);
@@ -400,7 +400,7 @@ fn kill_chain_does_not_survive_isearch_accept() {
 
     editor.execute(Command::ISearchForward);
     if let Some(ref mut isearch) = editor.isearch {
-        isearch.query = "world".to_string();
+        isearch.set_query_for_test("world");
     }
     editor.isearch_update();
     editor.isearch_accept();

@@ -72,8 +72,8 @@ fn undo_with_nothing_to_undo() {
     let mut editor = Editor::new_with_text("hello");
     editor.execute(Command::Undo);
     assert_eq!(
-        editor.minibuffer.message,
-        Some("No further undo information".to_string())
+        editor.minibuffer.message(),
+        Some("No further undo information")
     );
 }
 
@@ -82,8 +82,8 @@ fn redo_with_nothing_to_redo() {
     let mut editor = Editor::new_with_text("hello");
     editor.execute(Command::Redo);
     assert_eq!(
-        editor.minibuffer.message,
-        Some("No further redo information".to_string())
+        editor.minibuffer.message(),
+        Some("No further redo information")
     );
 }
 
@@ -91,27 +91,21 @@ fn redo_with_nothing_to_redo() {
 fn swap_point_and_mark_no_mark() {
     let mut editor = Editor::new_with_text("hello");
     editor.execute(Command::SwapPointAndMark);
-    assert_eq!(editor.minibuffer.message, Some("No mark set".to_string()));
+    assert_eq!(editor.minibuffer.message(), Some("No mark set"));
 }
 
 #[test]
 fn cut_no_region() {
     let mut editor = Editor::new_with_text("hello");
     editor.execute(Command::Cut);
-    assert_eq!(
-        editor.minibuffer.message,
-        Some("No region selected".to_string())
-    );
+    assert_eq!(editor.minibuffer.message(), Some("No region selected"));
 }
 
 #[test]
 fn copy_no_region() {
     let mut editor = Editor::new_with_text("hello");
     editor.execute(Command::Copy);
-    assert_eq!(
-        editor.minibuffer.message,
-        Some("No region selected".to_string())
-    );
+    assert_eq!(editor.minibuffer.message(), Some("No region selected"));
 }
 
 #[test]
@@ -129,7 +123,7 @@ fn write_file_prompt() {
     editor.execute(Command::WriteFile);
     assert!(editor.minibuffer.is_active());
     let prompt = editor.minibuffer.prompt().unwrap();
-    assert_eq!(prompt.kind, PromptKind::WriteFile);
+    assert_eq!(prompt.kind(), PromptKind::WriteFile);
 }
 
 #[test]
@@ -149,7 +143,7 @@ fn kill_buffer_modified_prompts() {
     editor.execute(Command::KillBuffer);
     assert!(editor.minibuffer.is_active());
     let prompt = editor.minibuffer.prompt().unwrap();
-    assert!(matches!(prompt.kind, PromptKind::KillConfirm { .. }));
+    assert!(matches!(prompt.kind(), PromptKind::KillConfirm { .. }));
 }
 
 #[test]
@@ -201,10 +195,7 @@ fn goto_line_invalid_input() {
     editor.execute(Command::GotoLine);
     editor.set_minibuffer_text("abc");
     editor.submit_prompt();
-    assert_eq!(
-        editor.minibuffer.message,
-        Some("Invalid line number".to_string())
-    );
+    assert_eq!(editor.minibuffer.message(), Some("Invalid line number"));
 }
 
 #[test]
@@ -216,10 +207,7 @@ fn goto_line_zero_is_invalid() {
     editor.submit_prompt();
 
     assert_eq!(editor.point(), 6);
-    assert_eq!(
-        editor.minibuffer.message,
-        Some("Invalid line number".to_string())
-    );
+    assert_eq!(editor.minibuffer.message(), Some("Invalid line number"));
 }
 
 #[test]
@@ -229,8 +217,8 @@ fn switch_to_nonexistent_buffer() {
     editor.set_minibuffer_text("nonexistent");
     editor.submit_prompt();
     assert_eq!(
-        editor.minibuffer.message,
-        Some("No buffer named 'nonexistent'".to_string())
+        editor.minibuffer.message(),
+        Some("No buffer named 'nonexistent'")
     );
 }
 
@@ -302,7 +290,7 @@ fn save_confirm_invalid_reprompts_same_buffer() {
     // The prompt re-asks for the same buffer instead of aborting the quit.
     assert!(editor.minibuffer.is_active());
     let prompt = editor.minibuffer.prompt().unwrap();
-    assert!(matches!(prompt.kind, PromptKind::QuitSaveConfirm { .. }));
+    assert!(matches!(prompt.kind(), PromptKind::QuitSaveConfirm { .. }));
 }
 
 #[test]
@@ -452,7 +440,7 @@ fn quit_save_yes_without_path_aborts_with_message() {
     editor.set_minibuffer_text("y");
     editor.submit_prompt();
     assert!(!editor.should_quit);
-    let message = editor.minibuffer.message.clone().unwrap();
+    let message = editor.minibuffer.message().unwrap().to_string();
     assert!(message.contains("no file"), "got message: {message}");
 }
 
@@ -532,13 +520,16 @@ fn quit_save_over_externally_modified_file_prompts_and_resumes_quit() {
 
     editor.execute(Command::Quit);
     let prompt = editor.minibuffer.prompt().unwrap();
-    assert!(matches!(prompt.kind, PromptKind::QuitSaveConfirm { .. }));
+    assert!(matches!(prompt.kind(), PromptKind::QuitSaveConfirm { .. }));
     editor.set_minibuffer_text("y");
     editor.submit_prompt();
     // The quit-time save must hit the external-modification guard instead
     // of clobbering the file.
     let prompt = editor.minibuffer.prompt().unwrap();
-    assert!(matches!(prompt.kind, PromptKind::SaveAnywayConfirm { .. }));
+    assert!(matches!(
+        prompt.kind(),
+        PromptKind::SaveAnywayConfirm { .. }
+    ));
     assert_eq!(std::fs::read_to_string(&file1).unwrap(), "external");
     assert!(!editor.should_quit);
 
@@ -549,7 +540,7 @@ fn quit_save_over_externally_modified_file_prompts_and_resumes_quit() {
     assert_eq!(std::fs::read_to_string(&file1).unwrap(), "1aaa");
     assert!(!editor.should_quit);
     let prompt = editor.minibuffer.prompt().unwrap();
-    assert!(matches!(prompt.kind, PromptKind::QuitSaveConfirm { .. }));
+    assert!(matches!(prompt.kind(), PromptKind::QuitSaveConfirm { .. }));
     editor.set_minibuffer_text("y");
     editor.submit_prompt();
     assert!(editor.should_quit);
@@ -576,7 +567,10 @@ fn quit_save_anyway_declined_cancels_quit() {
     editor.set_minibuffer_text("y");
     editor.submit_prompt();
     let prompt = editor.minibuffer.prompt().unwrap();
-    assert!(matches!(prompt.kind, PromptKind::SaveAnywayConfirm { .. }));
+    assert!(matches!(
+        prompt.kind(),
+        PromptKind::SaveAnywayConfirm { .. }
+    ));
 
     // Declining cancels the whole quit, like a failed save does: no
     // further prompts, nothing written, nothing quit.
@@ -592,7 +586,7 @@ fn quit_save_anyway_declined_cancels_quit() {
     // A fresh quit starts the flow over from the first modified buffer.
     editor.execute(Command::Quit);
     let prompt = editor.minibuffer.prompt().unwrap();
-    assert!(matches!(prompt.kind, PromptKind::QuitSaveConfirm { .. }));
+    assert!(matches!(prompt.kind(), PromptKind::QuitSaveConfirm { .. }));
     assert!(!editor.should_quit);
 }
 
@@ -615,7 +609,10 @@ fn write_file_to_own_externally_modified_path_prompts() {
     editor.set_minibuffer_text(&own_path.to_string_lossy());
     editor.submit_prompt();
     let prompt = editor.minibuffer.prompt().unwrap();
-    assert!(matches!(prompt.kind, PromptKind::SaveAnywayConfirm { .. }));
+    assert!(matches!(
+        prompt.kind(),
+        PromptKind::SaveAnywayConfirm { .. }
+    ));
 
     // Declining keeps the on-disk content.
     editor.set_minibuffer_text("n");
@@ -654,7 +651,7 @@ fn write_file_to_other_path_asks_overwrite_only_despite_external_change() {
     editor.set_minibuffer_text(&other.to_string_lossy());
     editor.submit_prompt();
     let prompt = editor.minibuffer.prompt().unwrap();
-    assert!(matches!(prompt.kind, PromptKind::OverwriteConfirm { .. }));
+    assert!(matches!(prompt.kind(), PromptKind::OverwriteConfirm { .. }));
     editor.set_minibuffer_text("y");
     editor.submit_prompt();
     assert!(editor.minibuffer.prompt().is_none());
@@ -798,7 +795,7 @@ fn save_through_symlink_detects_external_target_modification() {
     editor.execute(Command::Save);
     let prompt = editor.minibuffer.prompt().unwrap();
     assert!(
-        matches!(prompt.kind, PromptKind::SaveAnywayConfirm { .. }),
+        matches!(prompt.kind(), PromptKind::SaveAnywayConfirm { .. }),
         "external modification of the symlink target must be detected"
     );
     editor.set_minibuffer_text("y");

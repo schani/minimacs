@@ -100,9 +100,7 @@ impl Editor {
     /// messages are invisible while a prompt is active) and restore the
     /// default directory prefill.
     fn reask_path_prompt(&mut self, label: &str) {
-        if let Some(prompt) = self.minibuffer.prompt_mut() {
-            prompt.label = label.to_string();
-        }
+        self.minibuffer.set_prompt_label(label);
         let input = self.default_path_prompt_input();
         self.set_minibuffer_input(&input);
     }
@@ -140,7 +138,7 @@ impl Editor {
 
     fn dispatch_prompt(&mut self) {
         let kind = match self.minibuffer.prompt() {
-            Some(p) => p.kind.clone(),
+            Some(p) => p.kind(),
             None => return,
         };
         let input = self.minibuffer_text();

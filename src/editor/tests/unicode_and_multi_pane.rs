@@ -281,13 +281,13 @@ fn isearch_finds_non_ascii_query_at_char_position() {
     let mut editor = Editor::new_with_text("héllo wörld");
     editor.execute(Command::ISearchForward);
     if let Some(ref mut isearch) = editor.isearch {
-        isearch.query = "wörld".to_string();
+        isearch.set_query_for_test("wörld");
     }
     editor.isearch_update();
     // "wörld" ends at char index 11 (point goes to match end), and the
     // match starts at char index 6 — not at the byte offsets 13/8.
     let state = editor.isearch.as_ref().unwrap();
-    assert_eq!(state.current_match, Some(6));
+    assert_eq!(state.current_match(), Some(6));
     assert_eq!(editor.point(), 6);
 }
 
@@ -297,11 +297,11 @@ fn isearch_backward_non_ascii() {
     editor.execute(Command::BufferEnd);
     editor.execute(Command::ISearchBackward);
     if let Some(ref mut isearch) = editor.isearch {
-        isearch.query = "ééé".to_string();
+        isearch.set_query_for_test("ééé");
     }
     editor.isearch_update();
     let state = editor.isearch.as_ref().unwrap();
-    assert_eq!(state.current_match, Some(8));
+    assert_eq!(state.current_match(), Some(8));
 }
 
 #[test]

@@ -37,7 +37,7 @@ pub fn completions_height(editor: &Editor, total_height: u16, total_width: u16) 
     if !editor.minibuffer.is_active() {
         return 0;
     }
-    match &editor.minibuffer.completions {
+    match editor.minibuffer.completions() {
         Some(candidates) if !candidates.is_empty() => {
             use unicode_width::UnicodeWidthStr;
             let max_rows = ((total_height.saturating_sub(2)) / 3).max(1) as usize;
@@ -72,13 +72,13 @@ pub(crate) struct ScreenLayout {
 fn minibuffer_content(editor: &Editor) -> (String, Option<usize>) {
     let Some(prompt) = editor.minibuffer.prompt() else {
         return (
-            terminal_safe_text(editor.minibuffer.message.as_deref().unwrap_or("")),
+            terminal_safe_text(editor.minibuffer.message().unwrap_or("")),
             None,
         );
     };
 
     let input = terminal_safe_text(&editor.minibuffer_buffer.text().to_string());
-    let label = terminal_safe_text(&prompt.label);
+    let label = terminal_safe_text(prompt.label());
     let point_byte = input
         .char_indices()
         .nth(editor.minibuffer_pane.point())

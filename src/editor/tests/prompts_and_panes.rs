@@ -309,8 +309,8 @@ fn find_file_empty_input_reasks() {
     assert_eq!(editor.buffers.len(), buffer_count);
     assert!(editor.minibuffer.is_active());
     let prompt = editor.minibuffer.prompt().unwrap();
-    assert_eq!(prompt.kind, PromptKind::FindFile);
-    assert_eq!(prompt.label, "Find file (path required): ");
+    assert_eq!(prompt.kind(), PromptKind::FindFile);
+    assert_eq!(prompt.label(), "Find file (path required): ");
     assert_eq!(
         editor.minibuffer_text(),
         format!("{}/", editor.cwd.display())
@@ -364,8 +364,8 @@ fn write_file_empty_input_reasks() {
     assert!(editor.current_buffer().path().is_none());
     assert!(editor.minibuffer.is_active());
     let prompt = editor.minibuffer.prompt().unwrap();
-    assert_eq!(prompt.kind, PromptKind::WriteFile);
-    assert_eq!(prompt.label, "Write file (path required): ");
+    assert_eq!(prompt.kind(), PromptKind::WriteFile);
+    assert_eq!(prompt.label(), "Write file (path required): ");
     assert_eq!(
         editor.minibuffer_text(),
         format!("{}/", editor.cwd.display())

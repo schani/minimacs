@@ -14,23 +14,62 @@ pub enum SearchDirection {
 /// State for incremental search.
 #[derive(Debug)]
 pub struct ISearchState {
-    pub query: String,
+    query: String,
     /// Contiguous snapshot made once when search starts. Isearch owns input
     /// until it finishes, so the searched buffer cannot change underneath it.
-    pub text_snapshot: String,
-    pub direction: SearchDirection,
+    text_snapshot: String,
+    direction: SearchDirection,
     /// Position before search started (to restore on C-g).
-    pub original_point: usize,
-    pub original_scroll_top: usize,
-    pub original_scroll_row_offset: usize,
+    original_point: usize,
+    original_scroll_top: usize,
+    original_scroll_row_offset: usize,
     /// Current match position (char offset of match start).
-    pub current_match: Option<usize>,
+    current_match: Option<usize>,
     /// Char positions of all matches, recomputed once per query change.
     /// Navigation and rendering read this instead of rescanning the buffer.
-    pub matches: Vec<usize>,
+    matches: Vec<usize>,
     /// Whether the last search action failed to find a match. Shown in the
     /// prompt label ("Failing I-search: "), like emacs.
-    pub failing: bool,
+    failing: bool,
+}
+
+impl ISearchState {
+    pub fn query(&self) -> &str {
+        &self.query
+    }
+
+    pub fn text_snapshot(&self) -> &str {
+        &self.text_snapshot
+    }
+
+    pub fn direction(&self) -> SearchDirection {
+        self.direction
+    }
+
+    pub fn original_view(&self) -> (usize, usize, usize) {
+        (
+            self.original_point,
+            self.original_scroll_top,
+            self.original_scroll_row_offset,
+        )
+    }
+
+    pub fn current_match(&self) -> Option<usize> {
+        self.current_match
+    }
+
+    pub fn matches(&self) -> &[usize] {
+        &self.matches
+    }
+
+    pub fn is_failing(&self) -> bool {
+        self.failing
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_query_for_test(&mut self, query: &str) {
+        self.query = query.to_string();
+    }
 }
 
 /// The isearch prompt label for the given state — the label is live: it
@@ -77,10 +116,8 @@ impl Editor {
         let Some(isearch) = &self.isearch else {
             return;
         };
-        let label = isearch_label(isearch.direction, isearch.failing);
-        if let Some(prompt) = self.minibuffer.prompt_mut() {
-            prompt.label = label.to_string();
-        }
+        let label = isearch_label(isearch.direction(), isearch.is_failing());
+        self.minibuffer.set_prompt_label(label);
     }
 
     /// Find the char positions of all occurrences of `query` in the search
@@ -122,7 +159,7 @@ impl Editor {
     /// match positions, and jump to the first match from the original point.
     pub fn isearch_update(&mut self) {
         let (query, direction, original_point) = match &self.isearch {
-            Some(s) => (s.query.clone(), s.direction, s.original_point),
+            Some(s) => (s.query().to_string(), s.direction(), s.original_point),
             None => return,
         };
         if query.is_empty() {
@@ -144,7 +181,7 @@ impl Editor {
         }
 
         let matches =
-            Self::compute_matches_for_query(&self.isearch.as_ref().unwrap().text_snapshot, &query);
+            Self::compute_matches_for_query(self.isearch.as_ref().unwrap().text_snapshot(), &query);
         let query_len = query.chars().count();
         let found = match direction {
             SearchDirection::Forward => matches.iter().copied().find(|&p| p >= original_point),
@@ -232,13 +269,13 @@ impl Editor {
         let found = match &self.isearch {
             Some(s) if !s.query.is_empty() => {
                 let current_point = self.pane_tree.focused_pane().point();
-                let query_len = s.query.chars().count();
-                match s.direction {
+                let query_len = s.query().chars().count();
+                match s.direction() {
                     SearchDirection::Forward => {
-                        s.matches.iter().copied().find(|&p| p > current_point)
+                        s.matches().iter().copied().find(|&p| p > current_point)
                     }
                     SearchDirection::Backward => s
-                        .matches
+                        .matches()
                         .iter()
                         .copied()
                         .rev()
@@ -282,7 +319,7 @@ impl Editor {
         };
         let query_char_len = isearch.query.chars().count();
         isearch
-            .matches
+            .matches()
             .iter()
             .map(|&pos| (pos, query_char_len))
             .collect()

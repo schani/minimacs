@@ -300,6 +300,24 @@ fn pane_state_fields_are_private() {
 }
 
 #[test]
+fn prompt_and_search_state_fields_are_private() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let sources = [
+        ("src/minibuffer.rs", vec!["Minibuffer", "Prompt"]),
+        ("src/editor/isearch.rs", vec!["ISearchState"]),
+    ];
+
+    for (source, aggregates) in sources {
+        let contents = std::fs::read_to_string(root.join(source)).unwrap();
+        let fields = public_aggregate_fields(&contents, aggregates).unwrap();
+        assert!(
+            fields.is_empty(),
+            "{source} prompt/search mutation-sensitive fields must be private; found {fields:?}"
+        );
+    }
+}
+
+#[test]
 fn editor_render_policy_ignores_comments_and_detects_real_dependencies() {
     let dependencies = render_dependencies(
         r#"

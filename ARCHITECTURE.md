@@ -727,7 +727,14 @@ are mapped to appropriate styles (bold, italic, underline, colors).
 
 ## Minibuffer
 
-The minibuffer has two states:
+The minibuffer privately owns its lifecycle state, message, completion list,
+and completion page. Rendering receives immutable message/completion/prompt
+views; callers request lifecycle transitions (`start_prompt`, `finish`,
+`cancel`), label changes, completion paging/dismissal, or message publication.
+`Prompt` likewise keeps its kind and label private and exposes immutable
+queries, so no mutable prompt reference crosses the module boundary.
+
+The two lifecycle states are:
 
 - **Idle**: shows timed messages ("Wrote file.txt", "Quit", errors).
 - **Prompt**: active text input with a label. Prompt kinds:
@@ -906,7 +913,11 @@ does not reset the preferred column; empty `C-y` only resets that column.
 
 ## Incremental Search
 
-`C-s` / `C-r` starts an incremental search. The search state tracks:
+`C-s` / `C-r` starts an incremental search. `ISearchState` keeps all search fields private. Immutable query/render views
+expose the query, direction, failure status, current match, and cached matches;
+search lifecycle and query/navigation changes remain intents implemented by
+the editor's isearch module. Tests use a cfg(test) query fixture rather than a
+mutable search-field reference. The search state tracks:
 
 - The query string (built up character by character).
 - One contiguous snapshot of the buffer text, created when search starts.

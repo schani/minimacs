@@ -71,7 +71,7 @@ pub fn render(
             "isearch matches must be sorted and uniform in length"
         );
         let current_match = if is_focused {
-            editor.isearch.as_ref().and_then(|s| s.current_match)
+            editor.isearch.as_ref().and_then(|s| s.current_match())
         } else {
             None
         };
@@ -148,11 +148,11 @@ pub fn render(
     }
 
     if let Some(comp_area) = layout.completions_area {
-        if let Some(candidates) = &editor.minibuffer.completions {
+        if let Some(candidates) = editor.minibuffer.completions() {
             render_completions(
                 frame,
                 candidates,
-                editor.minibuffer.completion_page,
+                editor.minibuffer.completion_page(),
                 comp_area,
             );
         }
@@ -793,7 +793,9 @@ mod tests {
     #[test]
     fn screen_layout_keeps_completions_above_grown_minibuffer() {
         let mut editor = prompt_editor("I: ", "abcdefghijkl", 12);
-        editor.minibuffer.completions = Some(vec!["alpha".into(), "alpine".into()]);
+        editor
+            .minibuffer
+            .set_completion_candidates(vec!["alpha".into(), "alpine".into()]);
 
         let layout = screen_layout(&editor, Rect::new(0, 0, 8, 12));
 
@@ -1073,7 +1075,9 @@ mod tests {
         editor
             .minibuffer
             .start_prompt(crate::minibuffer::PromptKind::FindFile, "Find file: ");
-        editor.minibuffer.completions = Some(vec!["a".into(), "b".into(), "c".into()]);
+        editor
+            .minibuffer
+            .set_completion_candidates(vec!["a".into(), "b".into(), "c".into()]);
         // width=80, col_width=3, num_cols=26, num_rows=ceil(3/26)=1
         // max_rows=(24-2)/3=7, min(1,7)=1
         assert_eq!(completions_height(&editor, 24, 80), 1);
@@ -1085,7 +1089,9 @@ mod tests {
         editor
             .minibuffer
             .start_prompt(crate::minibuffer::PromptKind::FindFile, "Find file: ");
-        editor.minibuffer.completions = Some(vec!["a".into(), "b".into(), "c".into()]);
+        editor
+            .minibuffer
+            .set_completion_candidates(vec!["a".into(), "b".into(), "c".into()]);
         // width=1, col_width=1, num_cols=1, num_rows=3
         // max_rows=(24-2)/3=7, min(3,7)=3
         assert_eq!(completions_height(&editor, 24, 1), 3);
@@ -1098,7 +1104,7 @@ mod tests {
             .minibuffer
             .start_prompt(crate::minibuffer::PromptKind::FindFile, "Find file: ");
         let many: Vec<String> = (0..50).map(|i| format!("file{}.txt", i)).collect();
-        editor.minibuffer.completions = Some(many);
+        editor.minibuffer.set_completion_candidates(many);
         // max_len=11 ("file10.txt"...), col_width=13, width=80 => 6 cols
         // num_rows=ceil(50/6)=9, capped at max_rows=(24-2)/3=7
         assert_eq!(completions_height(&editor, 24, 80), 7);
@@ -1115,7 +1121,7 @@ mod tests {
             .iter()
             .map(|s| format!("你你你你{s}.txt"))
             .collect();
-        editor.minibuffer.completions = Some(candidates);
+        editor.minibuffer.set_completion_candidates(candidates);
         // col_width = 13+2 = 15; at width 24 only one column fits => 4 rows.
         // (Counting chars would give col_width 11, two columns => 2 rows.)
         assert_eq!(completions_height(&editor, 24, 24), 4);
@@ -1127,7 +1133,9 @@ mod tests {
         editor
             .minibuffer
             .start_prompt(crate::minibuffer::PromptKind::FindFile, "Find file: ");
-        editor.minibuffer.completions = Some(vec!["a".into(), "b".into()]);
+        editor
+            .minibuffer
+            .set_completion_candidates(vec!["a".into(), "b".into()]);
         // height=4, max_rows = (4-2)/3 = 0 -> max(1) = 1
         assert_eq!(completions_height(&editor, 4, 80), 1);
     }
@@ -1217,7 +1225,7 @@ Some *emphasis* here.\n";
             .start_prompt(crate::minibuffer::PromptKind::FindFile, "Find file: ");
         // 30 short candidates in 80-wide terminal
         let candidates: Vec<String> = (0..30).map(|i| format!("f{}", i)).collect();
-        editor.minibuffer.completions = Some(candidates);
+        editor.minibuffer.set_completion_candidates(candidates);
         // max_len=3 ("f10"...), col_width=5, width=80 => 16 cols
         // num_rows=ceil(30/16)=2, max_rows=(24-2)/3=7, min(2,7)=2
         let h = completions_height(&editor, 24, 80);

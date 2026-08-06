@@ -9,7 +9,7 @@ fn isearch_forward_basic() {
 
     // Type "world" into search
     if let Some(ref mut isearch) = editor.isearch {
-        isearch.query = "world".to_string();
+        isearch.set_query_for_test("world");
     }
     editor.isearch_update();
     // Should find "world" at char position 6
@@ -24,9 +24,13 @@ fn isearch_snapshots_a_multi_chunk_buffer_once() {
     assert!(editor.current_buffer().text().chunks().count() > 1);
 
     editor.execute(Command::ISearchForward);
-    assert_eq!(editor.isearch.as_ref().unwrap().text_snapshot, source);
+    assert_eq!(editor.isearch.as_ref().unwrap().text_snapshot(), source);
 
-    editor.isearch.as_mut().unwrap().query = "needle終".to_string();
+    editor
+        .isearch
+        .as_mut()
+        .unwrap()
+        .set_query_for_test("needle終");
     editor.isearch_update();
     assert_eq!(editor.point(), prefix.chars().count() + 1);
 }
@@ -40,7 +44,7 @@ fn isearch_backward_basic() {
     assert!(editor.isearch.is_some());
 
     if let Some(ref mut isearch) = editor.isearch {
-        isearch.query = "hello".to_string();
+        isearch.set_query_for_test("hello");
     }
     editor.isearch_update();
     // Should find "hello" at position 12 (second occurrence, backward from 17)
@@ -54,7 +58,7 @@ fn isearch_cancel_restores_position() {
     editor.execute(Command::ISearchForward);
 
     if let Some(ref mut isearch) = editor.isearch {
-        isearch.query = "world".to_string();
+        isearch.set_query_for_test("world");
     }
     editor.isearch_update();
     assert_eq!(editor.point(), 6); // Found at "world"
@@ -71,7 +75,7 @@ fn isearch_accept_keeps_position() {
     editor.execute(Command::ISearchForward);
 
     if let Some(ref mut isearch) = editor.isearch {
-        isearch.query = "world".to_string();
+        isearch.set_query_for_test("world");
     }
     editor.isearch_update();
     assert_eq!(editor.point(), 6);
@@ -87,7 +91,7 @@ fn isearch_next_cycles() {
     editor.execute(Command::ISearchForward);
 
     if let Some(ref mut isearch) = editor.isearch {
-        isearch.query = "aaa".to_string();
+        isearch.set_query_for_test("aaa");
     }
     editor.isearch_update();
     assert_eq!(editor.point(), 0); // First "aaa"
@@ -105,7 +109,7 @@ fn isearch_matches_returns_all() {
     editor.execute(Command::ISearchForward);
 
     if let Some(ref mut isearch) = editor.isearch {
-        isearch.query = "abc".to_string();
+        isearch.set_query_for_test("abc");
     }
     editor.isearch_update();
 

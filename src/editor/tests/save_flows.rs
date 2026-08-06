@@ -32,10 +32,7 @@ fn save_success_reports_wrote_and_clears_modified() {
     assert!(editor.current_buffer().is_modified());
 
     editor.execute(Command::Save);
-    assert_eq!(
-        editor.minibuffer.message,
-        Some("Wrote test.txt".to_string())
-    );
+    assert_eq!(editor.minibuffer.message(), Some("Wrote test.txt"));
     assert!(!editor.current_buffer().is_modified());
 }
 
@@ -53,7 +50,7 @@ fn save_error_reports_message_and_keeps_modified() {
     editor.execute(Command::Save);
     std::fs::set_permissions(dir.path(), orig).unwrap();
 
-    let message = editor.minibuffer.message.clone().unwrap();
+    let message = editor.minibuffer.message().unwrap().to_string();
     assert!(
         message.starts_with("Error saving:"),
         "got message: {message}"
@@ -81,10 +78,7 @@ fn save_anyway_confirm_yes_reports_wrote_and_clears_modified() {
     editor.set_minibuffer_text("y");
     editor.submit_prompt();
 
-    assert_eq!(
-        editor.minibuffer.message,
-        Some("Wrote test.txt".to_string())
-    );
+    assert_eq!(editor.minibuffer.message(), Some("Wrote test.txt"));
     assert!(!editor.current_buffer().is_modified());
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "Xoriginal");
 }
@@ -110,7 +104,7 @@ fn save_anyway_confirm_yes_reports_error_when_save_fails() {
     editor.submit_prompt();
     std::fs::set_permissions(dir.path(), orig).unwrap();
 
-    let message = editor.minibuffer.message.clone().unwrap();
+    let message = editor.minibuffer.message().unwrap().to_string();
     assert!(
         message.starts_with("Error saving:"),
         "got message: {message}"
@@ -132,10 +126,7 @@ fn write_file_success_reports_wrote_and_updates_identity() {
     editor.set_minibuffer_text(&target.to_string_lossy());
     editor.submit_prompt();
 
-    assert_eq!(
-        editor.minibuffer.message,
-        Some("Wrote output.txt".to_string())
-    );
+    assert_eq!(editor.minibuffer.message(), Some("Wrote output.txt"));
     assert!(!editor.current_buffer().is_modified());
     assert_eq!(editor.current_buffer().name(), "output.txt");
     assert_eq!(editor.current_buffer().path(), Some(target.as_path()));
@@ -153,7 +144,7 @@ fn write_file_failure_reports_error_message() {
     editor.set_minibuffer_text(&target.to_string_lossy());
     editor.submit_prompt();
 
-    let message = editor.minibuffer.message.clone().unwrap();
+    let message = editor.minibuffer.message().unwrap().to_string();
     assert!(
         message.starts_with("Error saving:"),
         "got message: {message}"
@@ -176,10 +167,7 @@ fn overwrite_confirm_yes_reports_wrote_and_clears_modified() {
     editor.set_minibuffer_text("y");
     editor.submit_prompt();
 
-    assert_eq!(
-        editor.minibuffer.message,
-        Some("Wrote target.txt".to_string())
-    );
+    assert_eq!(editor.minibuffer.message(), Some("Wrote target.txt"));
     assert!(!editor.current_buffer().is_modified());
     assert_eq!(std::fs::read_to_string(&target).unwrap(), "x");
 }
@@ -211,7 +199,7 @@ fn quit_save_confirm_yes_error_aborts_quit_with_message() {
     // prompts, and the error names the buffer.
     assert!(!editor.should_quit);
     assert!(!editor.minibuffer.is_active());
-    let message = editor.minibuffer.message.clone().unwrap();
+    let message = editor.minibuffer.message().unwrap().to_string();
     assert!(
         message.starts_with("Could not save a.txt:"),
         "got message: {message}"
@@ -263,7 +251,7 @@ fn open_files_opens_all_and_focuses_the_first() {
     let names: Vec<&str> = editor.buffers.iter().map(|b| b.name()).collect();
     assert_eq!(names, ["*scratch*", "a.txt", "b.txt", "c.txt"]);
     assert_eq!(editor.current_buffer().name(), "a.txt");
-    assert_eq!(editor.minibuffer.message.as_deref(), Some("Opened 3 files"));
+    assert_eq!(editor.minibuffer.message(), Some("Opened 3 files"));
 }
 
 #[test]
@@ -276,7 +264,7 @@ fn open_files_single_file_keeps_the_plain_opened_message() {
     editor.open_files(&[a]);
 
     assert_eq!(editor.current_buffer().name(), "a.txt");
-    assert_eq!(editor.minibuffer.message.as_deref(), Some("Opened a.txt"));
+    assert_eq!(editor.minibuffer.message(), Some("Opened a.txt"));
 }
 
 #[test]
@@ -292,6 +280,6 @@ fn open_files_failed_path_opens_the_rest_and_keeps_the_error_visible() {
     // file still opens and is focused (it is the first successful open);
     // the error message is not papered over by an "Opened N files" summary.
     assert_eq!(editor.current_buffer().name(), "b.txt");
-    let message = editor.minibuffer.message.clone().unwrap();
+    let message = editor.minibuffer.message().unwrap().to_string();
     assert!(message.contains("empty file path"), "got: {message}");
 }

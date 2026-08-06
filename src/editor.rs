@@ -1266,11 +1266,9 @@ impl Editor {
     fn cancel(&mut self) {
         if let Some(isearch) = self.isearch.take() {
             // Restore original position
-            self.pane_tree.restore_focused_view(
-                isearch.original_point,
-                isearch.original_scroll_top,
-                isearch.original_scroll_row_offset,
-            );
+            let (point, scroll_top, scroll_row_offset) = isearch.original_view();
+            self.pane_tree
+                .restore_focused_view(point, scroll_top, scroll_row_offset);
             self.minibuffer.finish();
             self.minibuffer.show_message("Quit".to_string());
         } else if self.minibuffer.is_active() {

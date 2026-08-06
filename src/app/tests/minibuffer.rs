@@ -20,10 +20,7 @@ fn mark_set_during_prompt_does_not_reappear_after_finish() {
     app.run_until_idle(&mut events).unwrap();
     assert_eq!(app.editor.buffer_text(), "content");
     // The legit post-finish message shows; the stale "Mark set" doesn't.
-    assert_eq!(
-        app.editor.minibuffer.message,
-        Some("Opened marked.txt".to_string())
-    );
+    assert_eq!(app.editor.minibuffer.message(), Some("Opened marked.txt"));
     let screen = capture_screen(&app.terminal);
     assert!(!screen.contains("Mark set"), "screen: {screen}");
 }
@@ -258,7 +255,7 @@ fn minibuffer_prompt_guard_prevents_nesting() {
     app.run_until_idle(&mut events).unwrap();
     assert!(app.editor.minibuffer.is_active());
     let prompt = app.editor.minibuffer.prompt().unwrap();
-    assert_eq!(prompt.kind, crate::minibuffer::PromptKind::FindFile);
+    assert_eq!(prompt.kind(), crate::minibuffer::PromptKind::FindFile);
 }
 
 #[test]

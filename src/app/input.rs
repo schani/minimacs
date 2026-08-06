@@ -177,7 +177,7 @@ where
     fn handle_minibuffer_tab(&mut self) {
         use crate::minibuffer::{complete_buffer_with_candidates, complete_path_with_candidates};
 
-        let kind = self.editor.minibuffer.prompt().map(|p| p.kind.clone());
+        let kind = self.editor.minibuffer.prompt().map(|p| p.kind());
         let input = self.editor.minibuffer_text();
         let (completed, candidates) = match kind {
             Some(PromptKind::FindFile) | Some(PromptKind::WriteFile) => {

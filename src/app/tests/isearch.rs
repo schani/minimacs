@@ -257,7 +257,7 @@ fn no_stale_failing_message_after_isearch_accepts() {
     let (mut app, mut events) = test_app_with_text(40, 10, "hello world", events);
     app.run_until_idle(&mut events).unwrap();
     assert!(app.editor.isearch.is_none());
-    assert_eq!(app.editor.minibuffer.message, None);
+    assert_eq!(app.editor.minibuffer.message(), None);
     let screen = capture_screen(&app.terminal);
     assert!(!screen.contains("Failing"), "screen: {screen}");
 }
@@ -276,7 +276,7 @@ fn paste_during_isearch_extends_query() {
     let (mut app, mut events) = test_app_with_text(40, 10, "hello world", events);
     app.run_until_idle(&mut events).unwrap();
     let isearch = app.editor.isearch.as_ref().expect("isearch still active");
-    assert_eq!(isearch.query, "world");
+    assert_eq!(isearch.query(), "world");
     assert_eq!(app.editor.minibuffer_text(), "world");
     assert_eq!(
         app.editor.point(),
@@ -293,7 +293,7 @@ fn multiline_paste_during_isearch_normalizes_breaks_to_spaces() {
     let (mut app, mut events) = test_app_with_text(40, 10, "say héllo wörld now", events);
     app.run_until_idle(&mut events).unwrap();
     let isearch = app.editor.isearch.as_ref().expect("isearch still active");
-    assert_eq!(isearch.query, "héllo wörld now");
+    assert_eq!(isearch.query(), "héllo wörld now");
     assert_eq!(app.editor.minibuffer_text(), "héllo wörld now");
     assert_eq!(
         app.editor.point(),
@@ -315,7 +315,7 @@ fn backspace_after_isearch_paste_keeps_query_and_display_in_sync() {
     let (mut app, mut events) = test_app_with_text(40, 10, "hello world", events);
     app.run_until_idle(&mut events).unwrap();
     let isearch = app.editor.isearch.as_ref().expect("isearch still active");
-    assert_eq!(isearch.query, "worl");
+    assert_eq!(isearch.query(), "worl");
     assert_eq!(app.editor.minibuffer_text(), "worl");
     assert_eq!(
         app.editor.point(),
@@ -335,7 +335,7 @@ fn isearch_backspace_removes_one_grapheme_cluster() {
     app.run_until_idle(&mut events).unwrap();
 
     let isearch = app.editor.isearch.as_ref().expect("isearch still active");
-    assert_eq!(isearch.query, "");
+    assert_eq!(isearch.query(), "");
     assert_eq!(app.editor.minibuffer_text(), "");
     assert_eq!(app.editor.point(), 0);
 }

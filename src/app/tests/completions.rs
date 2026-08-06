@@ -22,8 +22,8 @@ fn tab_with_multiple_matches_shows_completions() {
     events.push(key(KeyCode::Tab));
     let (mut app, mut events) = test_app(60, 12, events);
     app.run_until_idle(&mut events).unwrap();
-    assert!(app.editor.minibuffer.completions.is_some());
-    let completions = app.editor.minibuffer.completions.as_ref().unwrap();
+    assert!(app.editor.minibuffer.completions().is_some());
+    let completions = app.editor.minibuffer.completions().unwrap();
     assert_eq!(completions.len(), 2);
 }
 
@@ -41,7 +41,7 @@ fn repeated_tab_keeps_completions() {
     events.push(key(KeyCode::Tab));
     let (mut app, mut events) = test_app(60, 12, events);
     app.run_until_idle(&mut events).unwrap();
-    assert!(app.editor.minibuffer.completions.is_some());
+    assert!(app.editor.minibuffer.completions().is_some());
 }
 
 #[test]
@@ -58,7 +58,7 @@ fn typing_after_tab_dismisses_completions() {
     events.push(char_key('a')); // type a char
     let (mut app, mut events) = test_app(60, 12, events);
     app.run_until_idle(&mut events).unwrap();
-    assert!(app.editor.minibuffer.completions.is_none());
+    assert!(app.editor.minibuffer.completions().is_none());
 }
 
 #[test]
@@ -75,7 +75,7 @@ fn cg_dismisses_completions() {
     events.push(ctrl('g'));
     let (mut app, mut events) = test_app(60, 12, events);
     app.run_until_idle(&mut events).unwrap();
-    assert!(app.editor.minibuffer.completions.is_none());
+    assert!(app.editor.minibuffer.completions().is_none());
 }
 
 #[test]
@@ -92,7 +92,7 @@ fn enter_dismisses_completions() {
     events.push(key(KeyCode::Enter));
     let (mut app, mut events) = test_app(60, 12, events);
     app.run_until_idle(&mut events).unwrap();
-    assert!(app.editor.minibuffer.completions.is_none());
+    assert!(app.editor.minibuffer.completions().is_none());
 }
 
 #[test]
@@ -109,7 +109,7 @@ fn paste_dismisses_completions() {
     events.push(Event::Paste("x".to_string()));
     let (mut app, mut events) = test_app(60, 12, events);
     app.run_until_idle(&mut events).unwrap();
-    assert!(app.editor.minibuffer.completions.is_none());
+    assert!(app.editor.minibuffer.completions().is_none());
 }
 
 #[test]
@@ -124,7 +124,7 @@ fn tab_with_unique_match_no_completions() {
     events.push(key(KeyCode::Tab));
     let (mut app, mut events) = test_app(60, 12, events);
     app.run_until_idle(&mut events).unwrap();
-    assert!(app.editor.minibuffer.completions.is_none());
+    assert!(app.editor.minibuffer.completions().is_none());
 }
 
 #[test]
@@ -141,7 +141,7 @@ fn completions_render_shows_candidates() {
     events.push(key(KeyCode::Tab));
     let (mut app, mut events) = test_app(40, 12, events);
     app.run_until_idle(&mut events).unwrap();
-    assert!(app.editor.minibuffer.completions.is_some());
+    assert!(app.editor.minibuffer.completions().is_some());
     let screen = capture_screen(&app.terminal);
     // Completions should appear in the rendered output
     assert!(
@@ -182,7 +182,7 @@ fn completions_with_non_ascii_names_in_narrow_terminal_do_not_panic() {
     events.push(key(KeyCode::Tab));
     let (mut app, mut events) = test_app(13, 12, events);
     app.run_until_idle(&mut events).unwrap();
-    assert!(app.editor.minibuffer.completions.is_some());
+    assert!(app.editor.minibuffer.completions().is_some());
     // Rendering truncated the names without slicing mid-char.
     let screen = capture_screen(&app.terminal);
     assert!(screen.contains('é'), "screen: {screen}");
@@ -222,7 +222,7 @@ fn completions_with_wide_names_align_columns_by_display_width() {
     events.push(key(KeyCode::Tab));
     let (mut app, mut events) = test_app(40, 12, events);
     app.run_until_idle(&mut events).unwrap();
-    assert!(app.editor.minibuffer.completions.is_some());
+    assert!(app.editor.minibuffer.completions().is_some());
     let screen = capture_screen(&app.terminal);
     // The widest candidate "z你你你你你你.txt" is 17 display columns
     // (11 chars), so col_width = 19 and 40 columns fit 2 columns of the
@@ -283,7 +283,7 @@ fn multi_column_completions_in_wide_terminal() {
     events.push(key(KeyCode::Tab));
     let (mut app, mut events) = test_app(80, 24, events);
     app.run_until_idle(&mut events).unwrap();
-    assert!(app.editor.minibuffer.completions.is_some());
+    assert!(app.editor.minibuffer.completions().is_some());
     let screen = capture_screen(&app.terminal);
     // With 80 cols and short names, multiple candidates should appear on the same line
     // Find a line that contains more than one candidate
@@ -317,7 +317,7 @@ fn repeated_tab_advances_page() {
     let (mut app, mut events) = test_app(40, 12, events);
     app.run_until_idle(&mut events).unwrap();
     assert!(
-        app.editor.minibuffer.completion_page > 0,
+        app.editor.minibuffer.completion_page() > 0,
         "page should advance on repeated tab"
     );
 }
@@ -343,7 +343,7 @@ fn repeated_tab_wraps_around() {
     app.run_until_idle(&mut events).unwrap();
     // The page counter keeps incrementing but render wraps via modulo,
     // so the rendering still works. Verify completions still showing.
-    assert!(app.editor.minibuffer.completions.is_some());
+    assert!(app.editor.minibuffer.completions().is_some());
 }
 
 #[test]
@@ -362,7 +362,7 @@ fn typing_after_tab_resets_page() {
     events.push(char_key('0')); // type a char
     let (mut app, mut events) = test_app(40, 12, events);
     app.run_until_idle(&mut events).unwrap();
-    assert_eq!(app.editor.minibuffer.completion_page, 0);
+    assert_eq!(app.editor.minibuffer.completion_page(), 0);
 }
 
 #[test]
@@ -381,7 +381,7 @@ fn cg_resets_page() {
     events.push(ctrl('g'));
     let (mut app, mut events) = test_app(40, 12, events);
     app.run_until_idle(&mut events).unwrap();
-    assert_eq!(app.editor.minibuffer.completion_page, 0);
+    assert_eq!(app.editor.minibuffer.completion_page(), 0);
 }
 
 #[test]
@@ -400,7 +400,7 @@ fn paste_resets_page() {
     events.push(Event::Paste("x".to_string()));
     let (mut app, mut events) = test_app(40, 12, events);
     app.run_until_idle(&mut events).unwrap();
-    assert_eq!(app.editor.minibuffer.completion_page, 0);
+    assert_eq!(app.editor.minibuffer.completion_page(), 0);
 }
 
 #[test]
