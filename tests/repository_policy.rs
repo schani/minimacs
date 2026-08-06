@@ -18,6 +18,7 @@ struct RenderDependencies {
 #[derive(Debug, Default, PartialEq, Eq)]
 struct PublicAggregateFields {
     aggregate_names: Vec<&'static str>,
+    found_aggregates: Vec<String>,
     fields: Vec<String>,
 }
 
@@ -76,6 +77,7 @@ impl<'ast> Visit<'ast> for PublicAggregateFields {
     fn visit_item_struct(&mut self, item: &'ast syn::ItemStruct) {
         let name = item.ident.to_string();
         if self.aggregate_names.iter().any(|target| *target == name) {
+            self.found_aggregates.push(name.clone());
             for (index, field) in item.fields.iter().enumerate() {
                 if !matches!(field.vis, Visibility::Inherited) {
                     let field_name = field
@@ -144,17 +146,43 @@ fn render_dependencies(contents: &str) -> syn::Result<RenderDependencies> {
     Ok(dependencies)
 }
 
+fn aggregate_privacy(
+    contents: &str,
+    aggregate_names: Vec<&'static str>,
+) -> syn::Result<PublicAggregateFields> {
+    let file = syn::parse_file(contents)?;
+    let mut fields = PublicAggregateFields {
+        aggregate_names,
+        found_aggregates: Vec::new(),
+        fields: Vec::new(),
+    };
+    fields.visit_file(&file);
+    Ok(fields)
+}
+
 fn public_aggregate_fields(
     contents: &str,
     aggregate_names: Vec<&'static str>,
 ) -> syn::Result<Vec<String>> {
-    let file = syn::parse_file(contents)?;
-    let mut fields = PublicAggregateFields {
-        aggregate_names,
-        fields: Vec::new(),
-    };
-    fields.visit_file(&file);
-    Ok(fields.fields)
+    Ok(aggregate_privacy(contents, aggregate_names)?.fields)
+}
+
+fn assert_aggregate_privacy(contents: &str, aggregate_names: Vec<&'static str>, source: &str) {
+    let privacy = aggregate_privacy(contents, aggregate_names.clone()).unwrap();
+    for aggregate in aggregate_names {
+        assert!(
+            privacy
+                .found_aggregates
+                .iter()
+                .any(|found| found == aggregate),
+            "{source} must declare the policy-covered {aggregate} aggregate"
+        );
+    }
+    assert!(
+        privacy.fields.is_empty(),
+        "{source} mutation-sensitive fields must be private; found {:?}",
+        privacy.fields
+    );
 }
 
 fn binary_sources(root: &Path) -> Vec<PathBuf> {
@@ -273,30 +301,24 @@ fn aggregate_privacy_policy_uses_rust_syntax_not_comments_or_strings() {
     .unwrap();
 
     assert_eq!(fields, ["Buffer.path", "Buffer.name"]);
+
+    let privacy =
+        aggregate_privacy("struct Buffer { text: Rope }", vec!["Buffer", "Prompt"]).unwrap();
+    assert_eq!(privacy.found_aggregates, ["Buffer"]);
 }
 
 #[test]
 fn buffer_state_fields_are_private() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let contents = std::fs::read_to_string(root.join("src/buffer.rs")).unwrap();
-    let fields = public_aggregate_fields(&contents, vec!["Buffer"]).unwrap();
-
-    assert!(
-        fields.is_empty(),
-        "Buffer mutation-sensitive fields must be private; found {fields:?}"
-    );
+    assert_aggregate_privacy(&contents, vec!["Buffer"], "src/buffer.rs");
 }
 
 #[test]
 fn pane_state_fields_are_private() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let contents = std::fs::read_to_string(root.join("src/pane.rs")).unwrap();
-    let fields = public_aggregate_fields(&contents, vec!["Pane", "PaneTree"]).unwrap();
-
-    assert!(
-        fields.is_empty(),
-        "Pane and PaneTree mutation-sensitive fields must be private; found {fields:?}"
-    );
+    assert_aggregate_privacy(&contents, vec!["Pane", "PaneTree"], "src/pane.rs");
 }
 
 #[test]
@@ -309,11 +331,7 @@ fn prompt_and_search_state_fields_are_private() {
 
     for (source, aggregates) in sources {
         let contents = std::fs::read_to_string(root.join(source)).unwrap();
-        let fields = public_aggregate_fields(&contents, aggregates).unwrap();
-        assert!(
-            fields.is_empty(),
-            "{source} prompt/search mutation-sensitive fields must be private; found {fields:?}"
-        );
+        assert_aggregate_privacy(&contents, aggregates, source);
     }
 }
 
@@ -322,11 +340,7 @@ fn editor_and_app_state_fields_are_private() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     for (source, aggregate) in [("src/editor.rs", "Editor"), ("src/app.rs", "App")] {
         let contents = std::fs::read_to_string(root.join(source)).unwrap();
-        let fields = public_aggregate_fields(&contents, vec![aggregate]).unwrap();
-        assert!(
-            fields.is_empty(),
-            "{source} {aggregate} mutation-sensitive fields must be private; found {fields:?}"
-        );
+        assert_aggregate_privacy(&contents, vec![aggregate], source);
     }
 }
 
