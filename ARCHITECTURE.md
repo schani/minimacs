@@ -748,6 +748,7 @@ The two lifecycle states are:
   There is no message timer: an idle message remains until another message
   replaces it or a minibuffer lifecycle transition clears it.
 - **Prompt**: active text input with a label. `PromptKind` is exhaustive:
+<!-- prompt-kind-list:start -->
   - `FindFile`: its minibuffer text is the path to open.
   - `SwitchBuffer`: its text names the buffer to display (empty input selects
     the pane's alternate buffer).
@@ -763,9 +764,12 @@ The two lifecycle states are:
     saved and the existing save-as destination.
   - `QuitSaveConfirm { buffer_id }`: identifies the modified buffer currently
     awaiting a quit-time save decision.
+<!-- prompt-kind-list:end -->
 
-Confirmation prompts identify buffers by id, never by name (names are not
-unique). All of them save through the `Editor::write_buffer` choke point (see
+Confirmation prompts identify buffers by id for stable identity, never by
+name. Displayed buffer names are currently uniquified, but ids remain the
+identity that does not change when a save-as operation renames a buffer. All
+of them save through the `Editor::write_buffer` choke point (see
 the Buffer section). `C-x C-w` to an existing file asks `OverwriteConfirm`
 first; the buffer's path, name, and syntax language are only updated after the
 write succeeds, so a failed save never changes buffer identity. Any save to
@@ -785,9 +789,11 @@ quit prompt finishes before the guard prompt starts): "y" saves and resumes
 the quit sequence with the next pending buffer, "n" cancels the whole quit,
 consistent with how a failed quit-time save cancels it.
 
-All confirmation prompts treat an unrecognized answer the same way: the input
-is cleared and the prompt re-asks (the prompt state stays alive); only a
-recognized answer finishes the prompt.
+All confirmation prompts have the same user-visible behavior for an
+unrecognized answer: the input is cleared and the same question is re-asked.
+Most handlers leave the existing prompt object active; `QuitSaveConfirm`
+finishes it first and `continue_quit()` builds the replacement prompt for the
+same buffer. A recognized answer advances or finishes the confirmation flow.
 
 `GotoLine` accepts one-based positive line numbers. Non-numeric input and zero
 both leave point unchanged and report `Invalid line number`; values past the

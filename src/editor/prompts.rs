@@ -201,9 +201,9 @@ impl Editor {
                 // Enter during isearch accepts the position
                 self.isearch_accept();
             }
-            // Confirmation prompts: an unrecognized answer clears the input
-            // and re-asks (the prompt state stays alive); only a recognized
-            // answer finishes the prompt.
+            // Confirmation prompts: an unrecognized answer visibly clears
+            // the input and re-asks. Most retain the prompt object;
+            // QuitSaveConfirm finishes and rebuilds it through continue_quit.
             PromptKind::KillConfirm { buffer_id } => match input.as_str() {
                 "y" | "Y" => {
                     self.minibuffer.finish();

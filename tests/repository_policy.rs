@@ -235,6 +235,44 @@ fn prompt_kind_variants(contents: &str) -> syn::Result<Vec<String>> {
     Ok(variants)
 }
 
+const PROMPT_KIND_LIST_START: &str = "<!-- prompt-kind-list:start -->";
+const PROMPT_KIND_LIST_END: &str = "<!-- prompt-kind-list:end -->";
+
+fn documented_prompt_kind_entries(contents: &str) -> Result<Vec<String>, String> {
+    if contents.matches(PROMPT_KIND_LIST_START).count() != 1
+        || contents.matches(PROMPT_KIND_LIST_END).count() != 1
+    {
+        return Err("the prompt-kind list must have exactly one start and end marker".to_string());
+    }
+
+    let (_, after_start) = contents
+        .split_once(PROMPT_KIND_LIST_START)
+        .expect("marker count checked above");
+    let (list, _) = after_start
+        .split_once(PROMPT_KIND_LIST_END)
+        .expect("marker count checked above");
+
+    list.lines()
+        .filter_map(|line| line.trim().strip_prefix("- `"))
+        .map(|entry| {
+            let (signature, description) = entry.split_once("`:").ok_or_else(|| {
+                format!("prompt-kind entry must use `Variant`: description syntax: {entry}")
+            })?;
+            if description.trim().is_empty() {
+                return Err(format!(
+                    "prompt-kind entry must include a meaningful description: {signature}"
+                ));
+            }
+            let variant = signature
+                .split([' ', '{'])
+                .next()
+                .filter(|variant| !variant.is_empty())
+                .ok_or_else(|| format!("prompt-kind entry has no variant name: {entry}"))?;
+            Ok(variant.to_string())
+        })
+        .collect()
+}
+
 fn line_comments(contents: &str) -> impl Iterator<Item = &str> {
     contents
         .lines()
@@ -450,6 +488,24 @@ fn minibuffer_messages_are_not_documented_as_timed() {
 }
 
 #[test]
+fn prompt_kind_documentation_ignores_incidental_mentions_and_requires_descriptions() {
+    let documentation = format!(
+        "SaveAnywayConfirm is discussed elsewhere.\n\
+         {PROMPT_KIND_LIST_START}\n\
+         - `FindFile`: path prompt.\n\
+         {PROMPT_KIND_LIST_END}\n\
+         OverwriteConfirm is also discussed elsewhere."
+    );
+    assert_eq!(
+        documented_prompt_kind_entries(&documentation).unwrap(),
+        ["FindFile"]
+    );
+
+    let undocumented = format!("{PROMPT_KIND_LIST_START}\n- `FindFile`:\n{PROMPT_KIND_LIST_END}");
+    assert!(documented_prompt_kind_entries(&undocumented).is_err());
+}
+
+#[test]
 fn architecture_covers_every_prompt_kind_variant() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let source = std::fs::read_to_string(root.join("src/minibuffer.rs")).unwrap();
@@ -460,19 +516,12 @@ fn architecture_covers_every_prompt_kind_variant() {
     );
 
     let architecture = std::fs::read_to_string(root.join("ARCHITECTURE.md")).unwrap();
-    let minibuffer_section = architecture
-        .split_once("## Minibuffer")
-        .and_then(|(_, rest)| rest.split_once("## Incremental Search"))
-        .map(|(section, _)| section)
-        .expect("ARCHITECTURE.md must retain the Minibuffer section");
-
-    let missing: Vec<_> = variants
-        .iter()
-        .filter(|variant| !minibuffer_section.contains(variant.as_str()))
-        .collect();
-    assert!(
-        missing.is_empty(),
-        "ARCHITECTURE.md's Minibuffer section must cover every PromptKind variant; missing {missing:?}"
+    let documented = documented_prompt_kind_entries(&architecture)
+        .unwrap_or_else(|error| panic!("invalid PromptKind documentation: {error}"));
+    assert_eq!(
+        documented, variants,
+        "ARCHITECTURE.md's designated PromptKind list must document every variant exactly once, \
+         in enum order"
     );
 }
 
