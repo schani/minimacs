@@ -64,6 +64,37 @@ fn isearch_backward_via_app() {
 }
 
 #[test]
+fn isearch_forward_past_final_match_retains_failing_label() {
+    let events = vec![ctrl('s'), char_key('a'), ctrl('s'), ctrl('s')];
+    let (mut app, mut events) = test_app_with_text(40, 10, "a a", events);
+    app.run_until_idle(&mut events).unwrap();
+
+    let screen = capture_screen(&app.terminal);
+    assert!(screen.contains("Failing I-search: a"), "screen: {screen}");
+    assert_eq!(app.editor.point(), 2, "the final match remains selected");
+}
+
+#[test]
+fn isearch_backward_past_final_match_retains_failing_label() {
+    let events = vec![
+        key(KeyCode::End),
+        ctrl('r'),
+        char_key('a'),
+        ctrl('r'),
+        ctrl('r'),
+    ];
+    let (mut app, mut events) = test_app_with_text(40, 10, "a a", events);
+    app.run_until_idle(&mut events).unwrap();
+
+    let screen = capture_screen(&app.terminal);
+    assert!(
+        screen.contains("Failing I-search backward: a"),
+        "screen: {screen}"
+    );
+    assert_eq!(app.editor.point(), 0, "the final match remains selected");
+}
+
+#[test]
 fn isearch_backspace_refines_query() {
     let text = "abc abcd abcde";
     let events = vec![

@@ -916,6 +916,13 @@ position. `C-s`/`C-r` during search cycle to the next/previous match by walking
 the cached list — no rescan. Enter accepts the position. `C-g` restores the
 original position.
 
+The `Editor` is the sole writer of isearch state and its minibuffer mirror.
+App translates keys into input, cycle, backspace, accept, or yank intents; it
+never assigns direction, query, prompt label, or mirrored minibuffer text and
+point. Typed input, paste, and grapheme-backspace converge on
+`isearch_set_query`, which synchronizes query, display/point, cached matches,
+selected match, failure state, and label as one transition.
+
 The prompt label is live, like emacs: it is recomputed from the search state
 (`isearch_sync_label`) after every query edit, cycle, and direction flip.
 Normally it reads "I-search: " / "I-search backward: "; when the last search

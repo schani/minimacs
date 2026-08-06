@@ -151,23 +151,11 @@ where
         match (key.modifiers, key.code) {
             // C-s during isearch: cycle forward
             (KeyModifiers::CONTROL, KeyCode::Char('s')) => {
-                if let Some(ref mut isearch) = self.editor.isearch {
-                    isearch.direction = SearchDirection::Forward;
-                }
-                self.editor.isearch_next();
-                if let Some(p) = self.editor.minibuffer.prompt_mut() {
-                    p.label = "I-search: ".to_string();
-                }
+                self.editor.isearch_cycle(SearchDirection::Forward);
             }
             // C-r during isearch: cycle backward
             (KeyModifiers::CONTROL, KeyCode::Char('r')) => {
-                if let Some(ref mut isearch) = self.editor.isearch {
-                    isearch.direction = SearchDirection::Backward;
-                }
-                self.editor.isearch_next();
-                if let Some(p) = self.editor.minibuffer.prompt_mut() {
-                    p.label = "I-search backward: ".to_string();
-                }
+                self.editor.isearch_cycle(SearchDirection::Backward);
             }
             // Enter: accept search position
             (KeyModifiers::NONE, KeyCode::Enter) => {
@@ -179,14 +167,7 @@ where
             }
             // Printable char: add to query and search
             (KeyModifiers::NONE | KeyModifiers::SHIFT, KeyCode::Char(c)) => {
-                if let Some(ref mut isearch) = self.editor.isearch {
-                    isearch.query.push(c);
-                    // Sync minibuffer buffer to query
-                    let query = isearch.query.clone();
-                    self.editor.minibuffer_buffer.text = ropey::Rope::from_str(&query);
-                    self.editor.minibuffer_pane.point = query.chars().count();
-                }
-                self.editor.isearch_update();
+                self.editor.isearch_input_char(c);
             }
             // Any other key: accept search, then process the key normally
             _ => {
