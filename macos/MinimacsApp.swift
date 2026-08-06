@@ -490,7 +490,7 @@ final class EditorView: NSView, NSTextInputClient {
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
   private var window: NSWindow!
   private var editorView: EditorView!
-  private var pendingFiles: [String] = []
+  private var pendingOpenRequests: [[String]] = []
   private var uiReadyPath: String?
   private var uiReadySignalSource: DispatchSourceSignal?
 
@@ -512,19 +512,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     window.makeKeyAndOrderFront(nil)
     NSApp.activate(ignoringOtherApps: true)
 
-    let commandLineFiles = CommandLine.arguments.dropFirst()
-      .filter { !$0.hasPrefix("-") }
-      .map { URL(fileURLWithPath: $0).standardizedFileURL.path }
-    let startupFiles = pendingFiles + commandLineFiles
-    pendingFiles.removeAll()
+    let commandLineFiles = commandLineFilePaths()
+    let pendingRequests = pendingOpenRequests
+    pendingOpenRequests.removeAll()
     // Yield once so AppKit can commit the empty first window before any file
     // I/O. Syntax loader and parse work is separately background-only.
     DispatchQueue.main.async { [weak self] in
       guard let self else { return }
       var openedAll = true
-      for path in startupFiles {
-        if !self.editorView.open(path: path) { openedAll = false }
+      for request in pendingRequests {
+        let opened = self.openFiles(request)
+        NSApp.reply(toOpenOrPrint: opened ? .success : .failure)
+        openedAll = openedAll && opened
       }
+      openedAll = self.openFiles(commandLineFiles) && openedAll
       if let readyPath = ProcessInfo.processInfo.environment["MINIMACS_UI_READY_FILE"] {
         if openedAll {
           self.configureUIReadySignal(path: readyPath)
@@ -535,6 +536,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
       }
     }
+  }
+
+  private func commandLineFilePaths() -> [String] {
+    var paths: [String] = []
+    var optionsEnded = false
+    for argument in CommandLine.arguments.dropFirst() {
+      if !optionsEnded && argument == "--" {
+        optionsEnded = true
+      } else if optionsEnded || !argument.hasPrefix("-") {
+        paths.append(URL(fileURLWithPath: argument).standardizedFileURL.path)
+      }
+    }
+    return paths
+  }
+
+  @discardableResult
+  private func openFiles(_ paths: [String]) -> Bool {
+    var failures: [String] = []
+    for path in paths where !editorView.open(path: path) {
+      failures.append(path)
+    }
+    guard !failures.isEmpty else { return true }
+
+    let alert = NSAlert()
+    alert.alertStyle = .warning
+    alert.messageText = failures.count == 1 ? "Could not Open File" : "Could not Open Files"
+    let names = failures.map { URL(fileURLWithPath: $0).lastPathComponent }.joined(separator: "\n")
+    alert.informativeText = "minimacs opens UTF-8 text files.\n\n\(names)"
+    alert.beginSheetModal(for: window)
+    return false
   }
 
   private func configureUIReadySignal(path: String) {
@@ -555,11 +586,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
   func application(_ sender: NSApplication, openFiles filenames: [String]) {
     if editorView == nil {
-      pendingFiles.append(contentsOf: filenames)
-    } else {
-      for path in filenames { _ = editorView.open(path: path) }
+      pendingOpenRequests.append(filenames)
+      return
     }
-    sender.reply(toOpenOrPrint: .success)
+    sender.reply(toOpenOrPrint: openFiles(filenames) ? .success : .failure)
   }
 
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
@@ -578,7 +608,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     panel.canChooseDirectories = false
     panel.beginSheetModal(for: window) { [weak self] response in
       guard response == .OK, let self else { return }
-      for url in panel.urls { _ = self.editorView.open(path: url.path) }
+      self.openFiles(panel.urls.map(\.path))
     }
   }
 

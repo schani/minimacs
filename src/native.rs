@@ -575,6 +575,13 @@ mod tests {
         assert!(!unsafe { minimacs_native_open_file(handle, ptr::null()) });
         assert!(!unsafe { minimacs_native_insert_utf8(handle, invalid.as_ptr().cast()) });
         assert!(!unsafe { minimacs_native_open_file(handle, invalid.as_ptr().cast()) });
+
+        let dir = tempfile::tempdir().unwrap();
+        let binary_path = dir.path().join("binary.dat");
+        std::fs::write(&binary_path, [0xff]).unwrap();
+        let binary_path = CString::new(binary_path.to_str().unwrap()).unwrap();
+        assert!(!unsafe { minimacs_native_open_file(handle, binary_path.as_ptr()) });
+
         unsafe { minimacs_native_free(handle) };
     }
 

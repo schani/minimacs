@@ -430,8 +430,11 @@ text, RGB colors, and text modifiers. This deliberately reuses the established
 wrapping, panes, mode-line, minibuffer, and background syntax paths while the
 AppKit side owns windowing, Core Text drawing, and platform events. The frame is
 bounded by the current window grid rather than buffer size and remains valid
-until the next mutating C call. AppKit starts its 100ms syntax-completion timer
-only while the worker reports queued/running/unconsumed work and invalidates it
+until the next mutating C call. The bundle registers only text/source-code UTIs
+because the core accepts UTF-8 text, not arbitrary binary data. Finder and menu
+open failures produce a native warning and a failure reply instead of silently
+leaving the previous buffer visible. AppKit starts its 100ms syntax-completion
+timer only while the worker reports queued/running/unconsumed work and invalidates it
 when the worker becomes idle; an idle native window does not poll or redraw.
 Startup file arguments are dispatched on the next main-queue turn so AppKit can
 commit the initial window before file I/O. When the screenshot harness sets

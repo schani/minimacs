@@ -76,10 +76,12 @@ The script builds the Rust core as a release `staticlib`, compiles the
 programmatic Swift/AppKit shell, creates an ad-hoc-signed app bundle at
 `target/macos/Minimacs.app`, and does not use SwiftUI or a web runtime. The app
 uses a custom Core Text grid view while sharing minimacs' Rust editor, keymap,
-panes, prompts, rendering, and background syntax worker. Files can be opened
-from Finder, the File menu, or as command-line arguments to the bundle's
-`Contents/MacOS/Minimacs` executable. Standard macOS Open/Save/Undo/Redo/Paste
-menu shortcuts and the documented Emacs bindings are available.
+panes, prompts, rendering, and background syntax worker. UTF-8 text files can
+be opened from Finder, the File menu, or as command-line arguments to the
+bundle's `Contents/MacOS/Minimacs` executable; use `--` before a command-line
+file whose name starts with `-`. Open failures are reported in a native alert.
+Standard macOS Open/Save/Undo/Redo/Paste menu shortcuts and the documented Emacs
+bindings are available.
 
 To inspect the final AppKit rasterization—not just the shared cell-grid
 snapshots—capture a deterministic native window with:

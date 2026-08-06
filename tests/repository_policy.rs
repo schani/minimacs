@@ -30,6 +30,19 @@ fn native_macos_frontend_sources_are_versioned() {
 }
 
 #[test]
+fn native_bundle_registers_only_text_documents() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let plist = std::fs::read_to_string(root.join("macos/Info.plist")).unwrap();
+
+    assert!(plist.contains("public.text"));
+    assert!(plist.contains("public.source-code"));
+    assert!(
+        !plist.contains("public.data"),
+        "the UTF-8-only editor must not register itself for arbitrary binary data"
+    );
+}
+
+#[test]
 fn hook_opt_in_is_documented_for_users_and_agents() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let command = "git config core.hooksPath .githooks";
