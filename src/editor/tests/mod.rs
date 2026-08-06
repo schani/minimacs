@@ -8,6 +8,20 @@ impl Editor {
     }
 }
 
+/// Drive the same query-edit transitions as production isearch input.
+fn drive_isearch_query(editor: &mut Editor, query: &str) {
+    while editor
+        .isearch
+        .as_ref()
+        .is_some_and(|state| !state.query().is_empty())
+    {
+        editor.isearch_backspace();
+    }
+    for ch in query.chars() {
+        editor.isearch_input_char(ch);
+    }
+}
+
 mod core_commands;
 mod editing;
 mod files_and_buffers;

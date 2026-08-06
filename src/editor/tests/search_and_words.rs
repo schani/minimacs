@@ -7,13 +7,43 @@ fn isearch_forward_basic() {
     assert!(editor.isearch.is_some());
     assert!(editor.minibuffer.is_active());
 
-    // Type "world" into search
-    if let Some(ref mut isearch) = editor.isearch {
-        isearch.set_query_for_test("world");
-    }
-    editor.isearch_update();
+    // Type "world" into search through the production transition.
+    drive_isearch_query(&mut editor, "world");
     // Should find "world" at char position 6
     assert_eq!(editor.point(), 6);
+}
+
+#[test]
+fn isearch_query_helper_keeps_derived_state_coherent() {
+    let mut editor = Editor::new_with_text("alpha beta alpha");
+    editor.execute(Command::ISearchForward);
+
+    drive_isearch_query(&mut editor, "beta");
+
+    let isearch = editor.isearch.as_ref().unwrap();
+    assert_eq!(isearch.query(), "beta");
+    assert_eq!(editor.minibuffer_buffer.text().to_string(), "beta");
+    assert_eq!(editor.minibuffer_pane.point(), 4);
+    assert_eq!(isearch.matches(), &[6]);
+    assert_eq!(isearch.current_match(), Some(6));
+    assert!(!isearch.is_failing());
+    assert_eq!(editor.minibuffer.prompt().unwrap().label(), "I-search: ");
+    assert_eq!(editor.point(), 6);
+
+    drive_isearch_query(&mut editor, "missing");
+
+    let isearch = editor.isearch.as_ref().unwrap();
+    assert_eq!(isearch.query(), "missing");
+    assert_eq!(editor.minibuffer_buffer.text().to_string(), "missing");
+    assert_eq!(editor.minibuffer_pane.point(), 7);
+    assert!(isearch.matches().is_empty());
+    assert_eq!(isearch.current_match(), None);
+    assert!(isearch.is_failing());
+    assert_eq!(
+        editor.minibuffer.prompt().unwrap().label(),
+        "Failing I-search: "
+    );
+    assert_eq!(editor.point(), 0);
 }
 
 #[test]
@@ -26,12 +56,7 @@ fn isearch_snapshots_a_multi_chunk_buffer_once() {
     editor.execute(Command::ISearchForward);
     assert_eq!(editor.isearch.as_ref().unwrap().text_snapshot(), source);
 
-    editor
-        .isearch
-        .as_mut()
-        .unwrap()
-        .set_query_for_test("needle終");
-    editor.isearch_update();
+    drive_isearch_query(&mut editor, "needle終");
     assert_eq!(editor.point(), prefix.chars().count() + 1);
 }
 
@@ -43,10 +68,7 @@ fn isearch_backward_basic() {
     editor.execute(Command::ISearchBackward);
     assert!(editor.isearch.is_some());
 
-    if let Some(ref mut isearch) = editor.isearch {
-        isearch.set_query_for_test("hello");
-    }
-    editor.isearch_update();
+    drive_isearch_query(&mut editor, "hello");
     // Should find "hello" at position 12 (second occurrence, backward from 17)
     assert_eq!(editor.point(), 12);
 }
@@ -57,10 +79,7 @@ fn isearch_cancel_restores_position() {
     assert_eq!(editor.point(), 0);
     editor.execute(Command::ISearchForward);
 
-    if let Some(ref mut isearch) = editor.isearch {
-        isearch.set_query_for_test("world");
-    }
-    editor.isearch_update();
+    drive_isearch_query(&mut editor, "world");
     assert_eq!(editor.point(), 6); // Found at "world"
 
     // Cancel should restore
@@ -74,10 +93,7 @@ fn isearch_accept_keeps_position() {
     let mut editor = Editor::new_with_text("hello world");
     editor.execute(Command::ISearchForward);
 
-    if let Some(ref mut isearch) = editor.isearch {
-        isearch.set_query_for_test("world");
-    }
-    editor.isearch_update();
+    drive_isearch_query(&mut editor, "world");
     assert_eq!(editor.point(), 6);
 
     editor.isearch_accept();
@@ -90,10 +106,7 @@ fn isearch_next_cycles() {
     let mut editor = Editor::new_with_text("aaa bbb aaa bbb aaa");
     editor.execute(Command::ISearchForward);
 
-    if let Some(ref mut isearch) = editor.isearch {
-        isearch.set_query_for_test("aaa");
-    }
-    editor.isearch_update();
+    drive_isearch_query(&mut editor, "aaa");
     assert_eq!(editor.point(), 0); // First "aaa"
 
     editor.isearch_next();
@@ -108,10 +121,7 @@ fn isearch_matches_returns_all() {
     let mut editor = Editor::new_with_text("abcabcabc");
     editor.execute(Command::ISearchForward);
 
-    if let Some(ref mut isearch) = editor.isearch {
-        isearch.set_query_for_test("abc");
-    }
-    editor.isearch_update();
+    drive_isearch_query(&mut editor, "abc");
 
     let matches = editor.isearch_matches();
     assert_eq!(matches.len(), 3);

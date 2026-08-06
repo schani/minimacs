@@ -4,10 +4,7 @@ use super::*;
 fn isearch_no_match() {
     let mut editor = Editor::new_with_text("hello world");
     editor.execute(Command::ISearchForward);
-    if let Some(ref mut isearch) = editor.isearch {
-        isearch.set_query_for_test("xyz");
-    }
-    editor.isearch_update();
+    drive_isearch_query(&mut editor, "xyz");
     // A failing search shows in the prompt label, not as a queued message.
     assert_eq!(editor.minibuffer.message(), None);
     assert!(editor.isearch.as_ref().unwrap().is_failing());
@@ -21,10 +18,7 @@ fn isearch_no_match() {
 fn isearch_next_no_more_matches() {
     let mut editor = Editor::new_with_text("hello world");
     editor.execute(Command::ISearchForward);
-    if let Some(ref mut isearch) = editor.isearch {
-        isearch.set_query_for_test("hello");
-    }
-    editor.isearch_update();
+    drive_isearch_query(&mut editor, "hello");
     assert_eq!(editor.minibuffer.prompt().unwrap().label(), "I-search: ");
     // Try to cycle — no more matches
     editor.isearch_next();
@@ -43,10 +37,7 @@ fn isearch_backward_finds_match() {
     // Move to end
     editor.pane_tree.set_focused_point(17);
     editor.execute(Command::ISearchBackward);
-    if let Some(ref mut isearch) = editor.isearch {
-        isearch.set_query_for_test("hello");
-    }
-    editor.isearch_update();
+    drive_isearch_query(&mut editor, "hello");
     // rfind from position 17 finds the last "hello" before cursor = position 12
     assert_eq!(editor.point(), 12);
 }
@@ -56,10 +47,7 @@ fn isearch_next_backward() {
     let mut editor = Editor::new_with_text("ab ab ab");
     editor.pane_tree.set_focused_point(8);
     editor.execute(Command::ISearchBackward);
-    if let Some(ref mut isearch) = editor.isearch {
-        isearch.set_query_for_test("ab");
-    }
-    editor.isearch_update();
+    drive_isearch_query(&mut editor, "ab");
     // First backward match from end
     let first = editor.point();
     editor.isearch_next();
@@ -80,16 +68,10 @@ fn isearch_empty_query_restores() {
     let mut editor = Editor::new_with_text("hello world");
     editor.pane_tree.set_focused_point(5);
     editor.execute(Command::ISearchForward);
-    if let Some(ref mut isearch) = editor.isearch {
-        isearch.set_query_for_test("world");
-    }
-    editor.isearch_update();
+    drive_isearch_query(&mut editor, "world");
     assert_eq!(editor.point(), 6);
     // Clear query → should restore
-    if let Some(ref mut isearch) = editor.isearch {
-        isearch.set_query_for_test("");
-    }
-    editor.isearch_update();
+    drive_isearch_query(&mut editor, "");
     assert_eq!(editor.point(), 5);
 }
 
@@ -399,10 +381,7 @@ fn kill_chain_does_not_survive_isearch_accept() {
     assert_eq!(editor.clipboard, "hello there");
 
     editor.execute(Command::ISearchForward);
-    if let Some(ref mut isearch) = editor.isearch {
-        isearch.set_query_for_test("world");
-    }
-    editor.isearch_update();
+    drive_isearch_query(&mut editor, "world");
     editor.isearch_accept();
     assert_eq!(editor.last_command, None);
 

@@ -65,11 +65,6 @@ impl ISearchState {
     pub fn is_failing(&self) -> bool {
         self.failing
     }
-
-    #[cfg(test)]
-    pub(crate) fn set_query_for_test(&mut self, query: &str) {
-        self.query = query.to_string();
-    }
 }
 
 /// The isearch prompt label for the given state — the label is live: it
