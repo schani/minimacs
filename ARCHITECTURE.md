@@ -129,8 +129,12 @@ inside `render`.
 ### Editor
 
 Central state container. Owns all buffers, the pane tree, the clipboard, the
-minibuffer, and the incremental search state. All state mutation goes through
-`Editor::execute(Command)`, which dispatches to private methods.
+minibuffer, and the incremental search state. Interactive mutation enters
+through `Editor::execute(Command)` or an explicit narrow `Editor` intent method
+(for example isearch input, supplied-text paste, completion application, prompt
+submission, or cursor reveal after viewport reflow). These entry points keep
+state transitions inside `Editor` without exposing broad mutable access to
+`App`.
 
 ```rust
 struct Editor {
@@ -531,13 +535,16 @@ single line taller than the viewport.
 `Event::Resize` is handled implicitly by the viewport update; it deliberately
 does not cancel a chord in progress. Whenever resize or dynamic
 minibuffer/completion layout changes pane dimensions, `update_viewport()`
-applies all new dimensions first and then calls `ensure_cursor_visible()` for
-the focused pane. Unchanged dimensions skip that reveal so intentional mouse
-scrolling can leave point off-screen.
+applies all new dimensions first and then calls `Editor::ensure_cursor_visible()`
+for the focused editing pane. That narrow Editor intent reveals an isearch
+match even though its prompt is active, but leaves the underlying pane alone
+for ordinary prompt editing. Unchanged dimensions skip the reveal so
+intentional mouse scrolling can leave point off-screen.
 
 ## Rendering
 
-`render::render(frame, &editor)` is called when visible state changes. It:
+`render::render(frame, &editor, &syntax_worker, PendingInput { display })` is
+called when visible state changes. It:
 
 1. Calls the shared `screen_layout()` calculation used by rendering,
    `App::update_viewport()`, and both mouse paths. It divides the terminal into the pane region, an
@@ -936,7 +943,11 @@ App translates keys into input, cycle, backspace, accept, or yank intents; it
 never assigns direction, query, prompt label, or mirrored minibuffer text and
 point. Typed input, paste, and grapheme-backspace converge on
 `isearch_set_query`, which synchronizes query, display/point, cached matches,
-selected match, failure state, and label as one transition.
+selected match, failure state, and label as one transition. Match movement and
+viewport reflow both converge on `Editor::ensure_cursor_visible()`, the single
+owner of focused-pane reveal geometry. Isearch is the only active prompt for
+which that intent reveals the underlying pane; this keeps the match visible
+after terminal-width changes without making ordinary prompt edits scroll it.
 
 The prompt label is live, like emacs: it is recomputed from the search state
 (`isearch_sync_label`) after every query edit, cycle, and direction flip.

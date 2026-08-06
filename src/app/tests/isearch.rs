@@ -17,7 +17,9 @@ fn isearch_reveal_matches_normal_cursor_reveal_geometry() {
         (pane.scroll_top, pane.scroll_row_offset)
     };
 
-    let events = vec![ctrl('s'), Event::Paste("needle".to_string())];
+    // Keep the prompt on one row so both cases have the same pane viewport;
+    // this test compares only their wrapped-line reveal geometry.
+    let events = vec![ctrl('s'), Event::Paste("n".to_string())];
     let (mut searching, mut search_events) = test_app_with_text(12, 6, &text, events);
     searching.run_until_idle(&mut search_events).unwrap();
     let search_scroll = {
@@ -28,6 +30,66 @@ fn isearch_reveal_matches_normal_cursor_reveal_geometry() {
     assert!(searching.editor.minibuffer.is_active());
     assert_eq!(searching.editor.point(), match_char);
     assert_eq!(search_scroll, normal_scroll);
+}
+
+#[test]
+fn isearch_match_remains_visible_when_wrapped_line_reflows_after_resize() {
+    let text = format!("{}needle", "x".repeat(46));
+    let match_pos = 46;
+    let events = vec![ctrl('s'), Event::Paste("needle".to_string())];
+    let (mut app, mut events) = test_app_with_text(20, 6, &text, events);
+    app.run_until_idle(&mut events).unwrap();
+
+    assert_eq!(app.editor.point(), match_pos);
+    assert!(app.editor.isearch.is_some());
+    let original_offset = app.editor.pane_tree.focused_pane().scroll_row_offset;
+
+    app.terminal.backend_mut().resize(10, 6);
+    let mut events = TestEventSource::new(vec![Event::Resize(10, 6)]);
+    app.run_until_idle(&mut events).unwrap();
+
+    let pane = app.editor.pane_tree.focused_pane();
+    assert!(
+        pane.scroll_row_offset > original_offset,
+        "the narrower wrapping must reveal the selected match"
+    );
+    let screen = capture_screen(&app.terminal);
+    assert!(
+        screen.contains("needle"),
+        "active match must be visible: {screen}"
+    );
+}
+
+#[test]
+fn ordinary_prompt_reflow_does_not_scroll_the_underlying_pane() {
+    let text = "x".repeat(58);
+    let (mut app, mut events) = test_app_with_text(20, 6, &text, vec![]);
+    app.editor.pane_tree.focused_pane_mut().point = text.len();
+    app.run_until_idle(&mut events).unwrap();
+    app.editor.ensure_cursor_visible();
+    let original_scroll = {
+        let pane = app.editor.pane_tree.focused_pane();
+        (pane.scroll_top, pane.scroll_row_offset)
+    };
+
+    let mut events = TestEventSource::new(vec![
+        ctrl('x'),
+        char_key('b'),
+        char_key('a'),
+        char_key('b'),
+        char_key('c'),
+        char_key('d'),
+    ]);
+    app.run_until_idle(&mut events).unwrap();
+
+    assert!(app.editor.minibuffer.is_active());
+    assert!(app.editor.isearch.is_none());
+    let pane = app.editor.pane_tree.focused_pane();
+    assert_eq!(
+        (pane.scroll_top, pane.scroll_row_offset),
+        original_scroll,
+        "editing an ordinary prompt must not reveal the underlying pane"
+    );
 }
 
 #[test]

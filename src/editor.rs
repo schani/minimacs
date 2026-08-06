@@ -393,12 +393,16 @@ impl Editor {
         self.ensure_cursor_visible();
     }
 
-    /// Scroll the focused pane so its point is visible. Runs after every
-    /// command and after minibuffer prompt submission (which moves point
-    /// outside of `execute()`, e.g. goto-line). No-op while a prompt is
-    /// active — the minibuffer pane has its own cursor.
+    /// Scroll the focused editing pane so its point is visible. Runs after
+    /// every command, after minibuffer prompt submission (which can move
+    /// point outside `execute()`, e.g. goto-line), and after viewport reflow.
+    ///
+    /// Ordinary prompts leave the underlying pane alone while their input is
+    /// edited. Isearch is the exception: its prompt is active while point in
+    /// the focused pane tracks the selected match, so resize reflow must keep
+    /// that point visible.
     pub(crate) fn ensure_cursor_visible(&mut self) {
-        if self.minibuffer.is_active() {
+        if self.minibuffer.is_active() && self.isearch.is_none() {
             return;
         }
         let pane = self.pane_tree.focused_pane();

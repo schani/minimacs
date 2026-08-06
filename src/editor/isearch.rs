@@ -112,29 +112,10 @@ impl Editor {
     /// Move point to an isearch match and scroll it into view.
     fn isearch_goto_match(&mut self, char_pos: usize) {
         self.pane_tree.focused_pane_mut().point = char_pos;
-        let pane = self.pane_tree.focused_pane();
-        let scroll_top = pane.scroll_top;
-        let scroll_row_offset = pane.scroll_row_offset;
-        let vh = pane.viewport_height;
-        let vw = pane.viewport_width;
-        let buf = self.current_buffer();
-        let (line, col) = buf.char_to_line_col(char_pos);
-        let (cursor_row, _) = crate::display::visual_row_col_in_line(buf, line, col, vw);
-        let (new_top, new_offset) = crate::pane::compute_scroll_position(
-            scroll_top,
-            scroll_row_offset,
-            line,
-            cursor_row,
-            vh,
-            vw,
-            |l| crate::display::line_visual_width(buf, l),
-        );
-        let pane = self.pane_tree.focused_pane_mut();
-        pane.scroll_top = new_top;
-        pane.scroll_row_offset = new_offset;
         if let Some(ref mut isearch) = self.isearch {
             isearch.current_match = Some(char_pos);
         }
+        self.ensure_cursor_visible();
     }
 
     /// Called when isearch input changes — rescan the buffer once, cache all
