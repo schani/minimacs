@@ -101,12 +101,13 @@ binary wrappers ──> lib entry functions
                          |                 |          |          +──> history
                          |                 |          |          +──> syntax
                          |                 |          |
-                         |                 |          +──> display ──> buffer + pane
+                         |                 |          +──> display ──> buffer + pane + indent
                          |                 |          +──> pane
                          |                 |          +──> minibuffer
                          |                 |          +──> command
                          |                 +──> render ──> editor (read-only)
                          |                 |       +──> display
+                         |                 |       +──> syntax_worker ──> syntax
                          |                 +──> display (mouse geometry)
                          |                 +──> syntax_worker ──> syntax
                          |                 +──> keymap
@@ -583,7 +584,7 @@ does not cancel a chord in progress.
    the column would compute to one past the last cell; the cursor instead
    wraps to column 0 of the next visual row (emacs behavior) — on screen the
    next buffer line's first row, or a blank row past the end of the buffer.
-   `render::visual_row_col_in_line` computes this wrapped position and is
+   `display::visual_row_col_in_line` computes this wrapped position and is
    shared by cursor placement and scroll computation, so the extra row is
    also counted when scrolling the cursor into view (clicking that row maps
    to what it displays: the next line's start, or end-of-buffer — that same
