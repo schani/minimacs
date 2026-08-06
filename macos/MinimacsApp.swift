@@ -68,13 +68,6 @@ final class EditorView: NSView, NSTextInputClient {
     let attributes: [NSAttributedString.Key: Any] = [.font: baseFont]
     cellWidth = ceil(("M" as NSString).size(withAttributes: attributes).width)
     cellHeight = ceil(baseFont.ascender - baseFont.descender + baseFont.leading + 2)
-    syntaxTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) {
-      [weak self] _ in
-      guard let self else { return }
-      if minimacs_native_poll(self.handle) {
-        self.needsDisplay = true
-      }
-    }
   }
 
   required init?(coder: NSCoder) {
@@ -106,7 +99,26 @@ final class EditorView: NSView, NSTextInputClient {
     gridWidth = columns
     gridHeight = rows
     _ = minimacs_native_resize(handle, columns, rows)
+    scheduleSyntaxPollingIfNeeded()
     needsDisplay = true
+  }
+
+  private func scheduleSyntaxPollingIfNeeded() {
+    guard syntaxTimer == nil, minimacs_native_has_background_work(handle) else { return }
+    syntaxTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) {
+      [weak self] timer in
+      guard let self else {
+        timer.invalidate()
+        return
+      }
+      if minimacs_native_poll(self.handle) {
+        self.needsDisplay = true
+      }
+      if !minimacs_native_has_background_work(self.handle) {
+        timer.invalidate()
+        self.syntaxTimer = nil
+      }
+    }
   }
 
   override func draw(_ dirtyRect: NSRect) {
@@ -225,6 +237,7 @@ final class EditorView: NSView, NSTextInputClient {
   private func mutate(_ body: () -> Bool) {
     if body() {
       markedText = NSAttributedString(string: "")
+      scheduleSyntaxPollingIfNeeded()
       needsDisplay = true
       if minimacs_native_should_quit(handle) {
         NSApp.terminate(nil)
@@ -298,7 +311,10 @@ final class EditorView: NSView, NSTextInputClient {
   func open(path: String) -> Bool {
     path.withCString { pointer in
       let changed = minimacs_native_open_file(handle, pointer)
-      if changed { needsDisplay = true }
+      if changed {
+        scheduleSyntaxPollingIfNeeded()
+        needsDisplay = true
+      }
       return changed
     }
   }
@@ -438,10 +454,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let commandLineFiles = CommandLine.arguments.dropFirst()
       .filter { !$0.hasPrefix("-") }
       .map { URL(fileURLWithPath: $0).standardizedFileURL.path }
-    for path in pendingFiles + commandLineFiles {
-      _ = editorView.open(path: path)
-    }
+    let startupFiles = pendingFiles + commandLineFiles
     pendingFiles.removeAll()
+    // Yield once so AppKit can commit the empty first window before any file
+    // I/O. Syntax loader and parse work is separately background-only.
+    DispatchQueue.main.async { [weak self] in
+      guard let self else { return }
+      for path in startupFiles { _ = self.editorView.open(path: path) }
+    }
   }
 
   func application(_ sender: NSApplication, openFiles filenames: [String]) {

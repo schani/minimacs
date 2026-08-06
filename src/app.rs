@@ -192,6 +192,10 @@ where
         Ok(())
     }
 
+    pub(crate) fn has_background_work(&self) -> bool {
+        self.syntax_worker.has_background_work()
+    }
+
     pub(crate) fn apply_syntax_completions(&mut self) -> bool {
         let mut changed = false;
         for completion in self.syntax_worker.take_completions() {

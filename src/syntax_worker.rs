@@ -52,6 +52,7 @@ impl PendingJobs {
 struct SharedState {
     pending: PendingJobs,
     completions: HashMap<usize, SyntaxCompletion>,
+    active: bool,
     shutdown: bool,
 }
 
@@ -99,6 +100,13 @@ impl SyntaxWorker {
             .drain()
             .map(|(_, completion)| completion)
             .collect()
+    }
+
+    /// Whether a job is queued/running or a completion is waiting for the UI.
+    /// Native frontends use this to poll only while work is outstanding.
+    pub(crate) fn has_background_work(&self) -> bool {
+        let state = self.shared.0.lock().expect("syntax worker state poisoned");
+        !state.pending.jobs.is_empty() || state.active || !state.completions.is_empty()
     }
 
     fn ensure_started(&self) {
@@ -160,11 +168,13 @@ fn worker_loop(shared: Shared) {
             if state.shutdown {
                 return;
             }
+            state.active = true;
             state.pending.pop().expect("pending job disappeared")
         };
 
         let completion = process_job(&mut documents, job);
         let mut state = shared.0.lock().expect("syntax worker state poisoned");
+        state.active = false;
         let should_publish = state
             .completions
             .get(&completion.key)

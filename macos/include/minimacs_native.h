@@ -87,6 +87,7 @@ bool minimacs_native_mouse(void *handle, uint32_t kind, uint16_t column, uint16_
 bool minimacs_native_open_file(void *handle, const char *path);
 bool minimacs_native_command(void *handle, uint32_t command);
 bool minimacs_native_poll(void *handle);
+bool minimacs_native_has_background_work(void *handle);
 bool minimacs_native_should_quit(void *handle);
 
 #ifdef __cplusplus

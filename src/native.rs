@@ -459,6 +459,11 @@ pub unsafe extern "C" fn minimacs_native_poll(handle: *mut c_void) -> bool {
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn minimacs_native_has_background_work(handle: *mut c_void) -> bool {
+    handle_mut(handle).is_some_and(|app| app.app.has_background_work())
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn minimacs_native_should_quit(handle: *mut c_void) -> bool {
     handle_mut(handle).is_some_and(|app| app.app.editor.should_quit)
 }
@@ -516,6 +521,7 @@ mod tests {
         let frame = unsafe { minimacs_native_frame(handle) };
         assert_eq!((frame.width, frame.height), (24, 8));
         assert!(!unsafe { minimacs_native_poll(handle) });
+        assert!(!unsafe { minimacs_native_has_background_work(handle) });
         assert!(!unsafe { minimacs_native_should_quit(handle) });
         unsafe { minimacs_native_free(handle) };
     }
@@ -523,12 +529,19 @@ mod tests {
     #[test]
     fn bridge_opens_clicks_scrolls_and_saves_a_file() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("bridge.txt");
-        std::fs::write(&path, "one\ntwo\nthree\n").unwrap();
+        let path = dir.path().join("bridge.rs");
+        std::fs::write(&path, "fn one() {}\nfn two() {}\nfn three() {}\n").unwrap();
         let path = CString::new(path.to_str().unwrap()).unwrap();
         let handle = minimacs_native_new(20, 5);
         assert!(unsafe { minimacs_native_open_file(handle, path.as_ptr()) });
-        assert!(screen_text(unsafe { minimacs_native_frame(handle) }).contains("one"));
+        assert!(screen_text(unsafe { minimacs_native_frame(handle) }).contains("fn one"));
+        assert!(unsafe { minimacs_native_has_background_work(handle) });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while unsafe { minimacs_native_has_background_work(handle) } {
+            assert!(std::time::Instant::now() < deadline, "syntax worker did not finish");
+            let _ = unsafe { minimacs_native_poll(handle) };
+            std::thread::yield_now();
+        }
         assert!(unsafe { minimacs_native_mouse(handle, MOUSE_CLICK, 1, 1) });
         assert!(unsafe { minimacs_native_mouse(handle, MOUSE_SCROLL_DOWN, 1, 1) });
         assert!(unsafe { minimacs_native_mouse(handle, MOUSE_SCROLL_UP, 1, 1) });
@@ -549,6 +562,7 @@ mod tests {
         assert!(!unsafe { minimacs_native_open_file(ptr::null_mut(), ptr::null()) });
         assert!(!unsafe { minimacs_native_command(ptr::null_mut(), COMMAND_SAVE) });
         assert!(!unsafe { minimacs_native_poll(ptr::null_mut()) });
+        assert!(!unsafe { minimacs_native_has_background_work(ptr::null_mut()) });
         assert!(!unsafe { minimacs_native_should_quit(ptr::null_mut()) });
         unsafe { minimacs_native_free(ptr::null_mut()) };
 

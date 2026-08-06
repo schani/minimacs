@@ -423,7 +423,11 @@ text, RGB colors, and text modifiers. This deliberately reuses the established
 wrapping, panes, mode-line, minibuffer, and background syntax paths while the
 AppKit side owns windowing, Core Text drawing, and platform events. The frame is
 bounded by the current window grid rather than buffer size and remains valid
-until the next mutating C call.
+until the next mutating C call. AppKit starts its 100ms syntax-completion timer
+only while the worker reports queued/running/unconsumed work and invalidates it
+when the worker becomes idle; an idle native window does not poll or redraw.
+Startup file arguments are dispatched on the next main-queue turn so AppKit can
+commit the initial window before file I/O.
 
 The scratch buffer's first frame starts no worker and initializes no parser.
 `SyntaxState::new` is also loader-lazy: opening a recognized source file only
