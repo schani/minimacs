@@ -1,5 +1,6 @@
 import AppKit
 import CoreText
+import Darwin
 
 private let keyChar: UInt32 = 0
 private let keyEnter: UInt32 = 1
@@ -152,15 +153,73 @@ final class EditorView: NSView, NSTextInputClient {
   }
 
   private func drawRow(cells: UnsafePointer<MmCell>, row: Int, width: Int) {
+    drawBackgrounds(cells: cells, row: row, width: width)
+
+    // Core Text's natural monospaced advance is fractional, while the grid is
+    // deliberately pixel-aligned. Kern common ASCII runs onto the grid; anchor
+    // complex and fallback glyph cells individually so neither path can drift
+    // away from cursor and mouse geometry.
     var column = 0
     while column < width {
-      let first = cells[row * width + column]
-      let runStyle = style(for: first)
+      let cell = cells[row * width + column]
+      if let firstByte = printableASCIIByte(cell) {
+        let runStyle = style(for: cell)
+        var bytes = [firstByte]
+        var end = column + 1
+        while end < width {
+          let next = cells[row * width + end]
+          guard style(for: next) == runStyle, let byte = printableASCIIByte(next) else { break }
+          bytes.append(byte)
+          end += 1
+        }
+        let text = String(decoding: bytes, as: UTF8.self)
+        if !text.trimmingCharacters(in: .whitespaces).isEmpty {
+          (text as NSString).draw(
+            at: textOrigin(column: column, row: row),
+            withAttributes: textAttributes(style: runStyle, alignASCIIToGrid: true)
+          )
+        }
+        column = end
+        continue
+      }
+
+      if let text = text(for: cell), !text.trimmingCharacters(in: .whitespaces).isEmpty {
+        (text as NSString).draw(
+          at: textOrigin(column: column, row: row),
+          withAttributes: textAttributes(style: style(for: cell))
+        )
+      }
+      column += 1
+    }
+  }
+
+  private func printableASCIIByte(_ cell: MmCell) -> UInt8? {
+    guard let bytes = cell.text, cell.text_len == 1 else { return nil }
+    let byte = bytes.pointee
+    return (0x20...0x7e).contains(byte) ? byte : nil
+  }
+
+  private func text(for cell: MmCell) -> String? {
+    guard let bytes = cell.text, cell.text_len > 0 else { return nil }
+    let buffer = UnsafeBufferPointer(start: bytes, count: cell.text_len)
+    return String(decoding: buffer, as: UTF8.self)
+  }
+
+  private func textOrigin(column: Int, row: Int) -> NSPoint {
+    NSPoint(
+      x: inset + CGFloat(column) * cellWidth,
+      y: inset + CGFloat(row) * cellHeight + 1
+    )
+  }
+
+  private func drawBackgrounds(cells: UnsafePointer<MmCell>, row: Int, width: Int) {
+    var column = 0
+    while column < width {
+      let runStyle = style(for: cells[row * width + column])
       var end = column + 1
       while end < width && style(for: cells[row * width + end]) == runStyle {
         end += 1
       }
-
       if !runStyle.background.isEqual(NSColor.textBackgroundColor) {
         runStyle.background.setFill()
         NSRect(
@@ -169,25 +228,6 @@ final class EditorView: NSView, NSTextInputClient {
           width: CGFloat(end - column) * cellWidth,
           height: cellHeight
         ).fill()
-      }
-
-      var text = ""
-      for index in column..<end {
-        let cell = cells[row * width + index]
-        if let bytes = cell.text, cell.text_len > 0 {
-          let buffer = UnsafeBufferPointer(start: bytes, count: cell.text_len)
-          text += String(decoding: buffer, as: UTF8.self)
-        }
-      }
-      if !text.trimmingCharacters(in: .whitespaces).isEmpty {
-        let attributes = textAttributes(style: runStyle)
-        (text as NSString).draw(
-          at: NSPoint(
-            x: inset + CGFloat(column) * cellWidth,
-            y: inset + CGFloat(row) * cellHeight + 1
-          ),
-          withAttributes: attributes
-        )
       }
       column = end
     }
@@ -216,7 +256,9 @@ final class EditorView: NSView, NSTextInputClient {
     )
   }
 
-  private func textAttributes(style: CellStyle) -> [NSAttributedString.Key: Any] {
+  private func textAttributes(
+    style: CellStyle, alignASCIIToGrid: Bool = false
+  ) -> [NSAttributedString.Key: Any] {
     var font = baseFont
     if style.modifiers & cellBold != 0 {
       font = NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask)
@@ -230,6 +272,10 @@ final class EditorView: NSView, NSTextInputClient {
     ]
     if style.modifiers & cellUnderlined != 0 {
       attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue
+    }
+    if alignASCIIToGrid {
+      let naturalAdvance = ("M" as NSString).size(withAttributes: [.font: font]).width
+      attributes[.kern] = cellWidth - naturalAdvance
     }
     return attributes
   }
@@ -316,6 +362,19 @@ final class EditorView: NSView, NSTextInputClient {
         needsDisplay = true
       }
       return changed
+    }
+  }
+
+  func whenRenderingIsIdle(_ completion: @escaping () -> Void) {
+    needsDisplay = true
+    displayIfNeeded()
+    guard minimacs_native_has_background_work(handle) else {
+      completion()
+      return
+    }
+    scheduleSyntaxPollingIfNeeded()
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+      self?.whenRenderingIsIdle(completion)
     }
   }
 
@@ -432,6 +491,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
   private var window: NSWindow!
   private var editorView: EditorView!
   private var pendingFiles: [String] = []
+  private var uiReadyPath: String?
+  private var uiReadySignalSource: DispatchSourceSignal?
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     NSApp.setActivationPolicy(.regular)
@@ -460,7 +521,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     // I/O. Syntax loader and parse work is separately background-only.
     DispatchQueue.main.async { [weak self] in
       guard let self else { return }
-      for path in startupFiles { _ = self.editorView.open(path: path) }
+      var openedAll = true
+      for path in startupFiles {
+        if !self.editorView.open(path: path) { openedAll = false }
+      }
+      if let readyPath = ProcessInfo.processInfo.environment["MINIMACS_UI_READY_FILE"] {
+        if openedAll {
+          self.configureUIReadySignal(path: readyPath)
+          self.writeUIReadyWhenIdle()
+        } else {
+          try? Data().write(
+            to: URL(fileURLWithPath: readyPath + ".failed"), options: .atomic)
+        }
+      }
+    }
+  }
+
+  private func configureUIReadySignal(path: String) {
+    uiReadyPath = path
+    signal(SIGUSR1, SIG_IGN)
+    let source = DispatchSource.makeSignalSource(signal: SIGUSR1, queue: .main)
+    source.setEventHandler { [weak self] in self?.writeUIReadyWhenIdle() }
+    source.resume()
+    uiReadySignalSource = source
+  }
+
+  private func writeUIReadyWhenIdle() {
+    guard let path = uiReadyPath else { return }
+    editorView.whenRenderingIsIdle {
+      try? Data().write(to: URL(fileURLWithPath: path), options: .atomic)
     }
   }
 

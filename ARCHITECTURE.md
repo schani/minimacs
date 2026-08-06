@@ -415,9 +415,14 @@ discarded branch, `clean_version` is set to `None` (unreachable).
 ## Native Frontend Bridge
 
 The macOS frontend is a programmatic Swift/AppKit application with no SwiftUI
-or web runtime. Its custom flipped `NSView` batches equal-style cells into Core
-Text runs, draws the cursor itself, implements `NSTextInputClient` for composed
-input, and translates native key, click, scroll, menu, Finder-open, and
+or web runtime. Its custom flipped `NSView` batches equal-style cell backgrounds
+and printable-ASCII text runs. ASCII runs receive the exact kerning needed to
+match the pixel-aligned grid; complex/fallback glyph cells are anchored
+individually. Core Text advances therefore cannot drift away from cursor/mouse
+grid geometry. Grapheme clusters within one rendered cell stay intact, while
+contextual shaping across separate terminal-style cells is not supported. The
+view draws the cursor itself, implements `NSTextInputClient` for composed input,
+and translates native key, click, scroll, menu, Finder-open, and
 command-line-open events. It links the library's `staticlib` output through
 `macos/include/minimacs_native.h`. `native.rs` owns an `App<TestBackend>` and
 exposes the rendered viewport as borrowed `MmCell` values containing UTF-8 cell
@@ -429,7 +434,9 @@ until the next mutating C call. AppKit starts its 100ms syntax-completion timer
 only while the worker reports queued/running/unconsumed work and invalidates it
 when the worker becomes idle; an idle native window does not poll or redraw.
 Startup file arguments are dispatched on the next main-queue turn so AppKit can
-commit the initial window before file I/O.
+commit the initial window before file I/O. When the screenshot harness sets
+`MINIMACS_UI_READY_FILE`, the app atomically creates that marker only after the
+startup file is open, syntax work is consumed, and the final frame is displayed.
 
 The scratch buffer's first frame starts no worker and initializes no parser.
 `SyntaxState::new` is also loader-lazy: opening a recognized source file only
