@@ -222,6 +222,11 @@ pub(super) struct TreeHouseLoader {
 
 static TREE_HOUSE_LOADER: OnceLock<Result<TreeHouseLoader, String>> = OnceLock::new();
 
+#[cfg(test)]
+pub(super) fn tree_house_loader_is_initialized() -> bool {
+    TREE_HOUSE_LOADER.get().is_some()
+}
+
 pub(super) fn tree_house_loader() -> Result<&'static TreeHouseLoader, &'static str> {
     match TREE_HOUSE_LOADER.get_or_init(TreeHouseLoader::new) {
         Ok(loader) => Ok(loader),
@@ -301,6 +306,7 @@ impl TreeHouseLoader {
             .map(|idx| TreeHouseLanguage::new(idx as u32))
     }
 
+    #[cfg(test)]
     pub(super) fn config_for_language(
         &self,
         language: Language,

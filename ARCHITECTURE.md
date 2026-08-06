@@ -426,9 +426,11 @@ bounded by the current window grid rather than buffer size and remains valid
 until the next mutating C call.
 
 The scratch buffer's first frame starts no worker and initializes no parser.
-Opening a recognized source file still constructs the shared tree-house loader
-synchronously; parsing and subsequent highlighting run on the existing lazy
-syntax worker.
+`SyntaxState::new` is also loader-lazy: opening a recognized source file only
+records its `Language`. The first viewport render submits a job, and that job
+initializes the shared tree-house grammar/query loader and parses on the lazy
+syntax worker. Thus neither parser/query setup nor parsing delays the first
+unstyled file frame.
 
 ## Terminal Lifecycle
 
@@ -621,10 +623,12 @@ does not cancel a chord in progress.
 Language is detected from file extension or filename at load time (e.g. `.env`
 files are matched by filename). Each `Language` variant has a `name()` method
 returning a human-readable string displayed in the mode line. Each buffer with a
-recognized language gets a `SyntaxState` backed by the tree-house highlighter.
-`TreeHouseLoader` compiles the queries for all statically linked grammar crates
-once and maps injection names to those configurations; no dynamic grammar
-libraries are required.
+recognized language gets a lazy `SyntaxState` backed by the tree-house
+highlighter; constructing that state does not initialize a grammar or query.
+On the first background parse, `TreeHouseLoader` compiles the queries for all
+statically linked grammar crates once and maps injection names to those
+configurations; no dynamic grammar libraries are required and loader setup does
+not block the first UI frame.
 
 The app owns one lazily started `SyntaxWorker`. That thread exclusively owns a
 persistent tree-house `Syntax` per highlighted buffer; parser state is never

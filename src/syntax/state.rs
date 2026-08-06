@@ -83,22 +83,15 @@ pub struct SyntaxState {
 }
 
 impl SyntaxState {
-    /// Create a new syntax state for the given language.
+    /// Create a lazy syntax state for the given language. Grammar and query
+    /// configuration is intentionally deferred until the first parse, which
+    /// normally happens on the background syntax worker after the first frame.
     pub fn new(lang: Language) -> Option<Self> {
-        Self::new_with_timeout(lang, PARSE_TIMEOUT)
+        Some(Self::new_with_timeout(lang, PARSE_TIMEOUT))
     }
 
-    fn new_with_timeout(lang: Language, parse_timeout: Duration) -> Option<Self> {
-        let loader = match tree_house_loader() {
-            Ok(loader) => loader,
-            Err(error) => {
-                eprintln!("Failed to create tree-house config for {lang:?}: {error}");
-                return None;
-            }
-        };
-        loader.config_for_language(lang)?;
-
-        Some(SyntaxState {
+    fn new_with_timeout(lang: Language, parse_timeout: Duration) -> Self {
+        SyntaxState {
             language: lang,
             background_key: NEXT_BACKGROUND_KEY.fetch_add(1, Ordering::Relaxed),
             background: RefCell::new(BackgroundState::default()),
@@ -114,12 +107,12 @@ impl SyntaxState {
             incremental_update_count: Cell::new(0),
             #[cfg(test)]
             parse_attempt_count: Cell::new(0),
-        })
+        }
     }
 
     #[cfg(test)]
     fn with_timeout(lang: Language, parse_timeout: Duration) -> Option<Self> {
-        Self::new_with_timeout(lang, parse_timeout)
+        Some(Self::new_with_timeout(lang, parse_timeout))
     }
 
     /// Highlight a slice of source code bytes and return styled spans.
@@ -565,6 +558,37 @@ mod tests {
     use super::*;
     use ratatui::style::Modifier;
     use std::path::Path;
+
+    /// Runs alone in a child test process so the global OnceLock has a known
+    /// empty starting state regardless of the parent test suite's ordering.
+    #[test]
+    #[ignore]
+    fn lazy_constructor_child() {
+        assert_eq!(std::env::var("MINIMACS_LAZY_CONSTRUCTOR_CHILD").as_deref(), Ok("1"));
+        assert!(!tree_house_loader_is_initialized());
+        let state = SyntaxState::new(Language::Rust).unwrap();
+        assert_eq!(state.language, Language::Rust);
+        assert!(!tree_house_loader_is_initialized());
+    }
+
+    #[test]
+    fn constructing_syntax_state_does_not_initialize_grammars_or_queries() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--ignored",
+                "--exact",
+                "syntax::state::tests::lazy_constructor_child",
+            ])
+            .env("MINIMACS_LAZY_CONSTRUCTOR_CHILD", "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "child test failed:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 
     #[test]
     fn detect_rust() {
