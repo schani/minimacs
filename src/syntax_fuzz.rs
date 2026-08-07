@@ -178,7 +178,10 @@ struct Rng(u64);
 
 impl Rng {
     fn new(seed: u64) -> Self {
-        Self(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(0xDEAD_BEEF))
+        Self(
+            seed.wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                .wrapping_add(0xDEAD_BEEF),
+        )
     }
 
     fn next(&mut self) -> u64 {
@@ -481,10 +484,7 @@ fn tree_shape_diff(a: &Tree, b: &Tree) -> Option<String> {
     None
 }
 
-fn first_diff(
-    incremental: &[(usize, usize, Style)],
-    fresh: &[(usize, usize, Style)],
-) -> String {
+fn first_diff(incremental: &[(usize, usize, Style)], fresh: &[(usize, usize, Style)]) -> String {
     let index = incremental
         .iter()
         .zip(fresh.iter())
@@ -556,8 +556,7 @@ fn compare_after_edit(
         }
     }
 
-    let incremental =
-        syntax.highlight_rope(buf.text.slice(..), 0..len_bytes, buf.edit_generation);
+    let incremental = syntax.highlight_rope(buf.text.slice(..), 0..len_bytes, buf.edit_generation);
     let full = fresh.highlight_rope(buf.text.slice(..), 0..len_bytes, 0);
     let incremental = signature(&incremental);
     let full = signature(&full);
@@ -1169,22 +1168,41 @@ mod tests {
     fn clipping_merges_adjacent_equal_styles_and_drops_outside_spans() {
         let styled = Style::default().fg(ratatui::style::Color::Red);
         let spans = vec![
-            StyledSpan { start: 0, end: 4, style: styled },
-            StyledSpan { start: 4, end: 8, style: styled },
-            StyledSpan { start: 8, end: 12, style: Style::default() },
-            StyledSpan { start: 20, end: 30, style: styled },
+            StyledSpan {
+                start: 0,
+                end: 4,
+                style: styled,
+            },
+            StyledSpan {
+                start: 4,
+                end: 8,
+                style: styled,
+            },
+            StyledSpan {
+                start: 8,
+                end: 12,
+                style: Style::default(),
+            },
+            StyledSpan {
+                start: 20,
+                end: 30,
+                style: styled,
+            },
         ];
 
         let merged = clipped_merged(&spans, &(2..10));
-        assert_eq!(
-            merged,
-            vec![(2, 8, styled), (8, 10, Style::default())]
-        );
+        assert_eq!(merged, vec![(2, 8, styled), (8, 10, Style::default())]);
     }
 
     #[test]
     fn fuzz_runs_are_deterministic() {
-        let flags = FuzzFlags { adverse: true, hotspots: true, windowed: true, keep_going: false, raw: false };
+        let flags = FuzzFlags {
+            adverse: true,
+            hotspots: true,
+            windowed: true,
+            keep_going: false,
+            raw: false,
+        };
         let first = fuzz_run(Language::Rust, 7, 12, &flags).unwrap();
         let second = fuzz_run(Language::Rust, 7, 12, &flags).unwrap();
 
@@ -1196,7 +1214,13 @@ mod tests {
 
     #[test]
     fn short_fuzz_finds_no_divergence_in_default_languages() {
-        let flags = FuzzFlags { adverse: true, hotspots: true, windowed: true, keep_going: false, raw: false };
+        let flags = FuzzFlags {
+            adverse: true,
+            hotspots: true,
+            windowed: true,
+            keep_going: false,
+            raw: false,
+        };
         for &language in DEFAULT_LANGUAGES {
             let outcome = fuzz_run(language, 1, 8, &flags).unwrap();
             assert_eq!(outcome.steps_applied, 8);

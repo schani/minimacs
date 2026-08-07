@@ -370,7 +370,7 @@ mod tests {
         hist.undo(); // back to version 0
         hist.record_insert(0, "b"); // new branch, redo cleared
         hist.commit(); // version 2, but on different branch
-        // clean_version was 1 on old branch, now unreachable
+                       // clean_version was 1 on old branch, now unreachable
         assert!(!hist.is_clean());
     }
 }

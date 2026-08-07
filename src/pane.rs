@@ -786,7 +786,14 @@ mod tests {
         // Delete lines 0..50 (2500 chars, 50 line breaks).
         pane.adjust_for_edit(
             1,
-            EditDelta { start: 0, removed: 2500, inserted: 0, first_line: 0, removed_lines: 50, inserted_lines: 0 },
+            EditDelta {
+                start: 0,
+                removed: 2500,
+                inserted: 0,
+                first_line: 0,
+                removed_lines: 50,
+                inserted_lines: 0,
+            },
         );
         assert_eq!(pane.scroll_top, 50);
     }
@@ -798,7 +805,14 @@ mod tests {
         // Insert 10 lines at the top of the buffer.
         pane.adjust_for_edit(
             1,
-            EditDelta { start: 0, removed: 0, inserted: 60, first_line: 0, removed_lines: 0, inserted_lines: 10 },
+            EditDelta {
+                start: 0,
+                removed: 0,
+                inserted: 60,
+                first_line: 0,
+                removed_lines: 0,
+                inserted_lines: 10,
+            },
         );
         assert_eq!(pane.scroll_top, 110);
     }
@@ -809,7 +823,14 @@ mod tests {
         pane.scroll_top = 10;
         pane.adjust_for_edit(
             1,
-            EditDelta { start: 5000, removed: 100, inserted: 0, first_line: 50, removed_lines: 2, inserted_lines: 0 },
+            EditDelta {
+                start: 5000,
+                removed: 100,
+                inserted: 0,
+                first_line: 50,
+                removed_lines: 2,
+                inserted_lines: 0,
+            },
         );
         assert_eq!(pane.scroll_top, 10);
     }
@@ -821,7 +842,14 @@ mod tests {
         // Delete lines 50..150; the top line no longer exists.
         pane.adjust_for_edit(
             1,
-            EditDelta { start: 2500, removed: 5000, inserted: 0, first_line: 50, removed_lines: 100, inserted_lines: 0 },
+            EditDelta {
+                start: 2500,
+                removed: 5000,
+                inserted: 0,
+                first_line: 50,
+                removed_lines: 100,
+                inserted_lines: 0,
+            },
         );
         assert_eq!(pane.scroll_top, 50);
     }
@@ -833,7 +861,14 @@ mod tests {
         pane.switch_buffer(2, 100); // saves state for buffer 1 (scroll_top 100)
         pane.adjust_for_edit(
             1,
-            EditDelta { start: 0, removed: 2500, inserted: 0, first_line: 0, removed_lines: 50, inserted_lines: 0 },
+            EditDelta {
+                start: 0,
+                removed: 2500,
+                inserted: 0,
+                first_line: 0,
+                removed_lines: 50,
+                inserted_lines: 0,
+            },
         );
         pane.restore_buffer_state(1, 7000);
         assert_eq!(pane.scroll_top, 50);

@@ -208,7 +208,10 @@ impl Buffer {
 
     pub fn from_file(id: BufferId, path: &Path) -> Result<Self> {
         let mut file = fs::File::open(path)?;
-        let modified = file.metadata().and_then(|metadata| metadata.modified()).ok();
+        let modified = file
+            .metadata()
+            .and_then(|metadata| metadata.modified())
+            .ok();
         let mut bytes = Vec::new();
         file.read_to_end(&mut bytes)?;
 
@@ -238,8 +241,7 @@ impl Buffer {
             .unwrap_or_else(|| path.display().to_string());
 
         // Detect language for syntax highlighting
-        let syntax_state = syntax::detect_language(path)
-            .and_then(SyntaxState::new);
+        let syntax_state = syntax::detect_language(path).and_then(SyntaxState::new);
 
         Ok(Self {
             id,
@@ -295,7 +297,10 @@ impl Buffer {
             let fingerprint = write_rope_text(&self.text, self.line_ending, &mut file)?;
             file.sync_all()?;
             DiskState::Present {
-                modified: file.metadata().and_then(|metadata| metadata.modified()).ok(),
+                modified: file
+                    .metadata()
+                    .and_then(|metadata| metadata.modified())
+                    .ok(),
                 fingerprint,
             }
         } else {
@@ -568,7 +573,10 @@ fn read_disk_state(path: &Path) -> io::Result<DiskState> {
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(DiskState::Missing),
         Err(error) => return Err(error),
     };
-    let modified = file.metadata().and_then(|metadata| metadata.modified()).ok();
+    let modified = file
+        .metadata()
+        .and_then(|metadata| metadata.modified())
+        .ok();
     let mut hasher = Sha256::new();
     let mut bytes = [0; 64 * 1024];
     loop {
@@ -584,12 +592,7 @@ fn read_disk_state(path: &Path) -> io::Result<DiskState> {
     })
 }
 
-fn input_edit_for_replace(
-    text: &Rope,
-    start: usize,
-    end: usize,
-    replacement: &str,
-) -> InputEdit {
+fn input_edit_for_replace(text: &Rope, start: usize, end: usize, replacement: &str) -> InputEdit {
     let start_byte = text.char_to_byte(start);
     let old_end_byte = text.char_to_byte(end);
     let start_point = tree_sitter_point_at_char(text, start);
@@ -606,7 +609,9 @@ fn input_edit_for_replace(
         },
         None => Point {
             row: start_point.row,
-            col: start_point.col.saturating_add(to_u32(replacement_bytes.len())),
+            col: start_point
+                .col
+                .saturating_add(to_u32(replacement_bytes.len())),
         },
     };
 
@@ -785,9 +790,7 @@ mod tests {
     /// Chars that were line breaks under ropey's `unicode_lines` feature
     /// but are ordinary content with `default-features = false`: lone CR,
     /// VT, FF, NEL, LS, PS.
-    const EX_LINE_BREAKS: [char; 6] = [
-        '\r', '\u{0b}', '\u{0c}', '\u{85}', '\u{2028}', '\u{2029}',
-    ];
+    const EX_LINE_BREAKS: [char; 6] = ['\r', '\u{0b}', '\u{0c}', '\u{85}', '\u{2028}', '\u{2029}'];
 
     #[test]
     fn only_newline_breaks_lines() {
@@ -943,9 +946,18 @@ mod tests {
         assert_eq!(edit.start_byte, 2);
         assert_eq!(edit.old_end_byte, 4);
         assert_eq!(edit.new_end_byte, 6);
-        assert_eq!(edit.start_point, tree_house::tree_sitter::Point { row: 0, col: 2 });
-        assert_eq!(edit.old_end_point, tree_house::tree_sitter::Point { row: 0, col: 4 });
-        assert_eq!(edit.new_end_point, tree_house::tree_sitter::Point { row: 1, col: 2 });
+        assert_eq!(
+            edit.start_point,
+            tree_house::tree_sitter::Point { row: 0, col: 2 }
+        );
+        assert_eq!(
+            edit.old_end_point,
+            tree_house::tree_sitter::Point { row: 0, col: 4 }
+        );
+        assert_eq!(
+            edit.new_end_point,
+            tree_house::tree_sitter::Point { row: 1, col: 2 }
+        );
     }
 
     #[test]
@@ -958,8 +970,14 @@ mod tests {
         let edit = input_edit_for_replace(&text, 8, 9, "x");
 
         assert_eq!(edit.start_byte, 10);
-        assert_eq!(edit.start_point, tree_house::tree_sitter::Point { row: 1, col: 2 });
-        assert_eq!(edit.old_end_point, tree_house::tree_sitter::Point { row: 1, col: 3 });
+        assert_eq!(
+            edit.start_point,
+            tree_house::tree_sitter::Point { row: 1, col: 2 }
+        );
+        assert_eq!(
+            edit.old_end_point,
+            tree_house::tree_sitter::Point { row: 1, col: 3 }
+        );
     }
 
     #[test]
@@ -967,9 +985,18 @@ mod tests {
         let text = Rope::from_str("first\nsecond\nthird");
         let edit = input_edit_for_replace(&text, 6, 12, "one\ntwo\nthree");
 
-        assert_eq!(edit.start_point, tree_house::tree_sitter::Point { row: 1, col: 0 });
-        assert_eq!(edit.old_end_point, tree_house::tree_sitter::Point { row: 1, col: 6 });
-        assert_eq!(edit.new_end_point, tree_house::tree_sitter::Point { row: 3, col: 5 });
+        assert_eq!(
+            edit.start_point,
+            tree_house::tree_sitter::Point { row: 1, col: 0 }
+        );
+        assert_eq!(
+            edit.old_end_point,
+            tree_house::tree_sitter::Point { row: 1, col: 6 }
+        );
+        assert_eq!(
+            edit.new_end_point,
+            tree_house::tree_sitter::Point { row: 3, col: 5 }
+        );
         assert_eq!(edit.new_end_byte - edit.start_byte, 13);
     }
 
@@ -1067,14 +1094,14 @@ mod tests {
 
     #[test]
     fn incremental_syntax_matches_full_parse_across_mixed_edits() {
-        let source = "fn main() {\n    let greeting = \"hello\";\n    println!(\"{}\", greeting);\n}\n";
+        let source =
+            "fn main() {\n    let greeting = \"hello\";\n    println!(\"{}\", greeting);\n}\n";
         let mut buf = Buffer::from_str(0, "test.rs", source);
         buf.syntax = SyntaxState::new(crate::syntax::Language::Rust);
-        buf.syntax.as_ref().unwrap().highlight_rope(
-            buf.text.slice(..),
-            0..buf.text.len_bytes(),
-            0,
-        );
+        buf.syntax
+            .as_ref()
+            .unwrap()
+            .highlight_rope(buf.text.slice(..), 0..buf.text.len_bytes(), 0);
         let replacements = ["", "x", "λ", "\n", "/* note */", "\"text\""];
         let mut random = 0x5eed_f00d_u64;
 
@@ -1113,11 +1140,10 @@ mod tests {
         let source = "# Demo\n\n```rust\nfn answer() -> u32 { 42 }\n```\n\n*tail*\n";
         let mut buf = Buffer::from_str(0, "test.md", source);
         buf.syntax = SyntaxState::new(crate::syntax::Language::Markdown);
-        buf.syntax.as_ref().unwrap().highlight_rope(
-            buf.text.slice(..),
-            0..buf.text.len_bytes(),
-            0,
-        );
+        buf.syntax
+            .as_ref()
+            .unwrap()
+            .highlight_rope(buf.text.slice(..), 0..buf.text.len_bytes(), 0);
 
         for (needle, replacement) in [
             ("42", "compute()"),
@@ -1510,7 +1536,7 @@ mod tests {
     fn crlf_detection() {
         let buf = Buffer::from_str(0, "test", "hello\r\nworld\r\n");
         assert_eq!(buf.line_ending, LineEnding::Lf); // from_str doesn't detect
-        // But from_file would:
+                                                     // But from_file would:
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("crlf.txt");
         fs::write(&file, "hello\r\nworld\r\n").unwrap();

@@ -17,16 +17,26 @@ pub enum PromptKind {
     GotoLine,
     ISearch,
     /// "Buffer X modified; kill anyway? (y/n)"
-    KillConfirm { buffer_id: usize },
+    KillConfirm {
+        buffer_id: usize,
+    },
     /// "X changed on disk; save anyway? (y/n)" — the external-modification
     /// guard, asked by every flow that writes a buffer to its own path.
     /// `resume_quit` marks a save that is part of the quit sequence: "y"
     /// saves and continues the quit, "n" cancels the whole quit.
-    SaveAnywayConfirm { buffer_id: usize, resume_quit: bool },
+    SaveAnywayConfirm {
+        buffer_id: usize,
+        resume_quit: bool,
+    },
     /// "X exists; overwrite? (y/n)" — C-x C-w to an existing file.
-    OverwriteConfirm { buffer_id: usize, path: PathBuf },
+    OverwriteConfirm {
+        buffer_id: usize,
+        path: PathBuf,
+    },
     /// "Save buffer X? (y/n/q)" — asked once per modified buffer when quitting.
-    QuitSaveConfirm { buffer_id: usize },
+    QuitSaveConfirm {
+        buffer_id: usize,
+    },
 }
 
 #[derive(Debug)]
@@ -174,11 +184,7 @@ pub fn complete_path_with_candidates(input: &str, base: &Path) -> (String, Vec<S
     // input; is_dir is checked on the resolved path.
     let mut matches: Vec<(PathBuf, bool)> = entries
         .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.file_name()
-                .to_string_lossy()
-                .starts_with(&prefix)
-        })
+        .filter(|e| e.file_name().to_string_lossy().starts_with(&prefix))
         .map(|e| (dir.join(e.file_name()), e.path().is_dir()))
         .collect();
     matches.sort();
@@ -202,7 +208,8 @@ pub fn complete_path_with_candidates(input: &str, base: &Path) -> (String, Vec<S
         let candidates: Vec<String> = matches
             .iter()
             .map(|(p, is_dir)| {
-                let mut name = p.file_name()
+                let mut name = p
+                    .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_default();
                 if *is_dir {
@@ -228,7 +235,10 @@ pub fn complete_path(input: &str) -> String {
 ///
 /// The first element is the completed prefix (same as `complete_buffer`).
 /// The second element is a sorted list of matching buffer names. Empty if unique/no match.
-pub fn complete_buffer_with_candidates(input: &str, buffer_names: &[String]) -> (String, Vec<String>) {
+pub fn complete_buffer_with_candidates(
+    input: &str,
+    buffer_names: &[String],
+) -> (String, Vec<String>) {
     let matches: Vec<&String> = buffer_names
         .iter()
         .filter(|name| name.starts_with(input))
@@ -360,21 +370,24 @@ mod tests {
             common_prefix(&["foo".into(), "foobar".into(), "foobaz".into()]),
             Some("foo".into())
         );
-        assert_eq!(
-            common_prefix(&["abc".into(), "xyz".into()]),
-            None
-        );
+        assert_eq!(common_prefix(&["abc".into(), "xyz".into()]), None);
     }
 
     #[test]
     fn buffer_name_completion() {
-        let result = complete_buffer("t", &["test.txt".into(), "todo.md".into(), "other.rs".into()]);
+        let result = complete_buffer(
+            "t",
+            &["test.txt".into(), "todo.md".into(), "other.rs".into()],
+        );
         assert_eq!(result, "t"); // "test.txt" and "todo.md" share only "t"
     }
 
     #[test]
     fn buffer_name_single_completion() {
-        let result = complete_buffer("te", &["test.txt".into(), "todo.md".into(), "other.rs".into()]);
+        let result = complete_buffer(
+            "te",
+            &["test.txt".into(), "todo.md".into(), "other.rs".into()],
+        );
         assert_eq!(result, "test.txt"); // only "test.txt" matches
     }
 
@@ -408,7 +421,11 @@ mod tests {
 
         let input = format!("{}/sub", dir.path().display());
         let result = complete_path(&input);
-        assert!(result.ends_with('/'), "Dir completion should end with /: {}", result);
+        assert!(
+            result.ends_with('/'),
+            "Dir completion should end with /: {}",
+            result
+        );
     }
 
     #[test]
@@ -596,10 +613,7 @@ mod tests {
 
     #[test]
     fn tilde_not_expanded_mid_path_or_for_named_user() {
-        assert_eq!(
-            expand_tilde_with("/a/~/b", Some("/home/u")),
-            "/a/~/b"
-        );
+        assert_eq!(expand_tilde_with("/a/~/b", Some("/home/u")), "/a/~/b");
         assert_eq!(
             expand_tilde_with("~other/foo", Some("/home/u")),
             "~other/foo"
@@ -614,10 +628,7 @@ mod tests {
         };
         let home = home.to_string_lossy().into_owned();
         let home = home.trim_end_matches('/');
-        assert_eq!(
-            normalize_path_string("~/a/../b"),
-            format!("{home}/b")
-        );
+        assert_eq!(normalize_path_string("~/a/../b"), format!("{home}/b"));
     }
 
     #[test]
@@ -643,10 +654,7 @@ mod tests {
 
     #[test]
     fn normalize_multiple_dots() {
-        assert_eq!(
-            normalize_path_string("/a/b/./c/../d"),
-            "/a/b/d"
-        );
+        assert_eq!(normalize_path_string("/a/b/./c/../d"), "/a/b/d");
     }
 
     #[test]
@@ -663,7 +671,11 @@ mod tests {
         let input = format!("{}/./{}", dir.path().display(), "a");
         let result = complete_path(&input);
         assert!(result.ends_with("alpha.txt"));
-        assert!(!result.contains("/./"), "Result should not contain /./: {}", result);
+        assert!(
+            !result.contains("/./"),
+            "Result should not contain /./: {}",
+            result
+        );
     }
 
     #[test]
@@ -706,6 +718,10 @@ mod tests {
         let input = format!("{}/sub/../a", dir.path().display());
         let result = complete_path(&input);
         assert!(result.ends_with("alpha.txt"));
-        assert!(!result.contains("/../"), "Result should not contain /../: {}", result);
+        assert!(
+            !result.contains("/../"),
+            "Result should not contain /../: {}",
+            result
+        );
     }
 }

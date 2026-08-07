@@ -158,7 +158,12 @@ fn main() -> Result<()> {
     let guard = RestoreGuard;
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableBracketedPaste, EnableMouseCapture)?;
+    execute!(
+        stdout,
+        EnterAlternateScreen,
+        EnableBracketedPaste,
+        EnableMouseCapture
+    )?;
 
     // Enable kitty keyboard protocol so keys like Ctrl-/ are reported
     // correctly. REPORT_ALTERNATE_KEYS makes shifted keys arrive as the

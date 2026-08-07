@@ -144,10 +144,7 @@ fn unbound_key_after_prefix_does_not_self_insert() {
     assert!(!app.editor.current_buffer().modified);
     // The user gets feedback instead.
     let screen = capture_screen(&app.terminal);
-    assert!(
-        screen.contains("C-x j is undefined"),
-        "screen: {screen}"
-    );
+    assert!(screen.contains("C-x j is undefined"), "screen: {screen}");
 }
 
 #[test]
@@ -176,9 +173,9 @@ fn mouse_moved(x: u16, y: u16) -> Event {
 fn esc_less_than_moves_to_buffer_beginning() {
     let text = "hello\nworld\nfoo";
     let events = vec![
-        ctrl('e'),           // go to end of first line
-        key(KeyCode::Esc),   // Esc prefix
-        char_key('<'),       // < — should become M-<
+        ctrl('e'),         // go to end of first line
+        key(KeyCode::Esc), // Esc prefix
+        char_key('<'),     // < — should become M-<
     ];
     let (mut app, mut events) = test_app_with_text(40, 10, text, events);
     app.run_until_idle(&mut events).unwrap();
@@ -189,8 +186,8 @@ fn esc_less_than_moves_to_buffer_beginning() {
 fn esc_greater_than_moves_to_buffer_end() {
     let text = "hello\nworld\nfoo";
     let events = vec![
-        key(KeyCode::Esc),   // Esc prefix
-        char_key('>'),       // > — should become M->
+        key(KeyCode::Esc), // Esc prefix
+        char_key('>'),     // > — should become M->
     ];
     let (mut app, mut events) = test_app_with_text(40, 10, text, events);
     app.run_until_idle(&mut events).unwrap();
@@ -201,8 +198,8 @@ fn esc_greater_than_moves_to_buffer_end() {
 fn esc_f_moves_forward_word() {
     let text = "hello world";
     let events = vec![
-        key(KeyCode::Esc),   // Esc prefix
-        char_key('f'),       // f — should become M-f
+        key(KeyCode::Esc), // Esc prefix
+        char_key('f'),     // f — should become M-f
     ];
     let (mut app, mut events) = test_app_with_text(40, 10, text, events);
     app.run_until_idle(&mut events).unwrap();

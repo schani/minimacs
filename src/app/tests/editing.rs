@@ -35,8 +35,7 @@ fn meta_angle_brackets_move_to_buffer_ends_in_kitty_form() {
             KeyModifiers::ALT | KeyModifiers::SHIFT,
         ))
     };
-    let (mut app, mut events) =
-        test_app_with_text(40, 10, "hello\nworld", vec![alt_shift('.')]);
+    let (mut app, mut events) = test_app_with_text(40, 10, "hello\nworld", vec![alt_shift('.')]);
     app.run_until_idle(&mut events).unwrap();
     assert_eq!(app.editor.point(), 11, "M-> must move point to buffer end");
 
@@ -47,7 +46,11 @@ fn meta_angle_brackets_move_to_buffer_ends_in_kitty_form() {
         vec![key(KeyCode::End), alt_shift(',')],
     );
     app.run_until_idle(&mut events).unwrap();
-    assert_eq!(app.editor.point(), 0, "M-< must move point to buffer beginning");
+    assert_eq!(
+        app.editor.point(),
+        0,
+        "M-< must move point to buffer beginning"
+    );
 }
 
 #[test]
@@ -161,7 +164,11 @@ fn split_pane_renders_two_mode_lines() {
     let screen = capture_screen(&app.terminal);
     // Should have two mode lines (both showing *scratch* or similar)
     let mode_line_count = screen.lines().filter(|l| l.contains("--")).count();
-    assert!(mode_line_count >= 2, "Expected 2 mode lines, screen:\n{}", screen);
+    assert!(
+        mode_line_count >= 2,
+        "Expected 2 mode lines, screen:\n{}",
+        screen
+    );
 }
 
 #[test]
@@ -170,8 +177,10 @@ fn kill_buffer_after_split_does_not_crash() {
     // This used to crash because do_kill_buffer only updated the focused pane,
     // leaving the other pane pointing to a deleted buffer.
     let events = vec![
-        ctrl('x'), char_key('2'), // split window
-        ctrl('x'), char_key('k'), // kill buffer
+        ctrl('x'),
+        char_key('2'), // split window
+        ctrl('x'),
+        char_key('k'), // kill buffer
     ];
     let (mut app, mut events) = test_app(40, 12, events);
     app.run_until_idle(&mut events).unwrap();
@@ -186,15 +195,21 @@ fn kill_buffer_after_split_does_not_crash() {
 fn region_renders_in_buffer() {
     // Set mark, move forward, then render — should exercise region highlighting
     let events = vec![
-        ctrl(' '),               // set mark
-        ctrl('f'), ctrl('f'), ctrl('f'), // move forward 3
+        ctrl(' '), // set mark
+        ctrl('f'),
+        ctrl('f'),
+        ctrl('f'), // move forward 3
     ];
     let (mut app, mut events) = test_app_with_text(40, 10, "hello world", events);
     app.run_until_idle(&mut events).unwrap();
     // Verify mark is set and region exists
     assert!(app.editor.region().is_some());
     let screen = capture_screen(&app.terminal);
-    assert!(screen.contains("hello"), "Screen should show text: {}", screen);
+    assert!(
+        screen.contains("hello"),
+        "Screen should show text: {}",
+        screen
+    );
 }
 
 #[test]

@@ -8,8 +8,8 @@ use crate::indent::INDENT_WIDTH;
 use crate::minibuffer::Minibuffer;
 use crate::pane::{Pane, PaneTree};
 
-mod isearch;
 mod fileops;
+mod isearch;
 mod prompts;
 
 pub use isearch::{ISearchState, SearchDirection};
@@ -171,7 +171,6 @@ impl Editor {
             quit_pending: Vec::new(),
         }
     }
-
 
     pub fn clear_last_command(&mut self) {
         self.last_command = None;
@@ -426,7 +425,6 @@ impl Editor {
     fn cycle_focus(&mut self) {
         self.pane_tree.cycle_focus();
     }
-
 
     // === Movement commands ===
 
@@ -785,7 +783,12 @@ impl Editor {
         let new_ws = format!("{}{}", " ".repeat(INDENT_WIDTH), old_ws);
 
         let old_point = self.active_pane().point;
-        self.apply_edit(line_start, line_start + ws_len, &new_ws, EditRecord::Replace);
+        self.apply_edit(
+            line_start,
+            line_start + ws_len,
+            &new_ws,
+            EditRecord::Replace,
+        );
         self.active_buffer_mut().history.commit();
         let pane = self.active_pane_mut();
         pane.point = old_point + INDENT_WIDTH;
@@ -1106,7 +1109,6 @@ impl Editor {
         }
     }
 
-
     // === Mark/Region ===
 
     fn set_mark(&mut self) {
@@ -1221,7 +1223,6 @@ impl Editor {
             self.minibuffer.show_message("Quit".to_string());
         }
     }
-
 }
 
 #[cfg(test)]

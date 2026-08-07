@@ -6,13 +6,13 @@ use super::*;
 fn isearch_forward_via_app() {
     let text = "hello world hello";
     let events = vec![
-        ctrl('s'),       // start isearch
-        char_key('h'),   // type 'h'
-        char_key('e'),   // type 'e'
-        char_key('l'),   // type 'l'
-        char_key('l'),   // type 'l'
-        char_key('o'),   // type 'o'
-        ctrl('s'),       // cycle to next match
+        ctrl('s'),           // start isearch
+        char_key('h'),       // type 'h'
+        char_key('e'),       // type 'e'
+        char_key('l'),       // type 'l'
+        char_key('l'),       // type 'l'
+        char_key('o'),       // type 'o'
+        ctrl('s'),           // cycle to next match
         key(KeyCode::Enter), // accept
     ];
     let (mut app, mut events) = test_app_with_text(40, 10, text, events);
@@ -26,7 +26,7 @@ fn isearch_forward_via_app() {
 fn isearch_backward_via_app() {
     let text = "hello world hello";
     let mut events = vec![ctrl('e')]; // go to end
-    events.push(ctrl('r'));            // start backward isearch
+    events.push(ctrl('r')); // start backward isearch
     events.extend(key_events("hello"));
     events.push(key(KeyCode::Enter)); // accept
     let (mut app, mut events) = test_app_with_text(40, 10, text, events);
@@ -40,7 +40,11 @@ fn isearch_backspace_refines_query() {
     let text = "abc abcd abcde";
     let events = vec![
         ctrl('s'),
-        char_key('a'), char_key('b'), char_key('c'), char_key('d'), char_key('e'),
+        char_key('a'),
+        char_key('b'),
+        char_key('c'),
+        char_key('d'),
+        char_key('e'),
         key(KeyCode::Backspace), // remove 'e' from query → "abcd"
         key(KeyCode::Enter),
     ];
@@ -55,7 +59,11 @@ fn isearch_other_key_accepts_and_processes() {
     let text = "hello world";
     let events = vec![
         ctrl('s'),
-        char_key('w'), char_key('o'), char_key('r'), char_key('l'), char_key('d'),
+        char_key('w'),
+        char_key('o'),
+        char_key('r'),
+        char_key('l'),
+        char_key('d'),
         ctrl('a'), // not an isearch key → accept search, then beginning-of-line
     ];
     let (mut app, mut events) = test_app_with_text(40, 10, text, events);
@@ -70,7 +78,11 @@ fn isearch_cancel_restores_via_app() {
     let text = "hello world";
     let events = vec![
         ctrl('s'),
-        char_key('w'), char_key('o'), char_key('r'), char_key('l'), char_key('d'),
+        char_key('w'),
+        char_key('o'),
+        char_key('r'),
+        char_key('l'),
+        char_key('d'),
         ctrl('g'), // cancel isearch
     ];
     let (mut app, mut events) = test_app_with_text(40, 10, text, events);

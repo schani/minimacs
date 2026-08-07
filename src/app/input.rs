@@ -197,7 +197,7 @@ where
     }
 
     fn handle_minibuffer_tab(&mut self) {
-        use crate::minibuffer::{complete_path_with_candidates, complete_buffer_with_candidates};
+        use crate::minibuffer::{complete_buffer_with_candidates, complete_path_with_candidates};
 
         let had_completions = self.editor.minibuffer.completions.is_some();
         let kind = self.editor.minibuffer.prompt().map(|p| p.kind.clone());
@@ -247,7 +247,8 @@ where
         // Insert pasted text as a single undo group
         self.editor.active_buffer_mut().history.commit();
         let point = self.editor.active_pane().point;
-        self.editor.apply_edit(point, point, &text, EditRecord::Insert);
+        self.editor
+            .apply_edit(point, point, &text, EditRecord::Insert);
         self.editor.active_pane_mut().point = point + text.chars().count();
         self.editor.active_buffer_mut().history.commit();
     }

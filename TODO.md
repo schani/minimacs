@@ -143,7 +143,7 @@ Plan, in order (tests first for each step):
       `syntax-smoke` job runs `syntax-fuzz --runs 2 --steps 120` and
       `syntax-bench --lines 500 --edits 50` in release mode, with the
       modest-step-count rationale documented in the workflow and README.
-      The main `test` job mirrors the pre-commit hook: build,
+      The main `test` job mirrors the pre-commit hook: formatting, build,
       `cargo llvm-cov --fail-under-lines 90`, `clippy -D warnings`.)
 - [ ] Track the tree-sitter-md external-scanner overflow: the fuzz harness's
       raw probe segfaulted inside `tree_sitter_markdown_external_scanner_serialize`

@@ -1,6 +1,5 @@
 use super::*;
 
-
 #[test]
 fn forward_char_moves_one() {
     let mut editor = Editor::new_with_text("hello");

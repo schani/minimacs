@@ -21,8 +21,7 @@ fn benchmark_five_megabyte_single_line() {
     assert!(!text.contains('\n'));
 
     let (mut app, mut events) = test_app_with_text(120, 40, &text, vec![]);
-    app.editor.buffers[0].syntax =
-        crate::syntax::SyntaxState::new(crate::syntax::Language::Json);
+    app.editor.buffers[0].syntax = crate::syntax::SyntaxState::new(crate::syntax::Language::Json);
     let cold_start = Instant::now();
     app.run_until_idle(&mut events).unwrap();
     let cold_start = cold_start.elapsed();
@@ -98,7 +97,11 @@ fn cursor_after_literal_tab_uses_expanded_visual_column() {
     let (mut app, mut events) = test_app_with_text(20, 6, "\tfoo", events);
     app.run_until_idle(&mut events).unwrap();
 
-    assert_eq!(app.editor.point(), 1, "tab should remain one buffer character");
+    assert_eq!(
+        app.editor.point(),
+        1,
+        "tab should remain one buffer character"
+    );
     let pos = app.terminal.get_cursor_position().unwrap();
     assert_eq!((pos.x, pos.y), (4, 0));
 }
@@ -109,7 +112,11 @@ fn cursor_after_literal_tab_snaps_to_next_tab_stop() {
     let (mut app, mut events) = test_app_with_text(20, 6, "a\tfoo", events);
     app.run_until_idle(&mut events).unwrap();
 
-    assert_eq!(app.editor.point(), 2, "tab should remain one buffer character");
+    assert_eq!(
+        app.editor.point(),
+        2,
+        "tab should remain one buffer character"
+    );
     let pos = app.terminal.get_cursor_position().unwrap();
     assert_eq!((pos.x, pos.y), (4, 0));
 }
@@ -375,7 +382,13 @@ fn cursor_in_right_pane_never_drawn_outside_pane() {
     // row (x=11, the right pane's origin) and must never be drawn at
     // x=21 (outside the terminal/pane).
     let text = "abcdefghij"; // 10 chars
-    let events = vec![ctrl('x'), char_key('3'), ctrl('x'), char_key('o'), ctrl('e')];
+    let events = vec![
+        ctrl('x'),
+        char_key('3'),
+        ctrl('x'),
+        char_key('o'),
+        ctrl('e'),
+    ];
     let (mut app, mut events) = test_app_with_text(21, 6, text, events);
     app.run_until_idle(&mut events).unwrap();
     let pos = app.terminal.get_cursor_position().unwrap();
@@ -426,7 +439,11 @@ fn triple_wrap_line() {
     // Visual line 1: 14 chars + "\"
     assert!(lines[1].ends_with('\\'), "Second wrap: '{}'", lines[1]);
     // Visual line 2: remaining 8 chars (no \)
-    assert!(!lines[2].ends_with('\\'), "Last segment shouldn't wrap: '{}'", lines[2]);
+    assert!(
+        !lines[2].ends_with('\\'),
+        "Last segment shouldn't wrap: '{}'",
+        lines[2]
+    );
 }
 
 #[test]
@@ -681,14 +698,20 @@ fn recenter_keeps_cursor_visible_in_giant_wrapped_line() {
 #[test]
 fn cl_recenter_via_app() {
     // 20 lines, terminal is 12 tall (10 text rows + mode + minibuf)
-    let text = (0..20).map(|i| format!("line{}", i)).collect::<Vec<_>>().join("\n");
+    let text = (0..20)
+        .map(|i| format!("line{}", i))
+        .collect::<Vec<_>>()
+        .join("\n");
     // Move cursor to line 10 (C-n 10 times), then C-l
     let mut events: Vec<Event> = (0..10).map(|_| ctrl('n')).collect();
     events.push(ctrl('l')); // recenter
     let (mut app, mut events) = test_app_with_text(40, 12, &text, events);
     app.run_until_idle(&mut events).unwrap();
     // Cursor should be on line 10
-    let (line, _) = app.editor.current_buffer().char_to_line_col(app.editor.point());
+    let (line, _) = app
+        .editor
+        .current_buffer()
+        .char_to_line_col(app.editor.point());
     assert_eq!(line, 10);
     // After center: scroll_top = 10 - 10/2 = 5
     assert_eq!(app.editor.pane_tree.focused_pane().scroll_top, 5);
@@ -730,6 +753,9 @@ fn terminal_control_sequences_are_rendered_as_visible_text() {
         !screen.chars().any(|ch| ch != '\n' && ch.is_control()),
         "got {screen:?}"
     );
-    assert!(screen.contains("safe␛]52;c;clipboard␇tail�"), "got {screen:?}");
+    assert!(
+        screen.contains("safe␛]52;c;clipboard␇tail�"),
+        "got {screen:?}"
+    );
     assert!(screen.contains("name␛]0;owned␇.txt"), "got {screen:?}");
 }
