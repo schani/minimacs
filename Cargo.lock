@@ -865,6 +865,7 @@ dependencies = [
  "ratatui",
  "ropey",
  "sha2",
+ "syn 2.0.117",
  "tempfile",
  "tree-house",
  "tree-house-bindings",

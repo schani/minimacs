@@ -48,8 +48,11 @@ Terminal input (crossterm)
 
 ```
 src/
-  main.rs           CLI parsing (parse_args), terminal setup/teardown (Drop
-                    guard + panic hook), runs the event loop
+  lib.rs            Single owner of the shared module tree; exposes only the
+                    three binary entry functions
+  main.rs           Thin minimacs binary wrapper
+  runtime.rs        Editor CLI parsing (parse_args), terminal setup/teardown
+                    (Drop guard + panic hook), runs the event loop
   app.rs            App<B: Backend> -- event loop, dispatch_event, viewport update
   app/input.rs        InputState (chord + pending ESC) and key routing:
                       handle_key, isearch keys, minibuffer Tab, paste
@@ -84,26 +87,30 @@ src/
   syntax_worker.rs  Single-thread parser executor and coalescing mailbox
   syntax_bench.rs   syntax-bench performance harness (see below)
   syntax_fuzz.rs    syntax-fuzz incremental-vs-fresh fuzz harness (see below)
-  bin/*.rs          Thin wrappers exposing the harnesses as cargo binaries
+  bin/*.rs          Thin syntax harness binary wrappers
   event.rs          EventSource trait + Poll -- abstracts terminal vs test input
 ```
 
 ### Dependency Graph
 
 ```
-main ──> app ──> editor ──> buffer
-                    |          |
-                    |          +──> history
-                    |          +──> syntax
-                    |
-                    +──> pane
-                    +──> minibuffer
-                    +──> command
-              app ──> render ──> editor (read-only)
-               |         |
-               +─────────+──> syntax_worker ──> syntax
-              app ──> keymap
-              app ──> event
+binary wrappers ──> lib entry functions
+                         |
+                         +──> runtime ──> app ──> editor ──> buffer
+                         |                 |          |          |
+                         |                 |          |          +──> history
+                         |                 |          |          +──> syntax
+                         |                 |          |
+                         |                 |          +──> pane
+                         |                 |          +──> minibuffer
+                         |                 |          +──> command
+                         |                 +──> render ──> editor (read-only)
+                         |                 |       |
+                         |                 +───────+──> syntax_worker ──> syntax
+                         |                 +──> keymap
+                         |                 +──> event
+                         +──> syntax-bench ──> syntax_worker ──> syntax
+                         +──> syntax-fuzz ──> buffer + syntax
 ```
 
 All rendering reads from `Editor` without mutating it. The `render()` function
@@ -949,6 +956,15 @@ to the stable-toolchain formatting, build, coverage, Clippy, fuzz-smoke, and
 benchmark-smoke checks, preventing the manifest and installation documentation
 from drifting below the compiler required by source or locked dependencies.
 Formatting runs before the more expensive build, test, and lint checks.
+
+All production modules and their unit tests belong to the single library
+target. The three binaries only call the library's narrow entry functions, so
+`cargo test --all-targets` executes each unit test once instead of rebuilding
+parent-relative module trees in the syntax harness binaries. The repository
+policy test requires `src/lib.rs` and parses `src/main.rs` plus `src/bin/*.rs`
+as Rust syntax, rejecting active module declarations, parent-relative `#[path]`
+attributes, and source-inclusion macros (`include!`, `include_str!`, and
+`include_bytes!`). Comments and string contents are not treated as active code.
 
 The editor is generic over `ratatui::Backend`. Production uses
 `CrosstermBackend<Stdout>`, tests use ratatui's `TestBackend`. Input is

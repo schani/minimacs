@@ -375,7 +375,7 @@ fn help_text() -> &'static str {
     )
 }
 
-pub(crate) fn main() {
+pub(crate) fn run() {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
     let options = match Options::parse(&args) {
         Ok(options) => options,
