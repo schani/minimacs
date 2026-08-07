@@ -42,7 +42,7 @@ fn key_release_does_not_advance_pending_chord() {
     let (mut app, mut events) = test_app(40, 10, events);
     app.run_until_idle(&mut events).unwrap();
     assert!(!app.editor.should_quit);
-    assert_eq!(app.editor.pending_keys, "C-x ");
+    assert_eq!(app.input.render_view(), "C-x ");
 
     let mut events = TestEventSource::new(vec![ctrl('c')]);
     app.run_until_idle(&mut events).unwrap();
@@ -130,7 +130,7 @@ fn cg_cancels_pending_keys() {
     let (mut app, mut events) = test_app(40, 10, events);
     app.run_until_idle(&mut events).unwrap();
     assert!(!app.editor.should_quit);
-    assert_eq!(app.editor.pending_keys, "");
+    assert_eq!(app.input.render_view(), "");
 }
 
 #[test]
@@ -152,7 +152,7 @@ fn pending_keys_show_in_mode_line() {
     let events = vec![ctrl('x')];
     let (mut app, mut events) = test_app(40, 10, events);
     app.run_until_idle(&mut events).unwrap();
-    assert!(!app.editor.pending_keys.is_empty());
+    assert!(!app.input.render_view().is_empty());
     let screen = capture_screen(&app.terminal);
     // Mode line should contain pending keys
     assert!(screen.contains("C-x"));
@@ -211,7 +211,7 @@ fn esc_shows_pending_indicator() {
     let events = vec![key(KeyCode::Esc)];
     let (mut app, mut events) = test_app(40, 10, events);
     app.run_until_idle(&mut events).unwrap();
-    assert!(app.editor.pending_keys.contains("ESC"));
+    assert!(app.input.render_view().contains("ESC"));
 }
 
 // === Input-state tests ===
@@ -229,7 +229,7 @@ fn cg_cancelled_chord_key_self_inserts() {
     let (mut app, mut events) = test_app(40, 10, events);
     app.run_until_idle(&mut events).unwrap();
     assert_eq!(app.editor.buffer_text(), "s");
-    assert_eq!(app.editor.pending_keys, "");
+    assert_eq!(app.input.render_view(), "");
 }
 
 #[test]
@@ -240,7 +240,7 @@ fn cg_cancels_pending_esc() {
     let (mut app, mut events) = test_app_with_text(40, 10, "hello world", events);
     app.run_until_idle(&mut events).unwrap();
     assert_eq!(app.editor.buffer_text(), "fhello world");
-    assert_eq!(app.editor.pending_keys, "");
+    assert_eq!(app.input.render_view(), "");
 }
 
 #[test]
@@ -282,7 +282,7 @@ fn paste_cancels_pending_chord() {
         app.editor.isearch.is_some(),
         "C-s after the paste starts isearch instead of completing C-x C-s"
     );
-    assert_eq!(app.editor.pending_keys, "", "no pending prefix remains");
+    assert_eq!(app.input.render_view(), "", "no pending prefix remains");
     assert_eq!(
         std::fs::read_to_string(&file).unwrap(),
         "original",
@@ -303,7 +303,7 @@ fn mouse_click_cancels_pending_chord() {
     let (mut app, mut events) = test_app_with_text(40, 10, "hello\nworld", events);
     app.run_until_idle(&mut events).unwrap();
 
-    assert_eq!(app.editor.pending_keys, "", "the click cancelled the chord");
+    assert_eq!(app.input.render_view(), "", "the click cancelled the chord");
     assert_eq!(
         app.editor.pane_tree.focus_path(),
         &[1],
@@ -433,5 +433,5 @@ fn mouse_motion_does_not_cancel_pending_chord() {
         mode_line_count >= 2,
         "C-x 2 across mouse motion should split, screen:\n{screen}"
     );
-    assert_eq!(app.editor.pending_keys, "", "chord completed");
+    assert_eq!(app.input.render_view(), "", "chord completed");
 }

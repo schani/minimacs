@@ -146,12 +146,88 @@ fn paste_is_single_undo_group() {
 }
 
 #[test]
+fn cy_paste_is_its_own_undo_group_after_typing() {
+    let (mut app, _) = test_app(40, 10, vec![]);
+    app.editor.clipboard = "hé".to_string();
+    let mut events = TestEventSource::new(vec![char_key('x'), ctrl('y'), ctrl('/')]);
+    app.run_until_idle(&mut events).unwrap();
+
+    assert_eq!(app.editor.buffer_text(), "x");
+    assert_eq!(app.editor.point(), 1);
+}
+
+#[test]
+fn bracketed_paste_matches_cy_for_unicode_normalization_and_point() {
+    let supplied = "hé\r\n你";
+    let (mut bracketed, mut events) = test_app(40, 10, vec![Event::Paste(supplied.to_string())]);
+    bracketed.run_until_idle(&mut events).unwrap();
+
+    let (mut yanked, _) = test_app(40, 10, vec![]);
+    yanked.editor.clipboard = supplied.to_string();
+    let mut events = TestEventSource::new(vec![ctrl('y')]);
+    yanked.run_until_idle(&mut events).unwrap();
+
+    assert_eq!(bracketed.editor.buffer_text(), "hé\n你");
+    assert_eq!(bracketed.editor.buffer_text(), yanked.editor.buffer_text());
+    assert_eq!(bracketed.editor.point(), 4);
+    assert_eq!(bracketed.editor.point(), yanked.editor.point());
+}
+
+#[test]
+fn large_multiline_bracketed_paste_keeps_cursor_visible_and_resets_goal_column() {
+    let pasted = (0..40)
+        .map(|line| format!("line {line}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let (mut app, _) = test_app(20, 6, vec![]);
+    app.editor.pane_tree.focused_pane_mut().preferred_column = Some(17);
+    let mut events = TestEventSource::new(vec![Event::Paste(pasted)]);
+    app.run_until_idle(&mut events).unwrap();
+
+    let pane = app.editor.pane_tree.focused_pane();
+    let (cursor_line, _) = app.editor.current_buffer().char_to_line_col(pane.point);
+    assert_eq!(cursor_line, 39);
+    assert!(
+        pane.scroll_top > 0,
+        "large paste must reveal its final line"
+    );
+    assert_eq!(pane.preferred_column, None);
+    let screen = capture_screen(&app.terminal);
+    assert!(screen.contains("line 39"), "screen: {screen}");
+}
+
+#[test]
 fn resize_event_handled() {
     let events = vec![Event::Resize(100, 50)];
     let (mut app, mut events) = test_app(40, 10, events);
     app.run_until_idle(&mut events).unwrap();
     // Should not crash — resize is a no-op
     assert!(!app.editor.should_quit);
+}
+
+#[test]
+fn resize_applies_new_viewport_before_revealing_cursor() {
+    let text = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    let (mut app, mut events) = test_app_with_text(20, 6, text, vec![]);
+    app.editor.pane_tree.focused_pane_mut().point = text.chars().count();
+    app.run_until_idle(&mut events).unwrap();
+    assert_eq!(app.editor.pane_tree.focused_pane().scroll_row_offset, 0);
+
+    app.terminal.backend_mut().resize(8, 6);
+    let mut events = TestEventSource::new(vec![Event::Resize(8, 6)]);
+    app.run_until_idle(&mut events).unwrap();
+
+    let pane = app.editor.pane_tree.focused_pane();
+    assert_eq!(pane.viewport_width, 8);
+    assert!(
+        pane.scroll_row_offset > 0,
+        "cursor must be reflowed into the narrower viewport"
+    );
+    let cursor = app.terminal.get_cursor_position().unwrap();
+    assert!(
+        cursor.y < 5,
+        "cursor must remain in the text viewport: {cursor:?}"
+    );
 }
 
 // === Multi-pane rendering ===

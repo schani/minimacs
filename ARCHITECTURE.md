@@ -117,7 +117,8 @@ binary wrappers ──> lib entry functions
 ```
 
 All rendering reads from `Editor` without mutating it. The `render()` function
-takes `&Editor` plus the syntax worker handle and produces a frame. Neutral
+takes `&Editor`, the syntax worker handle, and a small immutable pending-input
+view from `App`, then produces a frame. Neutral
 wrapped-line geometry lives in `display.rs`: editor cursor reveal, isearch
 reveal, mouse mapping, and render widgets all depend on it directly. The editor
 never depends on `render`; ratatui screen layout and widget orchestration remain
@@ -128,8 +129,12 @@ inside `render`.
 ### Editor
 
 Central state container. Owns all buffers, the pane tree, the clipboard, the
-minibuffer, and the incremental search state. All state mutation goes through
-`Editor::execute(Command)`, which dispatches to private methods.
+minibuffer, and the incremental search state. Interactive mutation enters
+through `Editor::execute(Command)` or an explicit narrow `Editor` intent method
+(for example isearch input, supplied-text paste, completion application, prompt
+submission, or cursor reveal after viewport reflow). These entry points keep
+state transitions inside `Editor` without exposing broad mutable access to
+`App`.
 
 ```rust
 struct Editor {
@@ -139,7 +144,6 @@ struct Editor {
     clipboard: String,
     cwd: PathBuf,
     should_quit: bool,
-    pending_keys: String,
     minibuffer: Minibuffer,
     minibuffer_buffer: Buffer,  // id=usize::MAX, not in buffers vec
     minibuffer_pane: Pane,      // viewport_height=1
@@ -473,12 +477,11 @@ All partially-consumed input lives in one struct, `InputState`, owned by
 - `esc_pending`: a bare ESC was seen; the next key gets the ALT modifier
   (ESC-as-Meta).
 
-`Editor::pending_keys` — the mode-line display of the pending input — is a
-mirror of this state (it lives on `Editor` because rendering only sees
-`&Editor`). Every mutation goes through `InputState` methods so the mirror
-stays in sync, and `InputState::reset()` is the single point that clears
-everything at once (a chord in progress, a pending ESC, and the mode-line
-indicator).
+`InputState` is the sole owner of the pending-input display, derived from its
+chord walk and pending-ESC flag. `App::render()` passes the renderer a small
+immutable `PendingInput` view; `Editor` has no mirror. `InputState::reset()` is
+the single point that clears everything at once (a chord in progress, a
+pending ESC, and therefore the derived mode-line indicator).
 
 ### Key routing (`handle_key`)
 
@@ -513,9 +516,12 @@ moving the mouse over the terminal must not cancel a chord in progress.
 `Event::Paste(text)` inserts the pasted text at point as a single undo group.
 When incremental search is active, the dispatcher instead routes the paste to
 `Editor::isearch_yank` (see the Incremental Search section).
-`Event::Mouse` handles left-button clicks. When the minibuffer is not active,
-a click determines which pane was clicked (using `calculate_rects()`), focuses
-that pane, and places the cursor at the clicked position. The position
+`Event::Mouse` handles left-button clicks. Both click and wheel paths use the
+canonical `screen_layout().pane_area` also consumed by viewport update and
+rendering; neither reconstructs a one-row minibuffer, so multi-row idle
+messages, prompts, and completion areas are outside pane mouse boundaries.
+When the minibuffer is not active, a click determines which pane was clicked
+(using `calculate_rects()`), focuses that pane, and places the cursor at the clicked position. The position
 calculation accounts for line wrapping, scroll position — including the
 pane's `scroll_row_offset`, added to the clicked screen row so wrap segments
 of a partially scrolled-off top line map correctly — and display-only tab
@@ -527,14 +533,21 @@ cursor by 3 **visual rows** (`scroll_down_visual_rows` /
 so the wheel moves smoothly through wrapped lines and can scroll within a
 single line taller than the viewport.
 `Event::Resize` is handled implicitly by the viewport update; it deliberately
-does not cancel a chord in progress.
+does not cancel a chord in progress. Whenever resize or dynamic
+minibuffer/completion layout changes pane dimensions, `update_viewport()`
+applies all new dimensions first and then calls `Editor::ensure_cursor_visible()`
+for the focused editing pane. That narrow Editor intent reveals an isearch
+match even though its prompt is active, but leaves the underlying pane alone
+for ordinary prompt editing. Unchanged dimensions skip the reveal so
+intentional mouse scrolling can leave point off-screen.
 
 ## Rendering
 
-`render::render(frame, &editor)` is called when visible state changes. It:
+`render::render(frame, &editor, &syntax_worker, PendingInput { display })` is
+called when visible state changes. It:
 
-1. Calls the shared `screen_layout()` calculation used by both rendering and
-   `App::update_viewport()`. It divides the terminal into the pane region, an
+1. Calls the shared `screen_layout()` calculation used by rendering,
+   `App::update_viewport()`, and both mouse paths. It divides the terminal into the pane region, an
    optional completion list, and a dynamically sized minibuffer.
 2. Walks `pane_tree.calculate_rects()` to get per-pane rectangles.
 3. For each pane:
@@ -866,9 +879,12 @@ Completion replaces the buffer contents as a single undo group using
 
 ### Completion List
 
-When Tab is pressed and multiple matches exist, `minibuffer.completions` is set
-to `Some(Vec<String>)` containing the display candidates. The completions field
-is cleared:
+When Tab is pressed App computes candidate strings, then passes one completion
+intent to `Editor::apply_minibuffer_completion`. Editor/Minibuffer own candidate
+replacement, prefix editing and undo boundaries, minibuffer point movement,
+and page reset/advance; App never assigns those fields. Multiple matches store
+the display candidates in `minibuffer.completions`. The list is cleared through
+Minibuffer lifecycle/intent methods:
 - Before keymap processing on any non-Tab/Enter key when minibuffer is active
 - On paste events
 - In `cancel()`, `finish()`, and `start_prompt()` lifecycle methods
@@ -891,11 +907,17 @@ modulo. A `[Page X/Y]` indicator appears in the bottom-right of the completions
 area when multiple pages exist. `completion_page` resets to 0 on typing, paste,
 `C-g`, Enter, or when the completion prefix changes.
 
-Pasted text is normalized (`Editor::normalized_paste`, used by both `C-y` and
-bracketed paste): in the minibuffer every line-break form (`\r\n`, `\r`, `\n`)
-becomes a space; in a buffer, every break form is unified to `\n` (the rope
-is LF-only regardless of the buffer's save-time `LineEnding`), so pasting
-CRLF text cannot smuggle in raw `\r` chars.
+Pasted text is an Editor-owned transaction. Bracketed-paste events route
+supplied text to `Editor::paste_supplied_text`; `C-y` obtains clipboard text
+and then converges on the same method. The transaction owns completion
+dismissal, normalization, one undo group, char-indexed point movement,
+preferred-column reset, and cursor reveal; App only cancels pending event
+state and routes the text. In the minibuffer every line-break form (`\r\n`,
+`\r`, `\n`) becomes a space; in a buffer, every break form is unified to `\n`
+(the rope is LF-only regardless of the buffer's save-time `LineEnding`), so
+pasting CRLF text cannot smuggle in raw `\r` chars. Empty bracketed paste keeps
+its prior semantics: it dismisses completions and forms an undo boundary but
+does not reset the preferred column; empty `C-y` only resets that column.
 
 ## Incremental Search
 
@@ -915,6 +937,17 @@ snapshot and caches the char positions of all matches in
 position. `C-s`/`C-r` during search cycle to the next/previous match by walking
 the cached list — no rescan. Enter accepts the position. `C-g` restores the
 original position.
+
+The `Editor` is the sole writer of isearch state and its minibuffer mirror.
+App translates keys into input, cycle, backspace, accept, or yank intents; it
+never assigns direction, query, prompt label, or mirrored minibuffer text and
+point. Typed input, paste, and grapheme-backspace converge on
+`isearch_set_query`, which synchronizes query, display/point, cached matches,
+selected match, failure state, and label as one transition. Match movement and
+viewport reflow both converge on `Editor::ensure_cursor_visible()`, the single
+owner of focused-pane reveal geometry. Isearch is the only active prompt for
+which that intent reveals the underlying pane; this keeps the match visible
+after terminal-width changes without making ordinary prompt edits scroll it.
 
 The prompt label is live, like emacs: it is recomputed from the search state
 (`isearch_sync_label`) after every query edit, cycle, and direction flip.

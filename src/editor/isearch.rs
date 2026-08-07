@@ -112,29 +112,10 @@ impl Editor {
     /// Move point to an isearch match and scroll it into view.
     fn isearch_goto_match(&mut self, char_pos: usize) {
         self.pane_tree.focused_pane_mut().point = char_pos;
-        let pane = self.pane_tree.focused_pane();
-        let scroll_top = pane.scroll_top;
-        let scroll_row_offset = pane.scroll_row_offset;
-        let vh = pane.viewport_height;
-        let vw = pane.viewport_width;
-        let buf = self.current_buffer();
-        let (line, col) = buf.char_to_line_col(char_pos);
-        let (cursor_row, _) = crate::display::visual_row_col_in_line(buf, line, col, vw);
-        let (new_top, new_offset) = crate::pane::compute_scroll_position(
-            scroll_top,
-            scroll_row_offset,
-            line,
-            cursor_row,
-            vh,
-            vw,
-            |l| crate::display::line_visual_width(buf, l),
-        );
-        let pane = self.pane_tree.focused_pane_mut();
-        pane.scroll_top = new_top;
-        pane.scroll_row_offset = new_offset;
         if let Some(ref mut isearch) = self.isearch {
             isearch.current_match = Some(char_pos);
         }
+        self.ensure_cursor_visible();
     }
 
     /// Called when isearch input changes — rescan the buffer once, cache all
@@ -185,36 +166,63 @@ impl Editor {
         self.isearch_sync_label();
     }
 
-    /// Append pasted text to the isearch query (emacs `isearch-yank`).
-    /// The query is a single line, so line breaks in the pasted text become
-    /// spaces (the standard minibuffer paste normalization); the minibuffer
-    /// display is synced to the query and the search re-runs.
-    pub fn isearch_yank(&mut self, text: &str) {
-        if self.isearch.is_none() {
+    /// Replace isearch input and synchronize every derived representation:
+    /// query, minibuffer display/point, cached matches, selected match, and
+    /// live prompt label. Typed input, paste, and backspace all use this one
+    /// transition so their state cannot drift apart.
+    fn isearch_set_query(&mut self, query: String) {
+        let Some(isearch) = self.isearch.as_mut() else {
             return;
-        }
-        let text = self.normalized_paste(text);
-        if let Some(ref mut isearch) = self.isearch {
-            isearch.query.push_str(&text);
-            let query = isearch.query.clone();
-            self.minibuffer_buffer.text = ropey::Rope::from_str(&query);
-            self.minibuffer_pane.point = query.chars().count();
-        }
+        };
+        isearch.query = query;
+        self.minibuffer_buffer.text = ropey::Rope::from_str(&isearch.query);
+        self.minibuffer_pane.point = isearch.query.chars().count();
         self.isearch_update();
     }
 
-    /// Remove one user-perceived character from the query and keep the
-    /// minibuffer mirror synchronized.
+    /// Append one typed character to the isearch query.
+    pub fn isearch_input_char(&mut self, ch: char) {
+        let Some(isearch) = &self.isearch else {
+            return;
+        };
+        let mut query = isearch.query.clone();
+        query.push(ch);
+        self.isearch_set_query(query);
+    }
+
+    /// Append pasted text to the isearch query (emacs `isearch-yank`).
+    /// The query is a single line, so line breaks in the pasted text become
+    /// spaces (the standard minibuffer paste normalization).
+    pub fn isearch_yank(&mut self, text: &str) {
+        let Some(isearch) = &self.isearch else {
+            return;
+        };
+        let mut query = isearch.query.clone();
+        query.push_str(&self.normalized_paste(text));
+        self.isearch_set_query(query);
+    }
+
+    /// Remove one user-perceived character from the query.
     pub fn isearch_backspace(&mut self) {
-        if let Some(ref mut isearch) = self.isearch {
-            if let Some((start, _)) = isearch.query.grapheme_indices(true).next_back() {
-                isearch.query.truncate(start);
-            }
-            let query = isearch.query.clone();
-            self.minibuffer_buffer.text = ropey::Rope::from_str(&query);
-            self.minibuffer_pane.point = query.chars().count();
+        let Some(isearch) = &self.isearch else {
+            return;
+        };
+        let mut query = isearch.query.clone();
+        if let Some((start, _)) = query.grapheme_indices(true).next_back() {
+            query.truncate(start);
         }
-        self.isearch_update();
+        self.isearch_set_query(query);
+    }
+
+    /// Set the search direction and cycle to the next match. Direction,
+    /// failure status, and the live prompt label are updated atomically from
+    /// App's perspective.
+    pub fn isearch_cycle(&mut self, direction: SearchDirection) {
+        let Some(isearch) = self.isearch.as_mut() else {
+            return;
+        };
+        isearch.direction = direction;
+        self.isearch_next();
     }
 
     /// Cycle to next/previous match during isearch, using the cached matches.

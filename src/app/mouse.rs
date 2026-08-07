@@ -29,17 +29,14 @@ where
         let click_x = mouse.column;
         let click_y = mouse.row;
 
-        // Calculate pane areas (same logic as update_viewport/render)
+        // Use the same canonical dynamic layout as viewport updates and
+        // rendering; idle messages and grown prompts are not one row.
         let size = self.terminal.size().unwrap_or_default();
-        let comp_height = render::completions_height(&self.editor, size.height, size.width);
-        let pane_area = ratatui::layout::Rect {
-            x: 0,
-            y: 0,
-            width: size.width,
-            height: size.height.saturating_sub(1 + comp_height),
-        };
-
-        let (pane_rects, _separators) = self.editor.pane_tree.calculate_rects(pane_area);
+        let layout = render::screen_layout(
+            &self.editor,
+            ratatui::layout::Rect::new(0, 0, size.width, size.height),
+        );
+        let (pane_rects, _separators) = self.editor.pane_tree.calculate_rects(layout.pane_area);
 
         // Find which pane was clicked
         for (path, rect) in &pane_rects {
@@ -126,15 +123,11 @@ where
         let scroll_y = mouse.row;
 
         let size = self.terminal.size().unwrap_or_default();
-        let comp_height = render::completions_height(&self.editor, size.height, size.width);
-        let pane_area = ratatui::layout::Rect {
-            x: 0,
-            y: 0,
-            width: size.width,
-            height: size.height.saturating_sub(1 + comp_height),
-        };
-
-        let (pane_rects, _separators) = self.editor.pane_tree.calculate_rects(pane_area);
+        let layout = render::screen_layout(
+            &self.editor,
+            ratatui::layout::Rect::new(0, 0, size.width, size.height),
+        );
+        let (pane_rects, _separators) = self.editor.pane_tree.calculate_rects(layout.pane_area);
         // One wheel notch scrolls 3 visual rows, so wrapped lines — even a
         // single line taller than the viewport — scroll through smoothly.
         let scroll_rows: usize = 3;

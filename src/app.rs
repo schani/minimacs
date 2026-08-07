@@ -128,13 +128,13 @@ where
                 true
             }
             Event::Paste(text) => {
-                self.input.reset(&mut self.editor);
+                self.input.reset();
                 // Paste during isearch extends the query (isearch-yank)
                 // instead of inserting into a buffer.
                 if self.editor.isearch.is_some() {
                     self.editor.isearch_yank(&text);
                 } else {
-                    self.handle_paste(&text);
+                    self.editor.paste_supplied_text(&text);
                 }
                 true
             }
@@ -142,7 +142,7 @@ where
                 MouseEventKind::Down(MouseButton::Left)
                 | MouseEventKind::ScrollUp
                 | MouseEventKind::ScrollDown => {
-                    self.input.reset(&mut self.editor);
+                    self.input.reset();
                     self.handle_mouse(mouse_event);
                     true
                 }
@@ -167,17 +167,33 @@ where
         );
 
         let (pane_rects, _separators) = self.editor.pane_tree.calculate_rects(layout.pane_area);
+        let mut dimensions_changed = false;
         for (path, rect) in &pane_rects {
             // Each pane rect includes 1 row for mode line
             let text_height = rect.height.saturating_sub(1) as usize;
             let text_width = rect.width as usize;
+            let pane = self.editor.pane_tree.pane_at_focus_path(path);
+            dimensions_changed |=
+                pane.viewport_height != text_height || pane.viewport_width != text_width;
             self.editor
                 .pane_tree
                 .update_pane_viewport(path, text_height, text_width);
         }
 
-        self.editor.minibuffer_pane.viewport_width = layout.minibuffer_area.width as usize;
-        self.editor.minibuffer_pane.viewport_height = layout.minibuffer_area.height as usize;
+        let minibuffer_width = layout.minibuffer_area.width as usize;
+        let minibuffer_height = layout.minibuffer_area.height as usize;
+        dimensions_changed |= self.editor.minibuffer_pane.viewport_width != minibuffer_width
+            || self.editor.minibuffer_pane.viewport_height != minibuffer_height;
+        self.editor.minibuffer_pane.viewport_width = minibuffer_width;
+        self.editor.minibuffer_pane.viewport_height = minibuffer_height;
+
+        // Reflow can move point below the viewport even though no editing
+        // command ran. Apply every new dimension first, then reveal the
+        // focused cursor. Unchanged dimensions do not undo intentional mouse
+        // scrolling that leaves point off-screen.
+        if dimensions_changed {
+            self.editor.ensure_cursor_visible();
+        }
     }
 
     pub fn render(&mut self) -> Result<()> {
@@ -186,8 +202,10 @@ where
             self.renders += 1;
         }
         let editor = &self.editor;
+        let pending = self.input.render_view();
+        let pending_input = render::PendingInput { display: &pending };
         self.terminal.draw(|frame| {
-            render::render(frame, editor, &self.syntax_worker);
+            render::render(frame, editor, &self.syntax_worker, pending_input);
         })?;
         Ok(())
     }

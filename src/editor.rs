@@ -107,7 +107,6 @@ pub struct Editor {
     /// Set when the user aborts via the quit prompt's `a` answer; main exits
     /// non-zero so callers like git abandon the operation.
     pub quit_abort: bool,
-    pub pending_keys: String,
     pub minibuffer: Minibuffer,
     pub minibuffer_buffer: Buffer,
     pub minibuffer_pane: Pane,
@@ -135,7 +134,6 @@ impl Editor {
             cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             should_quit: false,
             quit_abort: false,
-            pending_keys: String::new(),
             minibuffer: Minibuffer::new(),
             minibuffer_buffer: Buffer::from_str(usize::MAX, "*minibuffer*", ""),
             minibuffer_pane: mb_pane,
@@ -160,7 +158,6 @@ impl Editor {
             cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             should_quit: false,
             quit_abort: false,
-            pending_keys: String::new(),
             minibuffer: Minibuffer::new(),
             minibuffer_buffer: Buffer::from_str(usize::MAX, "*minibuffer*", ""),
             minibuffer_pane: mb_pane,
@@ -253,6 +250,37 @@ impl Editor {
 
     pub fn buffer_names(&self) -> Vec<String> {
         self.buffers.iter().map(|b| b.name.clone()).collect()
+    }
+
+    /// Completion lifecycle intent for ordinary minibuffer input.
+    pub(crate) fn dismiss_minibuffer_completions(&mut self) {
+        self.minibuffer.dismiss_completions();
+    }
+
+    /// Apply one Tab-completion result while keeping candidate display,
+    /// prefix replacement, undo history, minibuffer point, and paging under
+    /// Editor/Minibuffer ownership.
+    pub(crate) fn apply_minibuffer_completion(
+        &mut self,
+        input: &str,
+        completed: String,
+        candidates: Vec<String>,
+    ) {
+        let had_completions = self.minibuffer.has_completions();
+        self.minibuffer.set_completion_candidates(candidates);
+
+        if completed != input {
+            self.minibuffer_buffer.history.commit();
+            let old_len = self.minibuffer_buffer.char_count();
+            self.apply_edit(0, old_len, &completed, EditRecord::Replace);
+            self.minibuffer_buffer.history.commit();
+            self.minibuffer_pane.point = completed.chars().count();
+            self.minibuffer.reset_completion_page();
+        } else if had_completions && self.minibuffer.has_completions() {
+            self.minibuffer.advance_completion_page();
+        } else {
+            self.minibuffer.reset_completion_page();
+        }
     }
 
     /// Get the ordered region (start, end) for the focused pane.
@@ -365,12 +393,16 @@ impl Editor {
         self.ensure_cursor_visible();
     }
 
-    /// Scroll the focused pane so its point is visible. Runs after every
-    /// command and after minibuffer prompt submission (which moves point
-    /// outside of `execute()`, e.g. goto-line). No-op while a prompt is
-    /// active — the minibuffer pane has its own cursor.
+    /// Scroll the focused editing pane so its point is visible. Runs after
+    /// every command, after minibuffer prompt submission (which can move
+    /// point outside `execute()`, e.g. goto-line), and after viewport reflow.
+    ///
+    /// Ordinary prompts leave the underlying pane alone while their input is
+    /// edited. Isearch is the exception: its prompt is active while point in
+    /// the focused pane tracks the selected match, so resize reflow must keep
+    /// that point visible.
     pub(crate) fn ensure_cursor_visible(&mut self) {
-        if self.minibuffer.is_active() {
+        if self.minibuffer.is_active() && self.isearch.is_none() {
             return;
         }
         let pane = self.pane_tree.focused_pane();
@@ -1189,14 +1221,37 @@ impl Editor {
         let text = self
             .get_os_clipboard()
             .unwrap_or_else(|| self.clipboard.clone());
+        if text.is_empty() {
+            // Preserve C-y's existing empty-paste behavior: it resets the
+            // goal column but does not create an edit or undo boundary.
+            self.active_pane_mut().preferred_column = None;
+            return;
+        }
+        self.paste_supplied_text(&text);
+    }
+
+    /// Insert text supplied by an input event as one editor-owned paste
+    /// transaction. Both bracketed paste and C-y converge here after C-y has
+    /// obtained clipboard text. Normalization, completion lifecycle, undo
+    /// grouping, point/goal-column updates, and cursor reveal stay together.
+    pub(crate) fn paste_supplied_text(&mut self, text: &str) {
+        self.clear_last_command();
+        if self.minibuffer.is_active() {
+            self.minibuffer.dismiss_completions();
+        }
+
+        // Preserve bracketed empty-paste semantics: it is an undo boundary
+        // and dismisses completions, but does not reset the goal column.
+        self.active_buffer_mut().history.commit();
+        let text = self.normalized_paste(text);
         if !text.is_empty() {
-            let text = self.normalized_paste(&text);
             let pos = self.active_pane().point;
             self.apply_edit(pos, pos, &text, EditRecord::Insert);
-            self.active_buffer_mut().history.commit();
             self.active_pane_mut().point = pos + text.chars().count();
+            self.active_pane_mut().preferred_column = None;
         }
-        self.active_pane_mut().preferred_column = None;
+        self.active_buffer_mut().history.commit();
+        self.ensure_cursor_visible();
     }
 
     fn set_os_clipboard(&mut self, text: &str) {

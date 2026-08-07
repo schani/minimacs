@@ -342,6 +342,29 @@ impl Minibuffer {
         self.completion_page = 0;
     }
 
+    pub fn has_completions(&self) -> bool {
+        self.completions.is_some()
+    }
+
+    /// Replace displayed candidates; an empty set dismisses the list.
+    pub fn set_completion_candidates(&mut self, candidates: Vec<String>) {
+        self.completions = (!candidates.is_empty()).then_some(candidates);
+    }
+
+    pub fn reset_completion_page(&mut self) {
+        self.completion_page = 0;
+    }
+
+    pub fn advance_completion_page(&mut self) {
+        self.completion_page += 1;
+    }
+
+    /// Dismiss the completion list and reset paging after input changes.
+    pub fn dismiss_completions(&mut self) {
+        self.completions = None;
+        self.reset_completion_page();
+    }
+
     pub fn show_message(&mut self, msg: String) {
         self.message = Some(msg);
     }
