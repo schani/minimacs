@@ -27,13 +27,11 @@ impl Editor {
     /// Replace the minibuffer input and reset its edit state (history, mark,
     /// scroll), leaving any active prompt untouched.
     fn set_minibuffer_input(&mut self, input: &str) {
-        self.minibuffer_buffer.text = ropey::Rope::from_str(input);
-        self.minibuffer_buffer.modified = false;
-        self.minibuffer_buffer.history = crate::history::History::new();
-        self.minibuffer_pane.point = input.chars().count();
-        self.minibuffer_pane.mark = None;
-        self.minibuffer_pane.scroll_top = 0;
-        self.minibuffer_pane.preferred_column = None;
+        self.minibuffer_buffer.reset_transient_text(input);
+        self.minibuffer_pane.set_point(input.chars().count());
+        self.minibuffer_pane.set_mark(None);
+        self.minibuffer_pane.set_scroll_position(0, 0);
+        self.minibuffer_pane.set_preferred_column(None);
     }
 
     /// Start a minibuffer prompt with initial text. No-op if already active.
@@ -47,7 +45,7 @@ impl Editor {
 
     /// Read the current minibuffer text.
     pub fn minibuffer_text(&self) -> String {
-        self.minibuffer_buffer.text.to_string()
+        self.minibuffer_buffer.text().to_string()
     }
 
     /// Turn path-prompt input into the path to act on: normalize it (tilde
@@ -86,7 +84,7 @@ impl Editor {
     fn default_path_prompt_input(&self) -> String {
         let dir = self
             .current_buffer()
-            .path
+            .path()
             .as_ref()
             .and_then(|p| p.parent())
             .unwrap_or(&self.cwd);
@@ -102,9 +100,7 @@ impl Editor {
     /// messages are invisible while a prompt is active) and restore the
     /// default directory prefill.
     fn reask_path_prompt(&mut self, label: &str) {
-        if let Some(prompt) = self.minibuffer.prompt_mut() {
-            prompt.label = label.to_string();
-        }
+        self.minibuffer.set_prompt_label(label);
         let input = self.default_path_prompt_input();
         self.set_minibuffer_input(&input);
     }
@@ -142,7 +138,7 @@ impl Editor {
 
     fn dispatch_prompt(&mut self) {
         let kind = match self.minibuffer.prompt() {
-            Some(p) => p.kind.clone(),
+            Some(p) => p.kind(),
             None => return,
         };
         let input = self.minibuffer_text();
@@ -168,8 +164,8 @@ impl Editor {
                     return;
                 };
                 self.minibuffer.finish();
-                let buffer_id = self.current_buffer().id;
-                let own_path = self.current_buffer().path.as_deref() == Some(path.as_path());
+                let buffer_id = self.current_buffer().id();
+                let own_path = self.current_buffer().path() == Some(path.as_path());
                 if path.exists() && !own_path {
                     self.start_minibuffer_prompt(
                         PromptKind::OverwriteConfirm {
@@ -194,7 +190,7 @@ impl Editor {
                     Ok(line_num) if line_num > 0 => {
                         let target_line = line_num - 1;
                         let char_pos = self.current_buffer().line_col_to_char(target_line, 0);
-                        self.pane_tree.focused_pane_mut().point = char_pos;
+                        self.pane_tree.set_focused_point(char_pos);
                     }
                     _ => self
                         .minibuffer
@@ -257,8 +253,8 @@ impl Editor {
                         let buf_state = self
                             .buffers
                             .iter()
-                            .find(|b| b.id == buffer_id)
-                            .map(|b| (b.path.is_some(), b.name.clone()));
+                            .find(|b| b.id() == buffer_id)
+                            .map(|b| (b.path().is_some(), b.name().to_string()));
                         match buf_state {
                             Some((true, _)) => {
                                 // The quit-time save honors the external-
@@ -315,8 +311,8 @@ impl Editor {
         self.quit_pending = self
             .buffers
             .iter()
-            .filter(|b| b.modified)
-            .map(|b| b.id)
+            .filter(|b| b.is_modified())
+            .map(|b| b.id())
             .collect();
         self.continue_quit();
     }
@@ -325,8 +321,8 @@ impl Editor {
     /// sequence: on success drop it from `quit_pending` and continue with
     /// the next buffer; on failure cancel the whole quit with a message.
     fn quit_save_and_continue(&mut self, buffer_id: usize) {
-        let name = match self.buffers.iter().find(|b| b.id == buffer_id) {
-            Some(buf) => buf.name.clone(),
+        let name = match self.buffers.iter().find(|b| b.id() == buffer_id) {
+            Some(buf) => buf.name().to_string(),
             None => {
                 // Buffer disappeared in the meantime; skip it.
                 self.quit_pending.retain(|&id| id != buffer_id);
@@ -351,9 +347,9 @@ impl Editor {
     /// decision, or quit once none remain.
     fn continue_quit(&mut self) {
         while let Some(&id) = self.quit_pending.first() {
-            match self.buffers.iter().find(|b| b.id == id) {
-                Some(buf) if buf.modified => {
-                    let name = buf.name.clone();
+            match self.buffers.iter().find(|b| b.id() == id) {
+                Some(buf) if buf.is_modified() => {
+                    let name = buf.name().to_string();
                     self.start_minibuffer_prompt(
                         PromptKind::QuitSaveConfirm { buffer_id: id },
                         &format!("Save buffer {name}? (y/n/q, a aborts) "),

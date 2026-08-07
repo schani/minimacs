@@ -4,15 +4,12 @@ use super::*;
 fn isearch_no_match() {
     let mut editor = Editor::new_with_text("hello world");
     editor.execute(Command::ISearchForward);
-    if let Some(ref mut isearch) = editor.isearch {
-        isearch.query = "xyz".to_string();
-    }
-    editor.isearch_update();
+    drive_isearch_query(&mut editor, "xyz");
     // A failing search shows in the prompt label, not as a queued message.
-    assert_eq!(editor.minibuffer.message, None);
-    assert!(editor.isearch.as_ref().unwrap().failing);
+    assert_eq!(editor.minibuffer.message(), None);
+    assert!(editor.isearch.as_ref().unwrap().is_failing());
     assert_eq!(
-        editor.minibuffer.prompt().unwrap().label,
+        editor.minibuffer.prompt().unwrap().label(),
         "Failing I-search: "
     );
 }
@@ -21,19 +18,16 @@ fn isearch_no_match() {
 fn isearch_next_no_more_matches() {
     let mut editor = Editor::new_with_text("hello world");
     editor.execute(Command::ISearchForward);
-    if let Some(ref mut isearch) = editor.isearch {
-        isearch.query = "hello".to_string();
-    }
-    editor.isearch_update();
-    assert_eq!(editor.minibuffer.prompt().unwrap().label, "I-search: ");
+    drive_isearch_query(&mut editor, "hello");
+    assert_eq!(editor.minibuffer.prompt().unwrap().label(), "I-search: ");
     // Try to cycle — no more matches
     editor.isearch_next();
-    assert!(editor.isearch.as_ref().unwrap().failing);
+    assert!(editor.isearch.as_ref().unwrap().is_failing());
     assert!(editor
         .minibuffer
         .prompt()
         .unwrap()
-        .label
+        .label()
         .contains("Failing"));
 }
 
@@ -41,12 +35,9 @@ fn isearch_next_no_more_matches() {
 fn isearch_backward_finds_match() {
     let mut editor = Editor::new_with_text("hello world hello");
     // Move to end
-    editor.pane_tree.focused_pane_mut().point = 17;
+    editor.pane_tree.set_focused_point(17);
     editor.execute(Command::ISearchBackward);
-    if let Some(ref mut isearch) = editor.isearch {
-        isearch.query = "hello".to_string();
-    }
-    editor.isearch_update();
+    drive_isearch_query(&mut editor, "hello");
     // rfind from position 17 finds the last "hello" before cursor = position 12
     assert_eq!(editor.point(), 12);
 }
@@ -54,12 +45,9 @@ fn isearch_backward_finds_match() {
 #[test]
 fn isearch_next_backward() {
     let mut editor = Editor::new_with_text("ab ab ab");
-    editor.pane_tree.focused_pane_mut().point = 8;
+    editor.pane_tree.set_focused_point(8);
     editor.execute(Command::ISearchBackward);
-    if let Some(ref mut isearch) = editor.isearch {
-        isearch.query = "ab".to_string();
-    }
-    editor.isearch_update();
+    drive_isearch_query(&mut editor, "ab");
     // First backward match from end
     let first = editor.point();
     editor.isearch_next();
@@ -68,7 +56,7 @@ fn isearch_next_backward() {
         editor.point() < first
             || editor
                 .minibuffer
-                .message
+                .message()
                 .as_ref()
                 .unwrap()
                 .contains("Failing")
@@ -78,18 +66,12 @@ fn isearch_next_backward() {
 #[test]
 fn isearch_empty_query_restores() {
     let mut editor = Editor::new_with_text("hello world");
-    editor.pane_tree.focused_pane_mut().point = 5;
+    editor.pane_tree.set_focused_point(5);
     editor.execute(Command::ISearchForward);
-    if let Some(ref mut isearch) = editor.isearch {
-        isearch.query = "world".to_string();
-    }
-    editor.isearch_update();
+    drive_isearch_query(&mut editor, "world");
     assert_eq!(editor.point(), 6);
     // Clear query → should restore
-    if let Some(ref mut isearch) = editor.isearch {
-        isearch.query = String::new();
-    }
-    editor.isearch_update();
+    drive_isearch_query(&mut editor, "");
     assert_eq!(editor.point(), 5);
 }
 
@@ -109,13 +91,13 @@ fn buffer_names_list() {
 #[test]
 fn undo_restores_unmodified_state() {
     let mut editor = Editor::new_with_text("hello");
-    assert!(!editor.current_buffer().modified);
+    assert!(!editor.current_buffer().is_modified());
     editor.execute(Command::InsertChar('X'));
-    assert!(editor.current_buffer().modified);
+    assert!(editor.current_buffer().is_modified());
     editor.commit_undo_group();
     editor.execute(Command::Undo);
     assert!(
-        !editor.current_buffer().modified,
+        !editor.current_buffer().is_modified(),
         "Buffer should be unmodified after undoing to original state"
     );
 }
@@ -128,22 +110,22 @@ fn undo_redo_preserves_modified_after_save() {
 
     let mut editor = Editor::new();
     editor.open_file(&file).unwrap();
-    assert!(!editor.current_buffer().modified);
+    assert!(!editor.current_buffer().is_modified());
 
     // Make an edit and save
     editor.execute(Command::InsertChar('X'));
     editor.execute(Command::Save);
-    assert!(!editor.current_buffer().modified);
+    assert!(!editor.current_buffer().is_modified());
 
     // Make another edit
     editor.execute(Command::InsertChar('Y'));
-    assert!(editor.current_buffer().modified);
+    assert!(editor.current_buffer().is_modified());
 
     // Undo back to saved state
     editor.commit_undo_group();
     editor.execute(Command::Undo);
     assert!(
-        !editor.current_buffer().modified,
+        !editor.current_buffer().is_modified(),
         "Should be unmodified after undoing to last save point"
     );
 }
@@ -155,8 +137,8 @@ fn insert_newline_copies_indentation_across_rope_chunks() {
     let indentation = " ".repeat(2_000);
     let source = format!("{indentation}value");
     let mut editor = Editor::new_with_text(&source);
-    assert!(editor.current_buffer().text.chunks().count() > 1);
-    editor.pane_tree.focused_pane_mut().point = source.chars().count();
+    assert!(editor.current_buffer().text().chunks().count() > 1);
+    editor.pane_tree.set_focused_point(source.chars().count());
 
     editor.execute(Command::InsertNewline);
 
@@ -167,7 +149,7 @@ fn insert_newline_copies_indentation_across_rope_chunks() {
 fn insert_newline_copies_indentation() {
     let mut editor = Editor::new_with_text("    hello");
     // Place cursor at end of "hello"
-    editor.pane_tree.focused_pane_mut().point = 9;
+    editor.pane_tree.set_focused_point(9);
     editor.execute(Command::InsertNewline);
     assert_eq!(editor.buffer_text(), "    hello\n    ");
     assert_eq!(editor.point(), 14); // after the 4 spaces on new line
@@ -176,7 +158,7 @@ fn insert_newline_copies_indentation() {
 #[test]
 fn insert_newline_no_indent_at_column_zero() {
     let mut editor = Editor::new_with_text("hello");
-    editor.pane_tree.focused_pane_mut().point = 5;
+    editor.pane_tree.set_focused_point(5);
     editor.execute(Command::InsertNewline);
     assert_eq!(editor.buffer_text(), "hello\n");
     assert_eq!(editor.point(), 6);
@@ -185,7 +167,7 @@ fn insert_newline_no_indent_at_column_zero() {
 #[test]
 fn insert_newline_mid_line_preserves_indent() {
     let mut editor = Editor::new_with_text("    helloworld");
-    editor.pane_tree.focused_pane_mut().point = 9; // between "hello" and "world"
+    editor.pane_tree.set_focused_point(9); // between "hello" and "world"
     editor.execute(Command::InsertNewline);
     assert_eq!(editor.buffer_text(), "    hello\n    world");
     assert_eq!(editor.point(), 14);
@@ -194,7 +176,7 @@ fn insert_newline_mid_line_preserves_indent() {
 #[test]
 fn indent_line_single() {
     let mut editor = Editor::new_with_text("hello");
-    editor.pane_tree.focused_pane_mut().point = 2;
+    editor.pane_tree.set_focused_point(2);
     editor.execute(Command::IndentLine);
     assert_eq!(editor.buffer_text(), "    hello");
     assert_eq!(editor.point(), 6); // 2 + 4
@@ -204,9 +186,9 @@ fn indent_line_single() {
 fn indent_line_with_region() {
     let mut editor = Editor::new_with_text("aaa\nbbb\nccc");
     // Select all three lines
-    let pane = editor.pane_tree.focused_pane_mut();
-    pane.point = 0;
-    pane.mark = Some(11); // end of "ccc"
+    editor
+        .pane_tree
+        .set_focused_point_mark_and_preferred(0, Some(11), None); // end of "ccc"
     editor.execute(Command::IndentLine);
     assert_eq!(editor.buffer_text(), "    aaa\n    bbb\n    ccc");
 }
@@ -214,7 +196,7 @@ fn indent_line_with_region() {
 #[test]
 fn dedent_line_single() {
     let mut editor = Editor::new_with_text("    hello");
-    editor.pane_tree.focused_pane_mut().point = 6; // on 'l'
+    editor.pane_tree.set_focused_point(6); // on 'l'
     editor.execute(Command::DedentLine);
     assert_eq!(editor.buffer_text(), "hello");
     assert_eq!(editor.point(), 2); // 6 - 4
@@ -223,7 +205,7 @@ fn dedent_line_single() {
 #[test]
 fn dedent_line_partial_spaces() {
     let mut editor = Editor::new_with_text("  hello");
-    editor.pane_tree.focused_pane_mut().point = 4;
+    editor.pane_tree.set_focused_point(4);
     editor.execute(Command::DedentLine);
     assert_eq!(editor.buffer_text(), "hello");
     assert_eq!(editor.point(), 2); // 4 - 2
@@ -232,7 +214,7 @@ fn dedent_line_partial_spaces() {
 #[test]
 fn dedent_line_no_leading_spaces() {
     let mut editor = Editor::new_with_text("hello");
-    editor.pane_tree.focused_pane_mut().point = 2;
+    editor.pane_tree.set_focused_point(2);
     editor.execute(Command::DedentLine);
     assert_eq!(editor.buffer_text(), "hello");
     assert_eq!(editor.point(), 2); // unchanged
@@ -241,9 +223,9 @@ fn dedent_line_no_leading_spaces() {
 #[test]
 fn dedent_line_with_region() {
     let mut editor = Editor::new_with_text("    aaa\n    bbb\n    ccc");
-    let pane = editor.pane_tree.focused_pane_mut();
-    pane.point = 0;
-    pane.mark = Some(23); // end of text
+    editor
+        .pane_tree
+        .set_focused_point_mark_and_preferred(0, Some(23), None); // end of text
     editor.execute(Command::DedentLine);
     assert_eq!(editor.buffer_text(), "aaa\nbbb\nccc");
 }
@@ -252,9 +234,9 @@ fn dedent_line_with_region() {
 fn region_end_at_col0_excludes_last_line() {
     let mut editor = Editor::new_with_text("aaa\nbbb\nccc");
     // Region covers first two lines, but end is at start of "ccc"
-    let pane = editor.pane_tree.focused_pane_mut();
-    pane.point = 0;
-    pane.mark = Some(8); // start of "ccc" line (col 0)
+    editor
+        .pane_tree
+        .set_focused_point_mark_and_preferred(0, Some(8), None); // start of "ccc" line (col 0)
     editor.execute(Command::IndentLine);
     assert_eq!(editor.buffer_text(), "    aaa\n    bbb\nccc");
 }
@@ -262,7 +244,7 @@ fn region_end_at_col0_excludes_last_line() {
 #[test]
 fn undo_reverses_indent() {
     let mut editor = Editor::new_with_text("hello");
-    editor.pane_tree.focused_pane_mut().point = 2;
+    editor.pane_tree.set_focused_point(2);
     editor.execute(Command::IndentLine);
     assert_eq!(editor.buffer_text(), "    hello");
     editor.execute(Command::Undo);
@@ -272,9 +254,9 @@ fn undo_reverses_indent() {
 #[test]
 fn undo_reverses_region_indent() {
     let mut editor = Editor::new_with_text("aaa\nbbb\nccc");
-    let pane = editor.pane_tree.focused_pane_mut();
-    pane.point = 0;
-    pane.mark = Some(11);
+    editor
+        .pane_tree
+        .set_focused_point_mark_and_preferred(0, Some(11), None);
     editor.execute(Command::IndentLine);
     assert_eq!(editor.buffer_text(), "    aaa\n    bbb\n    ccc");
     editor.execute(Command::Undo);
@@ -284,18 +266,18 @@ fn undo_reverses_region_indent() {
 #[test]
 fn preferred_column_cleared_after_indent() {
     let mut editor = Editor::new_with_text("hello");
-    editor.pane_tree.focused_pane_mut().preferred_column = Some(5);
+    editor.pane_tree.set_focused_preferred_column(Some(5));
     editor.execute(Command::IndentLine);
-    assert_eq!(editor.pane_tree.focused_pane().preferred_column, None);
+    assert_eq!(editor.pane_tree.focused_pane().preferred_column(), None);
 }
 
 #[test]
 fn preferred_column_cleared_after_dedent() {
     let mut editor = Editor::new_with_text("    hello");
-    editor.pane_tree.focused_pane_mut().preferred_column = Some(5);
-    editor.pane_tree.focused_pane_mut().point = 6;
+    editor.pane_tree.set_focused_preferred_column(Some(5));
+    editor.pane_tree.set_focused_point(6);
     editor.execute(Command::DedentLine);
-    assert_eq!(editor.pane_tree.focused_pane().preferred_column, None);
+    assert_eq!(editor.pane_tree.focused_pane().preferred_column(), None);
 }
 
 // === Consecutive kill-line accumulation tests ===
@@ -399,10 +381,7 @@ fn kill_chain_does_not_survive_isearch_accept() {
     assert_eq!(editor.clipboard, "hello there");
 
     editor.execute(Command::ISearchForward);
-    if let Some(ref mut isearch) = editor.isearch {
-        isearch.query = "world".to_string();
-    }
-    editor.isearch_update();
+    drive_isearch_query(&mut editor, "world");
     editor.isearch_accept();
     assert_eq!(editor.last_command, None);
 

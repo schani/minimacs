@@ -7,13 +7,43 @@ fn isearch_forward_basic() {
     assert!(editor.isearch.is_some());
     assert!(editor.minibuffer.is_active());
 
-    // Type "world" into search
-    if let Some(ref mut isearch) = editor.isearch {
-        isearch.query = "world".to_string();
-    }
-    editor.isearch_update();
+    // Type "world" into search through the production transition.
+    drive_isearch_query(&mut editor, "world");
     // Should find "world" at char position 6
     assert_eq!(editor.point(), 6);
+}
+
+#[test]
+fn isearch_query_helper_keeps_derived_state_coherent() {
+    let mut editor = Editor::new_with_text("alpha beta alpha");
+    editor.execute(Command::ISearchForward);
+
+    drive_isearch_query(&mut editor, "beta");
+
+    let isearch = editor.isearch.as_ref().unwrap();
+    assert_eq!(isearch.query(), "beta");
+    assert_eq!(editor.minibuffer_buffer.text().to_string(), "beta");
+    assert_eq!(editor.minibuffer_pane.point(), 4);
+    assert_eq!(isearch.matches(), &[6]);
+    assert_eq!(isearch.current_match(), Some(6));
+    assert!(!isearch.is_failing());
+    assert_eq!(editor.minibuffer.prompt().unwrap().label(), "I-search: ");
+    assert_eq!(editor.point(), 6);
+
+    drive_isearch_query(&mut editor, "missing");
+
+    let isearch = editor.isearch.as_ref().unwrap();
+    assert_eq!(isearch.query(), "missing");
+    assert_eq!(editor.minibuffer_buffer.text().to_string(), "missing");
+    assert_eq!(editor.minibuffer_pane.point(), 7);
+    assert!(isearch.matches().is_empty());
+    assert_eq!(isearch.current_match(), None);
+    assert!(isearch.is_failing());
+    assert_eq!(
+        editor.minibuffer.prompt().unwrap().label(),
+        "Failing I-search: "
+    );
+    assert_eq!(editor.point(), 0);
 }
 
 #[test]
@@ -21,13 +51,12 @@ fn isearch_snapshots_a_multi_chunk_buffer_once() {
     let prefix = "λ".repeat(2_000);
     let source = format!("{prefix} needle終");
     let mut editor = Editor::new_with_text(&source);
-    assert!(editor.current_buffer().text.chunks().count() > 1);
+    assert!(editor.current_buffer().text().chunks().count() > 1);
 
     editor.execute(Command::ISearchForward);
-    assert_eq!(editor.isearch.as_ref().unwrap().text_snapshot, source);
+    assert_eq!(editor.isearch.as_ref().unwrap().text_snapshot(), source);
 
-    editor.isearch.as_mut().unwrap().query = "needle終".to_string();
-    editor.isearch_update();
+    drive_isearch_query(&mut editor, "needle終");
     assert_eq!(editor.point(), prefix.chars().count() + 1);
 }
 
@@ -35,14 +64,11 @@ fn isearch_snapshots_a_multi_chunk_buffer_once() {
 fn isearch_backward_basic() {
     let mut editor = Editor::new_with_text("hello world hello");
     // Start at end
-    editor.pane_tree.focused_pane_mut().point = 17;
+    editor.pane_tree.set_focused_point(17);
     editor.execute(Command::ISearchBackward);
     assert!(editor.isearch.is_some());
 
-    if let Some(ref mut isearch) = editor.isearch {
-        isearch.query = "hello".to_string();
-    }
-    editor.isearch_update();
+    drive_isearch_query(&mut editor, "hello");
     // Should find "hello" at position 12 (second occurrence, backward from 17)
     assert_eq!(editor.point(), 12);
 }
@@ -53,10 +79,7 @@ fn isearch_cancel_restores_position() {
     assert_eq!(editor.point(), 0);
     editor.execute(Command::ISearchForward);
 
-    if let Some(ref mut isearch) = editor.isearch {
-        isearch.query = "world".to_string();
-    }
-    editor.isearch_update();
+    drive_isearch_query(&mut editor, "world");
     assert_eq!(editor.point(), 6); // Found at "world"
 
     // Cancel should restore
@@ -70,10 +93,7 @@ fn isearch_accept_keeps_position() {
     let mut editor = Editor::new_with_text("hello world");
     editor.execute(Command::ISearchForward);
 
-    if let Some(ref mut isearch) = editor.isearch {
-        isearch.query = "world".to_string();
-    }
-    editor.isearch_update();
+    drive_isearch_query(&mut editor, "world");
     assert_eq!(editor.point(), 6);
 
     editor.isearch_accept();
@@ -86,10 +106,7 @@ fn isearch_next_cycles() {
     let mut editor = Editor::new_with_text("aaa bbb aaa bbb aaa");
     editor.execute(Command::ISearchForward);
 
-    if let Some(ref mut isearch) = editor.isearch {
-        isearch.query = "aaa".to_string();
-    }
-    editor.isearch_update();
+    drive_isearch_query(&mut editor, "aaa");
     assert_eq!(editor.point(), 0); // First "aaa"
 
     editor.isearch_next();
@@ -104,10 +121,7 @@ fn isearch_matches_returns_all() {
     let mut editor = Editor::new_with_text("abcabcabc");
     editor.execute(Command::ISearchForward);
 
-    if let Some(ref mut isearch) = editor.isearch {
-        isearch.query = "abc".to_string();
-    }
-    editor.isearch_update();
+    drive_isearch_query(&mut editor, "abc");
 
     let matches = editor.isearch_matches();
     assert_eq!(matches.len(), 3);
@@ -137,7 +151,7 @@ fn forward_word_skips_non_word() {
 #[test]
 fn forward_word_at_end() {
     let mut editor = Editor::new_with_text("hello");
-    editor.pane_tree.focused_pane_mut().point = 5;
+    editor.pane_tree.set_focused_point(5);
     editor.execute(Command::ForwardWord);
     assert_eq!(editor.point(), 5); // Stays at end
 }
@@ -152,7 +166,7 @@ fn forward_word_with_underscore() {
 #[test]
 fn backward_word_basic() {
     let mut editor = Editor::new_with_text("hello world");
-    editor.pane_tree.focused_pane_mut().point = 11;
+    editor.pane_tree.set_focused_point(11);
     editor.execute(Command::BackwardWord);
     assert_eq!(editor.point(), 6); // Start of "world"
 }
@@ -160,7 +174,7 @@ fn backward_word_basic() {
 #[test]
 fn backward_word_skips_non_word() {
     let mut editor = Editor::new_with_text("hello   world");
-    editor.pane_tree.focused_pane_mut().point = 13;
+    editor.pane_tree.set_focused_point(13);
     editor.execute(Command::BackwardWord);
     assert_eq!(editor.point(), 8); // Start of "world"
     editor.execute(Command::BackwardWord);
@@ -177,7 +191,7 @@ fn backward_word_at_start() {
 #[test]
 fn backward_word_with_underscore() {
     let mut editor = Editor::new_with_text("foo_bar baz");
-    editor.pane_tree.focused_pane_mut().point = 11;
+    editor.pane_tree.set_focused_point(11);
     editor.execute(Command::BackwardWord);
     assert_eq!(editor.point(), 8); // Start of "baz"
     editor.execute(Command::BackwardWord);
@@ -190,7 +204,7 @@ fn word_commands_cross_rope_chunks() {
     let source = format!("{punctuation}λ_word");
     let mut editor = Editor::new_with_text(&source);
     assert!(
-        editor.current_buffer().text.chunks().count() > 1,
+        editor.current_buffer().text().chunks().count() > 1,
         "fixture must span rope chunks"
     );
 
@@ -200,7 +214,7 @@ fn word_commands_cross_rope_chunks() {
     editor.execute(Command::BackwardWord);
     assert_eq!(editor.point(), punctuation.chars().count());
 
-    editor.pane_tree.focused_pane_mut().point = source.chars().count();
+    editor.pane_tree.set_focused_point(source.chars().count());
     editor.execute(Command::DeleteWordBackward);
     assert_eq!(editor.buffer_text(), punctuation);
 }
@@ -216,7 +230,7 @@ fn word_commands_treat_decomposed_graphemes_as_atomic_word_text() {
     editor.execute(Command::BackwardWord);
     assert_eq!(editor.point(), 1);
 
-    editor.pane_tree.focused_pane_mut().point = source.chars().count();
+    editor.pane_tree.set_focused_point(source.chars().count());
     editor.execute(Command::DeleteWordBackward);
     assert_eq!(editor.buffer_text(), "!");
     assert_eq!(editor.point(), 1);
@@ -227,7 +241,7 @@ fn word_commands_treat_decomposed_graphemes_as_atomic_word_text() {
 #[test]
 fn delete_word_backward_basic() {
     let mut editor = Editor::new_with_text("hello world");
-    editor.pane_tree.focused_pane_mut().point = 11;
+    editor.pane_tree.set_focused_point(11);
     editor.execute(Command::DeleteWordBackward);
     assert_eq!(editor.buffer_text(), "hello ");
     assert_eq!(editor.point(), 6);
@@ -236,7 +250,7 @@ fn delete_word_backward_basic() {
 #[test]
 fn delete_word_backward_with_spaces() {
     let mut editor = Editor::new_with_text("hello   world");
-    editor.pane_tree.focused_pane_mut().point = 13;
+    editor.pane_tree.set_focused_point(13);
     editor.execute(Command::DeleteWordBackward);
     assert_eq!(editor.buffer_text(), "hello   ");
     assert_eq!(editor.point(), 8);

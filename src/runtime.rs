@@ -180,7 +180,7 @@ pub(crate) fn run() -> Result<()> {
 
     // An aborted quit (the `a` answer) exits non-zero so callers like git
     // abandon the operation, mirroring vim's :cq.
-    if app.editor.quit_abort {
+    if app.editor().quit_aborted() {
         std::process::exit(1);
     }
 

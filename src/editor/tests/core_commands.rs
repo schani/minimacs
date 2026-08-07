@@ -11,7 +11,7 @@ fn forward_char_moves_one() {
 #[test]
 fn forward_char_stops_at_end() {
     let mut editor = Editor::new_with_text("hi");
-    editor.pane_tree.focused_pane_mut().point = 2;
+    editor.pane_tree.set_focused_point(2);
     editor.execute(Command::ForwardChar);
     assert_eq!(editor.point(), 2);
 }
@@ -19,7 +19,7 @@ fn forward_char_stops_at_end() {
 #[test]
 fn backward_char_moves_one() {
     let mut editor = Editor::new_with_text("hello");
-    editor.pane_tree.focused_pane_mut().point = 3;
+    editor.pane_tree.set_focused_point(3);
     editor.execute(Command::BackwardChar);
     assert_eq!(editor.point(), 2);
 }
@@ -34,7 +34,7 @@ fn backward_char_stops_at_start() {
 #[test]
 fn next_line_basic() {
     let mut editor = Editor::new_with_text("hello\nworld");
-    editor.pane_tree.focused_pane_mut().point = 2;
+    editor.pane_tree.set_focused_point(2);
     editor.execute(Command::NextLine);
     assert_eq!(editor.point(), 8);
 }
@@ -42,7 +42,7 @@ fn next_line_basic() {
 #[test]
 fn next_line_clamps_to_shorter_line() {
     let mut editor = Editor::new_with_text("hello\nhi");
-    editor.pane_tree.focused_pane_mut().point = 4;
+    editor.pane_tree.set_focused_point(4);
     editor.execute(Command::NextLine);
     assert_eq!(editor.point(), 8);
 }
@@ -50,7 +50,7 @@ fn next_line_clamps_to_shorter_line() {
 #[test]
 fn next_line_preserves_preferred_column() {
     let mut editor = Editor::new_with_text("hello\nhi\nworld");
-    editor.pane_tree.focused_pane_mut().point = 4;
+    editor.pane_tree.set_focused_point(4);
     editor.execute(Command::NextLine);
     editor.execute(Command::NextLine);
     assert_eq!(editor.point(), 13);
@@ -59,7 +59,7 @@ fn next_line_preserves_preferred_column() {
 #[test]
 fn previous_line_basic() {
     let mut editor = Editor::new_with_text("hello\nworld");
-    editor.pane_tree.focused_pane_mut().point = 8;
+    editor.pane_tree.set_focused_point(8);
     editor.execute(Command::PreviousLine);
     assert_eq!(editor.point(), 2);
 }
@@ -67,7 +67,7 @@ fn previous_line_basic() {
 #[test]
 fn beginning_of_line() {
     let mut editor = Editor::new_with_text("hello\nworld");
-    editor.pane_tree.focused_pane_mut().point = 8;
+    editor.pane_tree.set_focused_point(8);
     editor.execute(Command::BeginningOfLine);
     assert_eq!(editor.point(), 6);
 }
@@ -75,7 +75,7 @@ fn beginning_of_line() {
 #[test]
 fn end_of_line() {
     let mut editor = Editor::new_with_text("hello\nworld");
-    editor.pane_tree.focused_pane_mut().point = 6;
+    editor.pane_tree.set_focused_point(6);
     editor.execute(Command::EndOfLine);
     assert_eq!(editor.point(), 11);
 }
@@ -83,7 +83,7 @@ fn end_of_line() {
 #[test]
 fn insert_char_basic() {
     let mut editor = Editor::new_with_text("hllo");
-    editor.pane_tree.focused_pane_mut().point = 1;
+    editor.pane_tree.set_focused_point(1);
     editor.execute(Command::InsertChar('e'));
     assert_eq!(editor.buffer_text(), "hello");
     assert_eq!(editor.point(), 2);
@@ -92,7 +92,7 @@ fn insert_char_basic() {
 #[test]
 fn insert_newline() {
     let mut editor = Editor::new_with_text("helloworld");
-    editor.pane_tree.focused_pane_mut().point = 5;
+    editor.pane_tree.set_focused_point(5);
     editor.execute(Command::InsertNewline);
     assert_eq!(editor.buffer_text(), "hello\nworld");
     assert_eq!(editor.point(), 6);
@@ -101,7 +101,7 @@ fn insert_newline() {
 #[test]
 fn delete_backward_basic() {
     let mut editor = Editor::new_with_text("hello");
-    editor.pane_tree.focused_pane_mut().point = 3;
+    editor.pane_tree.set_focused_point(3);
     editor.execute(Command::DeleteBackward);
     assert_eq!(editor.buffer_text(), "helo");
     assert_eq!(editor.point(), 2);
@@ -118,7 +118,7 @@ fn delete_backward_at_start_does_nothing() {
 #[test]
 fn delete_forward_basic() {
     let mut editor = Editor::new_with_text("hello");
-    editor.pane_tree.focused_pane_mut().point = 2;
+    editor.pane_tree.set_focused_point(2);
     editor.execute(Command::DeleteForward);
     assert_eq!(editor.buffer_text(), "helo");
     assert_eq!(editor.point(), 2);
@@ -127,7 +127,7 @@ fn delete_forward_basic() {
 #[test]
 fn delete_forward_at_end_does_nothing() {
     let mut editor = Editor::new_with_text("hello");
-    editor.pane_tree.focused_pane_mut().point = 5;
+    editor.pane_tree.set_focused_point(5);
     editor.execute(Command::DeleteForward);
     assert_eq!(editor.buffer_text(), "hello");
 }
@@ -135,16 +135,16 @@ fn delete_forward_at_end_does_nothing() {
 #[test]
 fn scroll_follows_cursor_down() {
     let mut editor = Editor::new_with_text("a\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk");
-    editor.pane_tree.focused_pane_mut().viewport_height = 3;
-    editor.pane_tree.focused_pane_mut().scroll_top = 0;
+    editor.pane_tree.set_focused_viewport_height(3);
+    editor.pane_tree.set_focused_scroll_top(0);
     for _ in 0..8 {
         editor.execute(Command::NextLine);
     }
     let (line, _) = editor.current_buffer().char_to_line_col(editor.point());
     assert_eq!(line, 8);
     let pane = editor.pane_tree.focused_pane();
-    assert!(pane.scroll_top <= line);
-    assert!(line < pane.scroll_top + pane.viewport_height);
+    assert!(pane.scroll_top() <= line);
+    assert!(line < pane.scroll_top() + pane.viewport_height());
 }
 
 #[test]
@@ -171,7 +171,7 @@ fn undo_redo_roundtrip() {
 #[test]
 fn undo_reverses_delete() {
     let mut editor = Editor::new_with_text("abc");
-    editor.pane_tree.focused_pane_mut().point = 3;
+    editor.pane_tree.set_focused_point(3);
     editor.execute(Command::DeleteBackward);
     editor.commit_undo_group();
     editor.execute(Command::Undo);
@@ -181,7 +181,7 @@ fn undo_reverses_delete() {
 #[test]
 fn kill_line_from_middle() {
     let mut editor = Editor::new_with_text("hello\nworld");
-    editor.pane_tree.focused_pane_mut().point = 2;
+    editor.pane_tree.set_focused_point(2);
     editor.execute(Command::KillLine);
     assert_eq!(editor.buffer_text(), "he\nworld");
     assert_eq!(editor.clipboard, "llo");
@@ -190,7 +190,7 @@ fn kill_line_from_middle() {
 #[test]
 fn kill_line_at_eol() {
     let mut editor = Editor::new_with_text("hello\nworld");
-    editor.pane_tree.focused_pane_mut().point = 5;
+    editor.pane_tree.set_focused_point(5);
     editor.execute(Command::KillLine);
     assert_eq!(editor.buffer_text(), "helloworld");
     assert_eq!(editor.clipboard, "\n");
@@ -199,7 +199,7 @@ fn kill_line_at_eol() {
 #[test]
 fn buffer_beginning_and_end() {
     let mut editor = Editor::new_with_text("hello\nworld");
-    editor.pane_tree.focused_pane_mut().point = 5;
+    editor.pane_tree.set_focused_point(5);
     editor.execute(Command::BufferBeginning);
     assert_eq!(editor.point(), 0);
     editor.execute(Command::BufferEnd);
@@ -209,7 +209,7 @@ fn buffer_beginning_and_end() {
 #[test]
 fn page_down_and_up() {
     let mut editor = Editor::new_with_text("a\nb\nc\nd\ne\nf\ng\nh\ni\nj");
-    editor.pane_tree.focused_pane_mut().viewport_height = 3;
+    editor.pane_tree.set_focused_viewport_height(3);
     editor.execute(Command::PageDown);
     let (line, _) = editor.current_buffer().char_to_line_col(editor.point());
     assert_eq!(line, 3);
@@ -224,73 +224,73 @@ fn page_down_and_up() {
 fn recenter_centers_cursor_line() {
     // 10 lines, viewport height 5, cursor on line 5
     let mut editor = Editor::new_with_text("a\nb\nc\nd\ne\nf\ng\nh\ni\nj");
-    editor.pane_tree.focused_pane_mut().viewport_height = 5;
-    editor.pane_tree.focused_pane_mut().viewport_width = 40;
+    editor.pane_tree.set_focused_viewport_height(5);
+    editor.pane_tree.set_focused_viewport_width(40);
     // Move cursor to line 5 (the "f" line)
     for _ in 0..5 {
         editor.execute(Command::NextLine);
     }
     editor.execute(Command::RecenterTopBottom);
     // Center: scroll_top = 5 - 5/2 = 3
-    assert_eq!(editor.pane_tree.focused_pane().scroll_top, 3);
+    assert_eq!(editor.pane_tree.focused_pane().scroll_top(), 3);
 }
 
 #[test]
 fn recenter_cycles_center_top_bottom() {
     let mut editor = Editor::new_with_text("a\nb\nc\nd\ne\nf\ng\nh\ni\nj");
-    editor.pane_tree.focused_pane_mut().viewport_height = 5;
-    editor.pane_tree.focused_pane_mut().viewport_width = 40;
+    editor.pane_tree.set_focused_viewport_height(5);
+    editor.pane_tree.set_focused_viewport_width(40);
     // Move cursor to line 5
     for _ in 0..5 {
         editor.execute(Command::NextLine);
     }
     // First C-l: center (scroll_top = 3)
     editor.execute(Command::RecenterTopBottom);
-    assert_eq!(editor.pane_tree.focused_pane().scroll_top, 3);
+    assert_eq!(editor.pane_tree.focused_pane().scroll_top(), 3);
     // Second C-l: top (scroll_top = 5)
     editor.execute(Command::RecenterTopBottom);
-    assert_eq!(editor.pane_tree.focused_pane().scroll_top, 5);
+    assert_eq!(editor.pane_tree.focused_pane().scroll_top(), 5);
     // Third C-l: bottom (scroll_top = 5 - 4 = 1)
     editor.execute(Command::RecenterTopBottom);
-    assert_eq!(editor.pane_tree.focused_pane().scroll_top, 1);
+    assert_eq!(editor.pane_tree.focused_pane().scroll_top(), 1);
     // Fourth C-l: center again (scroll_top = 3)
     editor.execute(Command::RecenterTopBottom);
-    assert_eq!(editor.pane_tree.focused_pane().scroll_top, 3);
+    assert_eq!(editor.pane_tree.focused_pane().scroll_top(), 3);
 }
 
 #[test]
 fn recenter_resets_on_other_command() {
     let mut editor = Editor::new_with_text("a\nb\nc\nd\ne\nf\ng\nh\ni\nj");
-    editor.pane_tree.focused_pane_mut().viewport_height = 5;
-    editor.pane_tree.focused_pane_mut().viewport_width = 40;
+    editor.pane_tree.set_focused_viewport_height(5);
+    editor.pane_tree.set_focused_viewport_width(40);
     for _ in 0..5 {
         editor.execute(Command::NextLine);
     }
     // First C-l: center
     editor.execute(Command::RecenterTopBottom);
-    assert_eq!(editor.pane_tree.focused_pane().scroll_top, 3);
+    assert_eq!(editor.pane_tree.focused_pane().scroll_top(), 3);
     // Any other command resets the cycle
     editor.execute(Command::ForwardChar);
     // Next C-l should be center again, not top
     editor.execute(Command::RecenterTopBottom);
-    assert_eq!(editor.pane_tree.focused_pane().scroll_top, 3);
+    assert_eq!(editor.pane_tree.focused_pane().scroll_top(), 3);
 }
 
 #[test]
 fn recenter_at_beginning_of_buffer() {
     let mut editor = Editor::new_with_text("a\nb\nc\nd\ne");
-    editor.pane_tree.focused_pane_mut().viewport_height = 5;
-    editor.pane_tree.focused_pane_mut().viewport_width = 40;
+    editor.pane_tree.set_focused_viewport_height(5);
+    editor.pane_tree.set_focused_viewport_width(40);
     // Cursor at line 0
     editor.execute(Command::RecenterTopBottom);
     // Center: 0.saturating_sub(2) = 0
-    assert_eq!(editor.pane_tree.focused_pane().scroll_top, 0);
+    assert_eq!(editor.pane_tree.focused_pane().scroll_top(), 0);
     // Top: scroll_top = 0
     editor.execute(Command::RecenterTopBottom);
-    assert_eq!(editor.pane_tree.focused_pane().scroll_top, 0);
+    assert_eq!(editor.pane_tree.focused_pane().scroll_top(), 0);
     // Bottom: 0.saturating_sub(4) = 0
     editor.execute(Command::RecenterTopBottom);
-    assert_eq!(editor.pane_tree.focused_pane().scroll_top, 0);
+    assert_eq!(editor.pane_tree.focused_pane().scroll_top(), 0);
 }
 
 #[test]
@@ -337,10 +337,10 @@ fn open_same_file_twice_switches() {
 
     let mut editor = Editor::new();
     editor.open_file(&file).unwrap();
-    let first_id = editor.pane_tree.focused_pane().buffer_id;
+    let first_id = editor.pane_tree.focused_pane().buffer_id();
 
     editor.open_file(&file).unwrap();
-    assert_eq!(editor.pane_tree.focused_pane().buffer_id, first_id);
+    assert_eq!(editor.pane_tree.focused_pane().buffer_id(), first_id);
     assert_eq!(editor.buffers.len(), 2);
 }
 
@@ -350,7 +350,7 @@ fn kill_last_buffer_creates_scratch() {
     assert_eq!(editor.buffers.len(), 1);
     editor.do_kill_buffer(0);
     assert_eq!(editor.buffers.len(), 1);
-    assert_eq!(editor.current_buffer().name, "*scratch*");
+    assert_eq!(editor.current_buffer().name(), "*scratch*");
 }
 
 #[test]

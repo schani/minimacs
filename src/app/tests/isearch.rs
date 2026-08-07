@@ -10,11 +10,11 @@ fn isearch_reveal_matches_normal_cursor_reveal_geometry() {
 
     let (mut normal, mut normal_events) = test_app_with_text(12, 6, &text, vec![]);
     normal.run_until_idle(&mut normal_events).unwrap();
-    normal.editor.pane_tree.focused_pane_mut().point = match_char;
+    normal.editor.set_focused_point(match_char);
     normal.editor.ensure_cursor_visible();
     let normal_scroll = {
-        let pane = normal.editor.pane_tree.focused_pane();
-        (pane.scroll_top, pane.scroll_row_offset)
+        let pane = normal.editor.pane_tree().focused_pane();
+        (pane.scroll_top(), pane.scroll_row_offset())
     };
 
     // Keep the prompt on one row so both cases have the same pane viewport;
@@ -23,11 +23,11 @@ fn isearch_reveal_matches_normal_cursor_reveal_geometry() {
     let (mut searching, mut search_events) = test_app_with_text(12, 6, &text, events);
     searching.run_until_idle(&mut search_events).unwrap();
     let search_scroll = {
-        let pane = searching.editor.pane_tree.focused_pane();
-        (pane.scroll_top, pane.scroll_row_offset)
+        let pane = searching.editor.pane_tree().focused_pane();
+        (pane.scroll_top(), pane.scroll_row_offset())
     };
 
-    assert!(searching.editor.minibuffer.is_active());
+    assert!(searching.editor.minibuffer().is_active());
     assert_eq!(searching.editor.point(), match_char);
     assert_eq!(search_scroll, normal_scroll);
 }
@@ -41,16 +41,16 @@ fn isearch_match_remains_visible_when_wrapped_line_reflows_after_resize() {
     app.run_until_idle(&mut events).unwrap();
 
     assert_eq!(app.editor.point(), match_pos);
-    assert!(app.editor.isearch.is_some());
-    let original_offset = app.editor.pane_tree.focused_pane().scroll_row_offset;
+    assert!(app.editor.isearch().is_some());
+    let original_offset = app.editor.pane_tree().focused_pane().scroll_row_offset();
 
     app.terminal.backend_mut().resize(10, 6);
     let mut events = TestEventSource::new(vec![Event::Resize(10, 6)]);
     app.run_until_idle(&mut events).unwrap();
 
-    let pane = app.editor.pane_tree.focused_pane();
+    let pane = app.editor.pane_tree().focused_pane();
     assert!(
-        pane.scroll_row_offset > original_offset,
+        pane.scroll_row_offset() > original_offset,
         "the narrower wrapping must reveal the selected match"
     );
     let screen = capture_screen(&app.terminal);
@@ -64,12 +64,12 @@ fn isearch_match_remains_visible_when_wrapped_line_reflows_after_resize() {
 fn ordinary_prompt_reflow_does_not_scroll_the_underlying_pane() {
     let text = "x".repeat(58);
     let (mut app, mut events) = test_app_with_text(20, 6, &text, vec![]);
-    app.editor.pane_tree.focused_pane_mut().point = text.len();
+    app.editor.set_focused_point(text.len());
     app.run_until_idle(&mut events).unwrap();
     app.editor.ensure_cursor_visible();
     let original_scroll = {
-        let pane = app.editor.pane_tree.focused_pane();
-        (pane.scroll_top, pane.scroll_row_offset)
+        let pane = app.editor.pane_tree().focused_pane();
+        (pane.scroll_top(), pane.scroll_row_offset())
     };
 
     let mut events = TestEventSource::new(vec![
@@ -82,11 +82,11 @@ fn ordinary_prompt_reflow_does_not_scroll_the_underlying_pane() {
     ]);
     app.run_until_idle(&mut events).unwrap();
 
-    assert!(app.editor.minibuffer.is_active());
-    assert!(app.editor.isearch.is_none());
-    let pane = app.editor.pane_tree.focused_pane();
+    assert!(app.editor.minibuffer().is_active());
+    assert!(app.editor.isearch().is_none());
+    let pane = app.editor.pane_tree().focused_pane();
     assert_eq!(
-        (pane.scroll_top, pane.scroll_row_offset),
+        (pane.scroll_top(), pane.scroll_row_offset()),
         original_scroll,
         "editing an ordinary prompt must not reveal the underlying pane"
     );
@@ -109,7 +109,7 @@ fn isearch_forward_via_app() {
     app.run_until_idle(&mut events).unwrap();
     // Should be at the second "hello" (position 12)
     assert_eq!(app.editor.point(), 12);
-    assert!(app.editor.isearch.is_none()); // isearch ended
+    assert!(app.editor.isearch().is_none()); // isearch ended
 }
 
 #[test]
@@ -191,7 +191,7 @@ fn isearch_other_key_accepts_and_processes() {
     app.run_until_idle(&mut events).unwrap();
     // C-a after accept should go to beginning of line
     assert_eq!(app.editor.point(), 0);
-    assert!(app.editor.isearch.is_none());
+    assert!(app.editor.isearch().is_none());
 }
 
 #[test]
@@ -256,8 +256,8 @@ fn no_stale_failing_message_after_isearch_accepts() {
     events.push(key(KeyCode::Enter)); // accept
     let (mut app, mut events) = test_app_with_text(40, 10, "hello world", events);
     app.run_until_idle(&mut events).unwrap();
-    assert!(app.editor.isearch.is_none());
-    assert_eq!(app.editor.minibuffer.message, None);
+    assert!(app.editor.isearch().is_none());
+    assert_eq!(app.editor.minibuffer().message(), None);
     let screen = capture_screen(&app.terminal);
     assert!(!screen.contains("Failing"), "screen: {screen}");
 }
@@ -275,8 +275,8 @@ fn paste_during_isearch_extends_query() {
     ];
     let (mut app, mut events) = test_app_with_text(40, 10, "hello world", events);
     app.run_until_idle(&mut events).unwrap();
-    let isearch = app.editor.isearch.as_ref().expect("isearch still active");
-    assert_eq!(isearch.query, "world");
+    let isearch = app.editor.isearch().expect("isearch still active");
+    assert_eq!(isearch.query(), "world");
     assert_eq!(app.editor.minibuffer_text(), "world");
     assert_eq!(
         app.editor.point(),
@@ -292,8 +292,8 @@ fn multiline_paste_during_isearch_normalizes_breaks_to_spaces() {
     let events = vec![ctrl('s'), Event::Paste("héllo\r\nwörld\nnow".to_string())];
     let (mut app, mut events) = test_app_with_text(40, 10, "say héllo wörld now", events);
     app.run_until_idle(&mut events).unwrap();
-    let isearch = app.editor.isearch.as_ref().expect("isearch still active");
-    assert_eq!(isearch.query, "héllo wörld now");
+    let isearch = app.editor.isearch().expect("isearch still active");
+    assert_eq!(isearch.query(), "héllo wörld now");
     assert_eq!(app.editor.minibuffer_text(), "héllo wörld now");
     assert_eq!(
         app.editor.point(),
@@ -314,8 +314,8 @@ fn backspace_after_isearch_paste_keeps_query_and_display_in_sync() {
     ];
     let (mut app, mut events) = test_app_with_text(40, 10, "hello world", events);
     app.run_until_idle(&mut events).unwrap();
-    let isearch = app.editor.isearch.as_ref().expect("isearch still active");
-    assert_eq!(isearch.query, "worl");
+    let isearch = app.editor.isearch().expect("isearch still active");
+    assert_eq!(isearch.query(), "worl");
     assert_eq!(app.editor.minibuffer_text(), "worl");
     assert_eq!(
         app.editor.point(),
@@ -334,8 +334,8 @@ fn isearch_backspace_removes_one_grapheme_cluster() {
     let (mut app, mut events) = test_app_with_text(40, 10, "e\u{301}x", events);
     app.run_until_idle(&mut events).unwrap();
 
-    let isearch = app.editor.isearch.as_ref().expect("isearch still active");
-    assert_eq!(isearch.query, "");
+    let isearch = app.editor.isearch().expect("isearch still active");
+    assert_eq!(isearch.query(), "");
     assert_eq!(app.editor.minibuffer_text(), "");
     assert_eq!(app.editor.point(), 0);
 }

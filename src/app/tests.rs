@@ -114,7 +114,8 @@ fn background_syntax_completion_is_applied_without_an_input_event() {
     use std::time::{Duration, Instant};
 
     let (mut app, _) = test_app_with_text(40, 10, "fn main() {}\n", vec![]);
-    app.editor.buffers[0].syntax = crate::syntax::SyntaxState::new(crate::syntax::Language::Rust);
+    app.editor
+        .enable_buffer_syntax_for_test(0, crate::syntax::Language::Rust);
     app.update_viewport();
     app.render().unwrap();
 
@@ -127,8 +128,8 @@ fn background_syntax_completion_is_applied_without_an_input_event() {
         std::thread::yield_now();
     }
 
-    let syntax = app.editor.buffers[0].syntax.as_ref().unwrap();
-    let cached = syntax.background_spans(0..2, app.editor.buffers[0].edit_generation);
+    let syntax = app.editor.buffers()[0].syntax().unwrap();
+    let cached = syntax.background_spans(0..2, app.editor.buffers()[0].edit_generation());
     assert!(cached.exact);
     assert!(!cached.spans.is_empty());
 }

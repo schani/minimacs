@@ -41,11 +41,19 @@ pub enum PromptKind {
 
 #[derive(Debug)]
 pub struct Prompt {
-    pub kind: PromptKind,
-    pub label: String, // e.g., "Find file: "
+    kind: PromptKind,
+    label: String, // e.g., "Find file: "
 }
 
 impl Prompt {
+    pub fn kind(&self) -> PromptKind {
+        self.kind.clone()
+    }
+
+    pub fn label(&self) -> &str {
+        &self.label
+    }
+
     pub fn new(kind: PromptKind, label: &str) -> Self {
         Self {
             kind,
@@ -284,10 +292,10 @@ fn common_prefix(strings: &[String]) -> Option<String> {
 }
 
 pub struct Minibuffer {
-    pub state: MinibufferState,
-    pub message: Option<String>,
-    pub completions: Option<Vec<String>>,
-    pub completion_page: usize,
+    state: MinibufferState,
+    message: Option<String>,
+    completions: Option<Vec<String>>,
+    completion_page: usize,
 }
 
 impl Minibuffer {
@@ -311,10 +319,21 @@ impl Minibuffer {
         }
     }
 
-    pub fn prompt_mut(&mut self) -> Option<&mut Prompt> {
-        match &mut self.state {
-            MinibufferState::Prompt(p) => Some(p),
-            _ => None,
+    pub fn message(&self) -> Option<&str> {
+        self.message.as_deref()
+    }
+
+    pub fn completions(&self) -> Option<&[String]> {
+        self.completions.as_deref()
+    }
+
+    pub fn completion_page(&self) -> usize {
+        self.completion_page
+    }
+
+    pub fn set_prompt_label(&mut self, label: &str) {
+        if let MinibufferState::Prompt(prompt) = &mut self.state {
+            prompt.label = label.to_string();
         }
     }
 
@@ -459,8 +478,8 @@ mod tests {
 
     #[test]
     fn minibuffer_prompt_mut_idle() {
-        let mut mb = Minibuffer::new();
-        assert!(mb.prompt_mut().is_none());
+        let mb = Minibuffer::new();
+        assert!(mb.prompt().is_none());
     }
 
     #[test]

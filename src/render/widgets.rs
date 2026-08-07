@@ -24,12 +24,12 @@ pub fn render(
     let layout = screen_layout(editor, area);
 
     // Calculate rects for all panes
-    let (pane_rects, separator_rects) = editor.pane_tree.calculate_rects(layout.pane_area);
-    let focus_path = editor.pane_tree.focus_path();
+    let (pane_rects, separator_rects) = editor.pane_tree().calculate_rects(layout.pane_area);
+    let focus_path = editor.pane_tree().focus_path();
 
     for (path, rect) in &pane_rects {
-        let pane = editor.pane_tree.pane_at_focus_path(path);
-        let buf = editor.buffer_by_id(pane.buffer_id);
+        let pane = editor.pane_tree().pane_at_focus_path(path);
+        let buf = editor.buffer_by_id(pane.buffer_id());
         let is_focused = path.as_slice() == focus_path;
 
         // Split each pane rect into text area + mode line
@@ -48,9 +48,9 @@ pub fn render(
         let region = if is_focused {
             editor.region()
         } else {
-            pane.mark.map(|mark| {
-                let start = pane.point.min(mark);
-                let end = pane.point.max(mark);
+            pane.mark().map(|mark| {
+                let start = pane.point().min(mark);
+                let end = pane.point().max(mark);
                 (start, end)
             })
         };
@@ -71,7 +71,7 @@ pub fn render(
             "isearch matches must be sorted and uniform in length"
         );
         let current_match = if is_focused {
-            editor.isearch.as_ref().and_then(|s| s.current_match)
+            editor.isearch().and_then(|s| s.current_match())
         } else {
             None
         };
@@ -91,8 +91,8 @@ pub fn render(
         render_pane_mode_line(frame, buf, pane, is_focused, pending_input, mode_line_area);
 
         // Set cursor position for the focused pane
-        if is_focused && !editor.minibuffer.is_active() {
-            let (cursor_line, cursor_col) = buf.char_to_line_col(pane.point);
+        if is_focused && !editor.minibuffer().is_active() {
+            let (cursor_line, cursor_col) = buf.char_to_line_col(pane.point());
             let text_width = text_area.width as usize;
             let row_offset = clamped_row_offset(pane, buf, text_width);
 
@@ -101,7 +101,7 @@ pub fn render(
             // Only place cursor if it's within the visible viewport.
             let mut visual_row: usize = 0;
             let max_rows = text_area.height as usize + row_offset;
-            for lidx in pane.scroll_top..cursor_line {
+            for lidx in pane.scroll_top()..cursor_line {
                 let line_visual_width = line_visual_width(buf, lidx);
                 visual_row += visual_lines_for_length(line_visual_width, text_width);
                 if visual_row >= max_rows {
@@ -122,7 +122,7 @@ pub fn render(
             // off; a cursor row before them is above the viewport. Both
             // coordinates are pane-relative; compare against the pane's
             // dimensions, not its absolute right edge.
-            if cursor_line >= pane.scroll_top {
+            if cursor_line >= pane.scroll_top() {
                 if let Some(screen_line) = visual_row.checked_sub(row_offset) {
                     if screen_col < text_area.width && screen_line < text_area.height as usize {
                         frame.set_cursor_position((
@@ -148,11 +148,11 @@ pub fn render(
     }
 
     if let Some(comp_area) = layout.completions_area {
-        if let Some(candidates) = &editor.minibuffer.completions {
+        if let Some(candidates) = editor.minibuffer().completions() {
             render_completions(
                 frame,
                 candidates,
-                editor.minibuffer.completion_page,
+                editor.minibuffer().completion_page(),
                 comp_area,
             );
         }
@@ -179,7 +179,7 @@ fn render_pane_text(
     area: Rect,
     syntax_worker: &SyntaxWorker,
 ) {
-    let scroll_top = pane.scroll_top;
+    let scroll_top = pane.scroll_top();
     let max_visual_rows = area.height as usize;
     let total_lines = buf.line_count();
     let text_width = area.width as usize;
@@ -346,7 +346,7 @@ fn compute_visible_syntax_spans(
     rows: &[(usize, VisualRow)],
     syntax_worker: &SyntaxWorker,
 ) -> Vec<crate::syntax::StyledSpan> {
-    let Some(syntax) = buf.syntax.as_ref() else {
+    let Some(syntax) = buf.syntax() else {
         return Vec::new();
     };
     if syntax.is_disabled() {
@@ -358,15 +358,15 @@ fn compute_visible_syntax_spans(
         return Vec::new();
     };
     let requested = first.buffer_byte_start..last.buffer_byte_end;
-    let cached = syntax.background_spans(requested.clone(), buf.edit_generation);
+    let cached = syntax.background_spans(requested.clone(), buf.edit_generation());
     if !cached.exact {
-        let (base_generation, edits) = syntax.background_update_for(buf.edit_generation);
+        let (base_generation, edits) = syntax.background_update_for(buf.edit_generation());
         syntax_worker.submit(SyntaxJob {
             key: syntax.background_key(),
             language: syntax.language,
             base_generation,
-            generation: buf.edit_generation,
-            source: buf.text.clone(),
+            generation: buf.edit_generation(),
+            source: buf.text().clone(),
             edits,
             requested,
         });
@@ -402,10 +402,10 @@ fn render_pane_mode_line(
     pending_input: PendingInput<'_>,
     area: Rect,
 ) {
-    let (line, col) = buf.char_to_line_col(pane.point);
+    let (line, col) = buf.char_to_line_col(pane.point());
 
-    let modified_indicator = if buf.modified { "**" } else { "--" };
-    let name = &buf.name;
+    let modified_indicator = if buf.is_modified() { "**" } else { "--" };
+    let name = buf.name();
 
     // Position percentage
     let total_lines = buf.line_count();
@@ -420,7 +420,7 @@ fn render_pane_mode_line(
     };
 
     let language_display = buf
-        .syntax
+        .syntax()
         .as_ref()
         .map(|s| format!("  ({})", s.language.name()))
         .unwrap_or_default();
@@ -730,11 +730,8 @@ mod tests {
 
     fn prompt_editor(label: &str, input: &str, point: usize) -> Editor {
         let mut editor = Editor::new();
-        editor
-            .minibuffer
-            .start_prompt(crate::minibuffer::PromptKind::FindFile, label);
-        editor.minibuffer_buffer.text = ropey::Rope::from_str(input);
-        editor.minibuffer_pane.point = point;
+        editor.start_prompt_for_test(crate::minibuffer::PromptKind::FindFile, label);
+        editor.set_minibuffer_fixture(input, point);
         editor
     }
 
@@ -780,7 +777,7 @@ mod tests {
     #[test]
     fn screen_layout_grows_idle_messages_and_preserves_pane_space() {
         let mut editor = Editor::new();
-        editor.minibuffer.show_message("abcdefghijkl".to_string());
+        editor.show_message_for_test("abcdefghijkl");
 
         let layout = screen_layout(&editor, Rect::new(0, 0, 5, 9));
 
@@ -793,7 +790,7 @@ mod tests {
     #[test]
     fn screen_layout_keeps_completions_above_grown_minibuffer() {
         let mut editor = prompt_editor("I: ", "abcdefghijkl", 12);
-        editor.minibuffer.completions = Some(vec!["alpha".into(), "alpine".into()]);
+        editor.set_minibuffer_completions_for_test(vec!["alpha".into(), "alpine".into()]);
 
         let layout = screen_layout(&editor, Rect::new(0, 0, 8, 12));
 
@@ -819,8 +816,7 @@ mod tests {
             1
         );
 
-        editor.minibuffer_buffer.text = ropey::Rope::from_str("a");
-        editor.minibuffer_pane.point = 1;
+        editor.set_minibuffer_fixture("a", 1);
         assert_eq!(
             screen_layout(&editor, Rect::new(0, 0, 6, 9))
                 .minibuffer_area
@@ -953,7 +949,7 @@ mod tests {
     fn line_visual_width_crosses_rope_chunks() {
         let prefix = "a".repeat(2_000);
         let buf = Buffer::from_str(0, "test", &format!("{prefix}\t你e\u{301}\n"));
-        assert!(buf.text.line(0).chunks().count() > 1);
+        assert!(buf.text().line(0).chunks().count() > 1);
         assert_eq!(line_visual_width(&buf, 0), 2_000 + 4 + 2 + 1);
     }
 
@@ -1061,19 +1057,15 @@ mod tests {
     #[test]
     fn completions_height_prompt_no_completions() {
         let mut editor = Editor::new();
-        editor
-            .minibuffer
-            .start_prompt(crate::minibuffer::PromptKind::FindFile, "Find file: ");
+        editor.start_prompt_for_test(crate::minibuffer::PromptKind::FindFile, "Find file: ");
         assert_eq!(completions_height(&editor, 24, 80), 0);
     }
 
     #[test]
     fn completions_height_with_few_candidates() {
         let mut editor = Editor::new();
-        editor
-            .minibuffer
-            .start_prompt(crate::minibuffer::PromptKind::FindFile, "Find file: ");
-        editor.minibuffer.completions = Some(vec!["a".into(), "b".into(), "c".into()]);
+        editor.start_prompt_for_test(crate::minibuffer::PromptKind::FindFile, "Find file: ");
+        editor.set_minibuffer_completions_for_test(vec!["a".into(), "b".into(), "c".into()]);
         // width=80, col_width=3, num_cols=26, num_rows=ceil(3/26)=1
         // max_rows=(24-2)/3=7, min(1,7)=1
         assert_eq!(completions_height(&editor, 24, 80), 1);
@@ -1082,10 +1074,8 @@ mod tests {
     #[test]
     fn completions_height_narrow_terminal() {
         let mut editor = Editor::new();
-        editor
-            .minibuffer
-            .start_prompt(crate::minibuffer::PromptKind::FindFile, "Find file: ");
-        editor.minibuffer.completions = Some(vec!["a".into(), "b".into(), "c".into()]);
+        editor.start_prompt_for_test(crate::minibuffer::PromptKind::FindFile, "Find file: ");
+        editor.set_minibuffer_completions_for_test(vec!["a".into(), "b".into(), "c".into()]);
         // width=1, col_width=1, num_cols=1, num_rows=3
         // max_rows=(24-2)/3=7, min(3,7)=3
         assert_eq!(completions_height(&editor, 24, 1), 3);
@@ -1094,11 +1084,9 @@ mod tests {
     #[test]
     fn completions_height_capped() {
         let mut editor = Editor::new();
-        editor
-            .minibuffer
-            .start_prompt(crate::minibuffer::PromptKind::FindFile, "Find file: ");
+        editor.start_prompt_for_test(crate::minibuffer::PromptKind::FindFile, "Find file: ");
         let many: Vec<String> = (0..50).map(|i| format!("file{}.txt", i)).collect();
-        editor.minibuffer.completions = Some(many);
+        editor.set_minibuffer_completions_for_test(many);
         // max_len=11 ("file10.txt"...), col_width=13, width=80 => 6 cols
         // num_rows=ceil(50/6)=9, capped at max_rows=(24-2)/3=7
         assert_eq!(completions_height(&editor, 24, 80), 7);
@@ -1107,15 +1095,13 @@ mod tests {
     #[test]
     fn completions_height_measures_display_width_not_chars() {
         let mut editor = Editor::new();
-        editor
-            .minibuffer
-            .start_prompt(crate::minibuffer::PromptKind::FindFile, "Find file: ");
+        editor.start_prompt_for_test(crate::minibuffer::PromptKind::FindFile, "Find file: ");
         // "你你你你a.txt" is 9 chars but 13 display columns.
         let candidates: Vec<String> = ["a", "b", "c", "d"]
             .iter()
             .map(|s| format!("你你你你{s}.txt"))
             .collect();
-        editor.minibuffer.completions = Some(candidates);
+        editor.set_minibuffer_completions_for_test(candidates);
         // col_width = 13+2 = 15; at width 24 only one column fits => 4 rows.
         // (Counting chars would give col_width 11, two columns => 2 rows.)
         assert_eq!(completions_height(&editor, 24, 24), 4);
@@ -1124,10 +1110,8 @@ mod tests {
     #[test]
     fn completions_height_small_terminal() {
         let mut editor = Editor::new();
-        editor
-            .minibuffer
-            .start_prompt(crate::minibuffer::PromptKind::FindFile, "Find file: ");
-        editor.minibuffer.completions = Some(vec!["a".into(), "b".into()]);
+        editor.start_prompt_for_test(crate::minibuffer::PromptKind::FindFile, "Find file: ");
+        editor.set_minibuffer_completions_for_test(vec!["a".into(), "b".into()]);
         // height=4, max_rows = (4-2)/3 = 0 -> max(1) = 1
         assert_eq!(completions_height(&editor, 4, 80), 1);
     }
@@ -1138,7 +1122,7 @@ mod tests {
     /// not as code.
     #[test]
     fn markdown_highlight_consistent_when_scrolled_into_code_block() {
-        use crate::syntax::{Language, SyntaxState};
+        use crate::syntax::Language;
         use ratatui::style::Modifier;
 
         // Build a markdown document with a code block in the middle.
@@ -1161,29 +1145,29 @@ fn main() {\n\
 Some *emphasis* here.\n";
 
         let mut buf = Buffer::from_str(0, "test.md", markdown);
-        buf.syntax = SyntaxState::new(Language::Markdown);
+        buf.enable_syntax(Language::Markdown);
 
-        let syntax = buf.syntax.as_ref().unwrap();
+        let syntax = buf.syntax().unwrap();
         // Case 1: scroll_top=0, see everything.
         let styles_full = syntax.highlight_rope(
-            buf.text.slice(..),
-            0..buf.text.len_bytes(),
-            buf.edit_generation,
+            buf.text().slice(..),
+            0..buf.text().len_bytes(),
+            buf.edit_generation(),
         );
 
         // Case 2: viewport starts inside the code block.
-        let scrolled_start = buf.text.line_to_byte(6);
+        let scrolled_start = buf.text().line_to_byte(6);
         let styles_scrolled = syntax.highlight_rope(
-            buf.text.slice(..),
-            scrolled_start..buf.text.len_bytes(),
-            buf.edit_generation,
+            buf.text().slice(..),
+            scrolled_start..buf.text().len_bytes(),
+            buf.edit_generation(),
         );
 
         // Line 10 is "# After Code Block" — the '#' and heading text should have
         // the heading style (bold + blue) regardless of scroll position.
         let heading_line = 10;
-        let heading_start = buf.text.line_to_byte(heading_line);
-        let heading_end = buf.text.line_to_byte(heading_line + 1);
+        let heading_start = buf.text().line_to_byte(heading_line);
+        let heading_end = buf.text().line_to_byte(heading_line + 1);
 
         // With full context (scroll_top=0), the heading should be styled
         let has_heading_style_full = styles_full.iter().any(|span| {
@@ -1212,12 +1196,10 @@ Some *emphasis* here.\n";
     #[test]
     fn completions_height_multicolumn_reduces_rows() {
         let mut editor = Editor::new();
-        editor
-            .minibuffer
-            .start_prompt(crate::minibuffer::PromptKind::FindFile, "Find file: ");
+        editor.start_prompt_for_test(crate::minibuffer::PromptKind::FindFile, "Find file: ");
         // 30 short candidates in 80-wide terminal
         let candidates: Vec<String> = (0..30).map(|i| format!("f{}", i)).collect();
-        editor.minibuffer.completions = Some(candidates);
+        editor.set_minibuffer_completions_for_test(candidates);
         // max_len=3 ("f10"...), col_width=5, width=80 => 16 cols
         // num_rows=ceil(30/16)=2, max_rows=(24-2)/3=7, min(2,7)=2
         let h = completions_height(&editor, 24, 80);

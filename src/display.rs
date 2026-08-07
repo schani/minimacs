@@ -37,7 +37,7 @@ pub(crate) fn terminal_safe_text(text: &str) -> String {
 }
 
 pub(super) fn line_chars_without_ending(buf: &Buffer, line_idx: usize) -> Vec<char> {
-    let line = buf.text.line(line_idx);
+    let line = buf.text().line(line_idx);
     let keep = line.len_chars() - crate::buffer::line_break_len_chars(line);
     line.chars().take(keep).collect()
 }
@@ -98,11 +98,11 @@ pub(crate) fn visual_row_col_in_line(
 /// how the `scroll_top` line wraps; every consumer (renderer, cursor
 /// placement, mouse mapping) clamps through this so they agree.
 pub(crate) fn clamped_row_offset(pane: &Pane, buf: &Buffer, text_width: usize) -> usize {
-    if pane.scroll_row_offset == 0 || pane.scroll_top >= buf.line_count() {
+    if pane.scroll_row_offset() == 0 || pane.scroll_top() >= buf.line_count() {
         return 0;
     }
-    let top_rows = visual_lines_for_length(line_visual_width(buf, pane.scroll_top), text_width);
-    pane.scroll_row_offset.min(top_rows - 1)
+    let top_rows = visual_lines_for_length(line_visual_width(buf, pane.scroll_top()), text_width);
+    pane.scroll_row_offset().min(top_rows - 1)
 }
 
 #[cfg(test)]
@@ -185,15 +185,15 @@ pub(super) struct VisualLineLayout<'a> {
 
 impl<'a> VisualLineLayout<'a> {
     pub(super) fn new(buf: &'a Buffer, line_idx: usize, text_width: usize) -> Self {
-        let line = buf.text.line(line_idx);
+        let line = buf.text().line(line_idx);
         let line_len = line.len_chars() - crate::buffer::line_break_len_chars(line);
         let plain_ascii = text_width > 1 && buf.line_is_printable_ascii(line_idx);
         Self {
             buf,
             line_idx,
             text_width,
-            line_start_char: buf.text.line_to_char(line_idx),
-            line_start_byte: buf.text.line_to_byte(line_idx),
+            line_start_char: buf.text().line_to_char(line_idx),
+            line_start_byte: buf.text().line_to_byte(line_idx),
             line_len,
             plain_ascii,
         }
@@ -203,7 +203,7 @@ impl<'a> VisualLineLayout<'a> {
         if self.plain_ascii {
             self.line_len
         } else {
-            let line = self.buf.text.line(self.line_idx);
+            let line = self.buf.text().line(self.line_idx);
             line.chars().take(self.line_len).fold(0, advance_visual_col)
         }
     }
@@ -345,7 +345,7 @@ impl<'a> VisualLineLayout<'a> {
             };
             let cells = self
                 .buf
-                .text
+                .text()
                 .chars_at(self.line_start_char + start)
                 .take(len)
                 .enumerate()
@@ -387,10 +387,10 @@ pub(super) fn visit_streamed_visual_rows(
         return true;
     }
 
-    let line = buf.text.line(line_idx);
+    let line = buf.text().line(line_idx);
     let keep = line.len_chars() - crate::buffer::line_break_len_chars(line);
-    let line_start_char = buf.text.line_to_char(line_idx);
-    let line_start_byte = buf.text.line_to_byte(line_idx);
+    let line_start_char = buf.text().line_to_char(line_idx);
+    let line_start_byte = buf.text().line_to_byte(line_idx);
     let mut chars = line.chars().take(keep).enumerate();
     let mut visual_col = 0usize;
     let mut byte_offset = line_start_byte;

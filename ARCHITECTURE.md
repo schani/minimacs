@@ -136,22 +136,17 @@ submission, or cursor reveal after viewport reflow). These entry points keep
 state transitions inside `Editor` without exposing broad mutable access to
 `App`.
 
-```rust
-struct Editor {
-    buffers: Vec<Buffer>,
-    next_buffer_id: usize,
-    pane_tree: PaneTree,
-    clipboard: String,
-    cwd: PathBuf,
-    should_quit: bool,
-    minibuffer: Minibuffer,
-    minibuffer_buffer: Buffer,  // id=usize::MAX, not in buffers vec
-    minibuffer_pane: Pane,      // viewport_height=1
-    isearch: Option<ISearchState>,
-    last_command: Option<Command>,
-    last_recenter_position: Option<RecenterPosition>,
-}
-```
+`Editor` keeps every owned aggregate and lifecycle flag private: buffer
+storage/identity allocation, pane tree, clipboard, cwd, quit state,
+minibuffer buffer/pane/state, isearch, command sequencing, and pending quit
+work. Rendering and input use immutable queries for buffers, panes,
+minibuffer/search state, cwd, and quit status. Changes use narrow editor
+intents for edits/history, messages, background-syntax completion, pane focus
+and viewport geometry, and prompt/search lifecycles. Production code receives
+neither generic mutable buffer collections nor generic mutable aggregate
+access; exceptional setup is confined to cfg(test) fixture methods. `App`
+follows the same rule for its editor, terminal, input state, syntax worker, and
+render counter; runtime gets only the editor's read-only quit result.
 
 `active_buffer()` / `active_pane()` return the minibuffer buffer/pane when the
 minibuffer is active, otherwise the focused pane's buffer. All editing and
@@ -289,18 +284,17 @@ suffix (`mod.rs<2>`). `Editor::unique_buffer_name` enforces this when opening
 files and when renaming via `C-x C-w`, so name-based lookup (`C-x b`) is
 unambiguous.
 
-```rust
-struct Buffer {
-    id: BufferId,       // usize, monotonically increasing, never reused
-    text: Rope,
-    path: Option<PathBuf>,
-    name: String,
-    modified: bool,
-    line_ending: LineEnding,
-    history: History,
-    syntax: Option<SyntaxState>,
-}
-```
+`Buffer` keeps its rope, file identity, modified/line-ending metadata, undo
+history, syntax state, and edit generation private. Readers use immutable
+queries such as `text()`, `path()`, `name()`, `is_modified()`, `syntax()`, and
+`edit_generation()`. Mutations express a transition instead of borrowing the
+storage: `replace` is the text/edit-generation choke point, save methods update
+file identity and clean history together, history recording/replay uses narrow
+buffer intents, and syntax installation/redetection cannot expose a mutable
+syntax slot. Transient minibuffer setup resets text, history, generation, and
+modified state as one operation. Tests use fixture helpers for exceptional
+setup such as choosing a line-ending encoding; no caller receives mutable Rope
+or History access.
 
 ### PaneTree
 
@@ -309,30 +303,16 @@ cursor, mark, scroll position, viewport dimensions, and remembered per-buffer
 view state. This matches emacs behavior where each window has independent state
 into a shared buffer.
 
-```rust
-struct Pane {
-    buffer_id: BufferId,
-    point: usize,
-    mark: Option<usize>,
-    preferred_column: Option<usize>,
-    scroll_top: usize,        // first (partially) visible buffer line
-    scroll_row_offset: usize, // visual rows of that line scrolled off above
-    viewport_height: usize,
-    viewport_width: usize,
-    last_buffer_id: Option<BufferId>,
-    buffer_states: HashMap<BufferId, BufferViewState>,
-}
-
-enum PaneNode {
-    Leaf(Pane),
-    Split { direction: Direction, children: Vec<PaneNode> },
-}
-
-struct PaneTree {
-    root: PaneNode,
-    focus_path: Vec<usize>,  // indices from root to focused leaf
-}
-```
+`Pane` keeps its buffer identity, point/mark, preferred column, scroll
+position, viewport, alternate buffer, and saved per-buffer views private.
+Immutable accessors supply rendering and geometry. Point/mark movement,
+viewport changes, buffer switching, scroll changes, and edit adjustment are
+explicit transitions. `PaneTree` privately owns both its root and focus path;
+it exposes immutable focused/path queries plus layout results, while focus,
+split/delete, scrolling, viewport updates, buffer replacement, and multi-pane
+edit adjustment stay tree-owned intents. In particular, no module outside
+`pane.rs` receives `&mut Pane`; tree-wide changes traverse private leaves
+inside that module.
 
 The scroll position is sub-line granular: `scroll_top` is the first buffer
 line with any visible content, and `scroll_row_offset` is how many visual rows
@@ -742,7 +722,14 @@ are mapped to appropriate styles (bold, italic, underline, colors).
 
 ## Minibuffer
 
-The minibuffer has two states:
+The minibuffer privately owns its lifecycle state, message, completion list,
+and completion page. Rendering receives immutable message/completion/prompt
+views; callers request lifecycle transitions (`start_prompt`, `finish`,
+`cancel`), label changes, completion paging/dismissal, or message publication.
+`Prompt` likewise keeps its kind and label private and exposes immutable
+queries, so no mutable prompt reference crosses the module boundary.
+
+The two lifecycle states are:
 
 - **Idle**: shows timed messages ("Wrote file.txt", "Quit", errors).
 - **Prompt**: active text input with a label. Prompt kinds:
@@ -803,8 +790,9 @@ it with "Quit". Handlers that want a result message ("Wrote file.txt",
 
 ### Minibuffer as a Real Buffer
 
-The minibuffer uses a real `Buffer` (`minibuffer_buffer`, id=`usize::MAX`) and
-`Pane` (`minibuffer_pane`) owned by `Editor`. Its viewport starts at one row
+The minibuffer uses a real `Buffer` (`minibuffer_buffer`, id=
+`MINIBUFFER_BUFFER_ID`) and `Pane` (`minibuffer_pane`) owned by `Editor`. The
+named constant replaces an editor-side sentinel literal. Its viewport starts at one row
 and `App::update_viewport()` refreshes both dimensions from `screen_layout()`.
 When a prompt is active, `active_buffer()` / `active_pane()` return the
 minibuffer's buffer/pane instead of the focused pane's. This means all editing
@@ -921,7 +909,11 @@ does not reset the preferred column; empty `C-y` only resets that column.
 
 ## Incremental Search
 
-`C-s` / `C-r` starts an incremental search. The search state tracks:
+`C-s` / `C-r` starts an incremental search. `ISearchState` keeps all search fields private. Immutable query/render views
+expose the query, direction, failure status, current match, and cached matches;
+search lifecycle and query/navigation changes remain intents implemented by
+the editor's isearch module. Tests use a cfg(test) query fixture rather than a
+mutable search-field reference. The search state tracks:
 
 - The query string (built up character by character).
 - One contiguous snapshot of the buffer text, created when search starts.

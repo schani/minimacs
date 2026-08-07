@@ -91,12 +91,12 @@ impl Editor {
 
         // Check if file is already open
         let existing_buffer_id = self.buffers.iter().find_map(|buf| {
-            let bp = buf.path.as_ref()?;
+            let bp = buf.path()?;
             let buf_canonical = normalized_file_identity(bp, &self.cwd);
-            (buf_canonical == canonical).then_some(buf.id)
+            (buf_canonical == canonical).then_some(buf.id())
         });
         if let Some(buffer_id) = existing_buffer_id {
-            let name = self.buffer_by_id(buffer_id).name.clone();
+            let name = self.buffer_by_id(buffer_id).name().to_string();
             self.switch_focused_pane_to_buffer(buffer_id);
             self.minibuffer
                 .show_message(format!("Switched to buffer {name}"));
@@ -113,9 +113,10 @@ impl Editor {
             }
             Err(e) => return Err(e),
         };
-        buf.name = self.unique_buffer_name(&buf.name, buf.path.as_deref());
-        let name = buf.name.clone();
-        let msg = if buf.path.as_ref().is_some_and(|p| p.exists()) {
+        let unique_name = self.unique_buffer_name(buf.name(), buf.path());
+        buf.rename(unique_name);
+        let name = buf.name().to_string();
+        let msg = if buf.path().is_some_and(Path::exists) {
             format!("Opened {name}")
         } else {
             format!("(New file) {name}")
@@ -142,14 +143,14 @@ impl Editor {
                 Ok(()) => {
                     opened += 1;
                     if first_buffer_id.is_none() {
-                        first_buffer_id = Some(self.pane_tree.focused_pane().buffer_id);
+                        first_buffer_id = Some(self.pane_tree.focused_pane().buffer_id());
                     }
                 }
                 Err(e) => last_error = Some(format!("{}: {e}", path.display())),
             }
         }
         if let Some(id) = first_buffer_id {
-            if self.pane_tree.focused_pane().buffer_id != id {
+            if self.pane_tree.focused_pane().buffer_id() != id {
                 self.switch_focused_pane_to_buffer(id);
             }
         }
@@ -179,7 +180,7 @@ impl Editor {
         let taken = |name: &str| {
             self.buffers
                 .iter()
-                .any(|b| b.name == name && Some(b.id) != exclude)
+                .any(|b| b.name() == name && Some(b.id()) != exclude)
         };
         if !taken(base) {
             return base.to_string();
@@ -212,16 +213,17 @@ impl Editor {
 
     fn switch_focused_pane_to_buffer(&mut self, buffer_id: usize) {
         let buffer_len = self.buffer_by_id(buffer_id).char_count();
-        self.pane_tree
-            .focused_pane_mut()
-            .switch_buffer(buffer_id, buffer_len);
+        self.pane_tree.switch_focused_buffer(buffer_id, buffer_len);
     }
 
     pub(super) fn switch_to_buffer(&mut self, name: &str) {
         let buffer_id = if name.is_empty() {
             self.pane_tree.focused_pane().alternate_buffer_id()
         } else {
-            self.buffers.iter().find(|b| b.name == name).map(|b| b.id)
+            self.buffers
+                .iter()
+                .find(|b| b.name() == name)
+                .map(Buffer::id)
         };
 
         if let Some(buffer_id) = buffer_id {
@@ -236,9 +238,9 @@ impl Editor {
         if self.minibuffer.is_active() {
             return;
         }
-        let buffer_id = self.pane_tree.focused_pane().buffer_id;
-        let is_modified = self.current_buffer().modified;
-        let name = self.current_buffer().name.clone();
+        let buffer_id = self.pane_tree.focused_pane().buffer_id();
+        let is_modified = self.current_buffer().is_modified();
+        let name = self.current_buffer().name().to_string();
 
         if is_modified {
             self.start_minibuffer_prompt(
@@ -252,37 +254,33 @@ impl Editor {
     }
 
     pub(super) fn do_kill_buffer(&mut self, buffer_id: usize) {
-        self.buffers.retain(|b| b.id != buffer_id);
+        self.buffers.retain(|b| b.id() != buffer_id);
 
         let new_id = if self.buffers.is_empty() {
             let buf = Buffer::new_scratch(self.next_buffer_id);
             self.next_buffer_id += 1;
-            let id = buf.id;
+            let id = buf.id();
             self.buffers.push(buf);
             id
         } else {
-            self.buffers[0].id
+            self.buffers[0].id()
         };
         let new_buffer_len = self.buffer_by_id(new_id).char_count();
 
         // Update all panes that referenced the killed buffer.
-        self.pane_tree.for_each_pane_mut(&mut |pane| {
-            pane.forget_buffer(buffer_id);
-            if pane.buffer_id == buffer_id {
-                pane.restore_buffer_state(new_id, new_buffer_len);
-            }
-        });
+        self.pane_tree
+            .replace_killed_buffer(buffer_id, new_id, new_buffer_len);
     }
 
     // === File operations ===
 
     pub(super) fn save(&mut self) {
-        let has_path = self.current_buffer().path.is_some();
+        let has_path = self.current_buffer().path().is_some();
         if !has_path {
             self.write_file_prompt();
             return;
         }
-        let buffer_id = self.current_buffer().id;
+        let buffer_id = self.current_buffer().id();
         if self.external_modification_guard(buffer_id, false) {
             return;
         }
@@ -302,13 +300,13 @@ impl Editor {
         buffer_id: usize,
         resume_quit: bool,
     ) -> bool {
-        let Some(buf) = self.buffers.iter().find(|b| b.id == buffer_id) else {
+        let Some(buf) = self.buffers.iter().find(|b| b.id() == buffer_id) else {
             return false;
         };
         if !buf.externally_modified() {
             return false;
         }
-        let name = buf.name.clone();
+        let name = buf.name().to_string();
         self.start_minibuffer_prompt(
             PromptKind::SaveAnywayConfirm {
                 buffer_id,
@@ -334,7 +332,7 @@ impl Editor {
     ) -> anyhow::Result<()> {
         let path = match target {
             WriteTarget::BufferPath => {
-                let Some(buf) = self.buffers.iter_mut().find(|b| b.id == buffer_id) else {
+                let Some(buf) = self.buffers.iter_mut().find(|b| b.id() == buffer_id) else {
                     bail!("no buffer with id {buffer_id}");
                 };
                 return buf.save();
@@ -347,7 +345,7 @@ impl Editor {
             bail!("empty file path");
         }
         {
-            let Some(buf) = self.buffers.iter_mut().find(|b| b.id == buffer_id) else {
+            let Some(buf) = self.buffers.iter_mut().find(|b| b.id() == buffer_id) else {
                 bail!("no buffer with id {buffer_id}");
             };
             buf.save_as(&path)?;
@@ -358,8 +356,8 @@ impl Editor {
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| path.display().to_string());
         let name = self.unique_buffer_name_excluding(&base, Some(&path), Some(buffer_id));
-        if let Some(buf) = self.buffers.iter_mut().find(|b| b.id == buffer_id) {
-            buf.name = name;
+        if let Some(buf) = self.buffers.iter_mut().find(|b| b.id() == buffer_id) {
+            buf.rename(name);
         }
         Ok(())
     }
@@ -369,7 +367,7 @@ impl Editor {
     pub(super) fn write_buffer_reporting(&mut self, buffer_id: usize, target: WriteTarget) {
         match self.write_buffer(buffer_id, target) {
             Ok(()) => {
-                let name = self.buffer_by_id(buffer_id).name.clone();
+                let name = self.buffer_by_id(buffer_id).name().to_string();
                 self.minibuffer.show_message(format!("Wrote {name}"));
             }
             Err(e) => {
