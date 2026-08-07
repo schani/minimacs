@@ -68,7 +68,7 @@ where
                 // line scrolled off above the viewport gives the visual row
                 // counted from the top of the scroll_top line.
                 let rel_y = (click_y - text_area.y) as usize
-                    + render::clamped_row_offset(pane, buf, text_width);
+                    + crate::display::clamped_row_offset(pane, buf, text_width);
 
                 let col_in_text = rel_x;
 
@@ -81,7 +81,7 @@ where
 
                 let mut line_idx = scroll_top;
                 while line_idx < total_lines {
-                    let num_visual = render::visual_row_count(buf, line_idx, text_width);
+                    let num_visual = crate::display::visual_row_count(buf, line_idx, text_width);
 
                     if visual_row + num_visual > rel_y {
                         // The click is within this line's visual rows
@@ -99,7 +99,7 @@ where
                     let char_count = buf.char_count();
                     self.editor.pane_tree.focused_pane_mut().point = char_count;
                 } else {
-                    let target_col = render::buffer_col_for_visual_position(
+                    let target_col = crate::display::buffer_col_for_visual_position(
                         buf,
                         target_line,
                         target_row,
@@ -151,7 +151,7 @@ where
                 let scroll_row_offset = pane.scroll_row_offset;
                 let text_width = rect.width as usize;
                 let total_lines = buf.line_count();
-                let line_len = |l: usize| render::line_visual_width(buf, l);
+                let line_len = |l: usize| crate::display::line_visual_width(buf, l);
 
                 let (new_top, new_offset) = match mouse.kind {
                     MouseEventKind::ScrollDown => crate::pane::scroll_down_visual_rows(

@@ -71,10 +71,10 @@ src/
   pane.rs           PaneTree/PaneNode/Pane -- window layout tree
   keymap.rs         Key/KeymapNode/KeymapState -- multi-key chord trie
   command.rs        Command enum -- flat enum of all editor actions
+  display.rs        Neutral wrapped-line display geometry shared by editor,
+                    isearch, mouse mapping, and rendering
   render.rs         Rendering facade
   render/layout.rs  Screen, completions, and minibuffer layout
-  render/visual_line.rs
-                    Shared wrapped-line display geometry
   render/widgets.rs render() orchestration and ratatui widgets
   minibuffer.rs     Minibuffer/Prompt -- prompt state, tab completion functions
   history.rs        History -- undo/redo with edit grouping
@@ -101,12 +101,15 @@ binary wrappers ──> lib entry functions
                          |                 |          |          +──> history
                          |                 |          |          +──> syntax
                          |                 |          |
+                         |                 |          +──> display ──> buffer + pane + indent
                          |                 |          +──> pane
                          |                 |          +──> minibuffer
                          |                 |          +──> command
                          |                 +──> render ──> editor (read-only)
-                         |                 |       |
-                         |                 +───────+──> syntax_worker ──> syntax
+                         |                 |       +──> display
+                         |                 |       +──> syntax_worker ──> syntax
+                         |                 +──> display (mouse geometry)
+                         |                 +──> syntax_worker ──> syntax
                          |                 +──> keymap
                          |                 +──> event
                          +──> syntax-bench ──> syntax_worker ──> syntax
@@ -114,7 +117,11 @@ binary wrappers ──> lib entry functions
 ```
 
 All rendering reads from `Editor` without mutating it. The `render()` function
-takes `&Editor` plus the syntax worker handle and produces a frame.
+takes `&Editor` plus the syntax worker handle and produces a frame. Neutral
+wrapped-line geometry lives in `display.rs`: editor cursor reveal, isearch
+reveal, mouse mapping, and render widgets all depend on it directly. The editor
+never depends on `render`; ratatui screen layout and widget orchestration remain
+inside `render`.
 
 ## Key Data Structures
 
@@ -532,11 +539,12 @@ does not cancel a chord in progress.
 2. Walks `pane_tree.calculate_rects()` to get per-pane rectangles.
 3. For each pane:
    - Splits the pane rect into a text area and a 1-row mode line.
-   - `VisualLineLayout` is the shared authority for wrapping, cursor geometry,
-     mouse reverse-mapping, and visible-row extraction. For printable ASCII it
-     computes deep wrapped positions directly from Rope character offsets. For
-     Unicode, tabs, and control characters it streams from the line start but
-     retains only one visual row at a time. `Buffer::line_is_printable_ascii`
+   - `display::VisualLineLayout` is the shared authority for wrapping, cursor
+     geometry, mouse reverse-mapping, and visible-row extraction. For printable
+     ASCII it computes deep wrapped positions directly from Rope character
+     offsets. For Unicode, tabs, and control characters it streams from the
+     line start but retains only one visual row at a time.
+     `Buffer::line_is_printable_ascii`
      caches the eight most recently queried line classifications, keyed by the
      buffer edit generation; stale results cannot match after an edit and age
      out without explicit invalidation.
@@ -576,7 +584,7 @@ does not cancel a chord in progress.
    the column would compute to one past the last cell; the cursor instead
    wraps to column 0 of the next visual row (emacs behavior) — on screen the
    next buffer line's first row, or a blank row past the end of the buffer.
-   `render::visual_row_col_in_line` computes this wrapped position and is
+   `display::visual_row_col_in_line` computes this wrapped position and is
    shared by cursor placement and scroll computation, so the extra row is
    also counted when scrolling the cursor into view (clicking that row maps
    to what it displays: the next line's start, or end-of-buffer — that same

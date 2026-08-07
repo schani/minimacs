@@ -119,7 +119,7 @@ impl Editor {
         let vw = pane.viewport_width;
         let buf = self.current_buffer();
         let (line, col) = buf.char_to_line_col(char_pos);
-        let (cursor_row, _) = crate::render::visual_row_col_in_line(buf, line, col, vw);
+        let (cursor_row, _) = crate::display::visual_row_col_in_line(buf, line, col, vw);
         let (new_top, new_offset) = crate::pane::compute_scroll_position(
             scroll_top,
             scroll_row_offset,
@@ -127,7 +127,7 @@ impl Editor {
             cursor_row,
             vh,
             vw,
-            |l| crate::render::line_visual_width(buf, l),
+            |l| crate::display::line_visual_width(buf, l),
         );
         let pane = self.pane_tree.focused_pane_mut();
         pane.scroll_top = new_top;
