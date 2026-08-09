@@ -140,11 +140,7 @@ impl KeymapNode {
     pub fn bindings(&self) -> Vec<(String, Command)> {
         fn walk(node: &KeymapNode, keys: &mut Vec<Key>, out: &mut Vec<(String, Command)>) {
             if let Some(command) = &node.command {
-                let sequence = keys
-                    .iter()
-                    .map(Key::display)
-                    .collect::<Vec<_>>()
-                    .join(" ");
+                let sequence = keys.iter().map(Key::display).collect::<Vec<_>>().join(" ");
                 out.push((sequence, command.clone()));
             }
             for (key, child) in &node.children {
@@ -377,6 +373,9 @@ pub fn default_keymap() -> KeymapNode {
     // Display
     root.bind(&[ctrl('l')], Command::RecenterTopBottom);
 
+    // Execute command by name
+    root.bind(&[alt('x')], Command::ExecuteExtended);
+
     // Help (Emacs `describe-bindings`)
     root.bind(
         &[ctrl('h'), plain(KeyCode::Char('b'))],
@@ -404,7 +403,10 @@ mod tests {
     fn bindings_are_generated_by_walking_the_trie() {
         let mut keymap = KeymapNode::new();
         keymap.bind(&[ctrl('z')], Command::Undo);
-        keymap.bind(&[ctrl('x'), plain(KeyCode::Char('a'))], Command::BeginningOfLine);
+        keymap.bind(
+            &[ctrl('x'), plain(KeyCode::Char('a'))],
+            Command::BeginningOfLine,
+        );
         keymap.bind(&[ctrl('a')], Command::BeginningOfLine);
 
         let bindings = keymap.bindings();
@@ -416,6 +418,15 @@ mod tests {
                 ("C-z".to_string(), Command::Undo),
             ]
         );
+    }
+
+    #[test]
+    fn execute_extended_command_uses_meta_x() {
+        let mut state = KeymapState::new(default_keymap());
+        assert!(matches!(
+            state.process_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::ALT)),
+            KeymapResult::Matched(Command::ExecuteExtended)
+        ));
     }
 
     #[test]

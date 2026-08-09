@@ -10,6 +10,32 @@ fn open_find_file_with_clear() -> Vec<Event> {
 }
 
 #[test]
+fn mx_tab_reuses_minibuffer_completion_for_command_names() {
+    let mut events = vec![alt(KeyCode::Char('x'))];
+    events.extend(key_events("delete-"));
+    events.push(key(KeyCode::Tab));
+    let (mut app, mut events) = test_app(60, 12, events);
+    app.run_until_idle(&mut events).unwrap();
+
+    let completions = app.editor.minibuffer().completions().unwrap();
+    assert!(completions.contains(&"delete-backward-char".to_string()));
+    assert!(completions.contains(&"delete-forward-char".to_string()));
+    assert_eq!(app.editor.minibuffer_text(), "delete-");
+}
+
+#[test]
+fn mx_tab_uniquely_completes_command_name() {
+    let mut events = vec![alt(KeyCode::Char('x'))];
+    events.extend(key_events("describe-b"));
+    events.push(key(KeyCode::Tab));
+    let (mut app, mut events) = test_app(60, 12, events);
+    app.run_until_idle(&mut events).unwrap();
+
+    assert_eq!(app.editor.minibuffer_text(), "describe-bindings");
+    assert!(app.editor.minibuffer().completions().is_none());
+}
+
+#[test]
 fn tab_with_multiple_matches_shows_completions() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("foobar.txt"), "").unwrap();

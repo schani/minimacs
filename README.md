@@ -10,7 +10,8 @@ users. It is not extensible -- it ships one good editor, not a platform.
 ## Features
 
 - **Emacs keybindings** -- standard movement, editing, and chord sequences
-  (`C-x C-s`, `C-x C-f`, `M-g g`, etc.)
+  (`C-x C-s`, `C-x C-f`, `M-g g`, etc.), plus `M-x` command dispatch with
+  completion
 - **Multiple buffers** -- open, switch, and kill buffers
 - **Pane splits** -- vertical and horizontal splits with per-pane cursors
 - **Syntax highlighting** -- tree-sitter based, supporting 13 languages

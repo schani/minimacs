@@ -24,7 +24,6 @@ The README promises "emacs keybindings"; these are the standard facilities a
 real emacs user expects that don't exist yet (the `Command` enum has no variant
 for any of them):
 
-- **M-x** — no command-by-name dispatcher at all.
 - **query-replace (M-%)** — there is currently no replace command of any kind.
 - **Kill ring with M-y (yank-pop)** — the clipboard is a single `String`
   (`editor.rs:43`); only `C-k` appends. A proper kill ring would also resolve

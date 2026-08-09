@@ -1,4 +1,5 @@
 use super::*;
+use crate::minibuffer::PromptKind;
 
 #[test]
 fn forward_char_moves_one() {
@@ -313,6 +314,15 @@ fn save_buffer_without_path_prompts() {
     let mut editor = Editor::new();
     editor.execute(Command::Save);
     assert!(editor.minibuffer.is_active());
+}
+
+#[test]
+fn execute_extended_command_opens_prompt() {
+    let mut editor = Editor::new();
+    editor.execute(Command::ExecuteExtended);
+    let prompt = editor.minibuffer.prompt().unwrap();
+    assert_eq!(prompt.kind(), PromptKind::ExecuteExtendedCommand);
+    assert_eq!(prompt.label(), "M-x ");
 }
 
 #[test]

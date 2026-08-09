@@ -15,6 +15,7 @@ pub enum PromptKind {
     SwitchBuffer,
     WriteFile,
     GotoLine,
+    ExecuteExtendedCommand,
     ISearch,
     /// "Buffer X modified; kill anyway? (y/n)"
     KillConfirm {
@@ -239,15 +240,11 @@ pub fn complete_path(input: &str) -> String {
     complete_path_with_candidates(input, Path::new(".")).0
 }
 
-/// Tab completion for buffer names. Returns the completed name string and sorted display candidates.
-///
-/// The first element is the completed prefix (same as `complete_buffer`).
-/// The second element is a sorted list of matching buffer names. Empty if unique/no match.
-pub fn complete_buffer_with_candidates(
-    input: &str,
-    buffer_names: &[String],
-) -> (String, Vec<String>) {
-    let matches: Vec<&String> = buffer_names
+/// Complete an input prefix from an in-memory set of candidate names.
+/// Returns the completed prefix and sorted display candidates. The display
+/// list is empty for a unique match or no match.
+pub fn complete_from_candidates(input: &str, candidates: &[String]) -> (String, Vec<String>) {
+    let matches: Vec<&String> = candidates
         .iter()
         .filter(|name| name.starts_with(input))
         .collect();
@@ -263,6 +260,15 @@ pub fn complete_buffer_with_candidates(
     } else {
         (input.to_string(), Vec::new())
     }
+}
+
+/// Tab completion for buffer names. Uses the same in-memory candidate
+/// completion as command-name completion.
+pub fn complete_buffer_with_candidates(
+    input: &str,
+    buffer_names: &[String],
+) -> (String, Vec<String>) {
+    complete_from_candidates(input, buffer_names)
 }
 
 /// Tab completion for buffer names. Returns the completed name string.

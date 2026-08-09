@@ -226,6 +226,47 @@ fn goto_line_scrolls_target_into_view() {
 }
 
 #[test]
+fn execute_extended_command_accepts_exact_name() {
+    let mut editor = Editor::new_with_text("one\ntwo");
+    editor.execute(Command::BufferEnd);
+    editor.execute(Command::ExecuteExtended);
+    editor.set_minibuffer_text("beginning-of-buffer");
+    editor.submit_prompt();
+
+    assert_eq!(editor.point(), 0);
+    assert!(!editor.minibuffer.is_active());
+}
+
+#[test]
+fn execute_extended_command_accepts_unique_prefix() {
+    let mut editor = Editor::new();
+    editor.execute(Command::ExecuteExtended);
+    editor.set_minibuffer_text("goto-l");
+    editor.submit_prompt();
+
+    let prompt = editor.minibuffer.prompt().unwrap();
+    assert_eq!(prompt.kind(), PromptKind::GotoLine);
+}
+
+#[test]
+fn execute_extended_command_reasks_for_ambiguous_or_unknown_name() {
+    let mut editor = Editor::new();
+    for input in ["delete-", "not-a-command"] {
+        editor.set_minibuffer_text(input);
+        if !editor.minibuffer.is_active() {
+            editor.execute(Command::ExecuteExtended);
+            editor.set_minibuffer_text(input);
+        }
+        editor.submit_prompt();
+
+        let prompt = editor.minibuffer.prompt().unwrap();
+        assert_eq!(prompt.kind(), PromptKind::ExecuteExtendedCommand);
+        assert_eq!(prompt.label(), "M-x (command required) ");
+        assert_eq!(editor.minibuffer_text(), input);
+    }
+}
+
+#[test]
 fn find_file_submit() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("test.txt");
