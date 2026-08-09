@@ -220,7 +220,10 @@ and every command leaves point on a cluster boundary.
 
 Text is stored in a `ropey::Rope`. Each buffer has an independent undo history
 and optional syntax highlighting state. Buffers have no cursor -- cursor
-position is per-pane.
+position is per-pane. A buffer can be marked read-only; editor mutation
+commands and both keyboard/bracketed paste paths reject changes to it while
+movement, selection, and copying remain available. Generated informational
+buffers use this flag.
 
 **LF-only line endings (decision, 2026-07-10).** Only LF is supported as a
 line break; the rope is invariantly LF-only. CRLF is a file *encoding*:
@@ -371,7 +374,10 @@ struct KeymapNode {
 
 `KeymapState` wraps the trie root and accumulates pending keys. Each call to
 `process_key()` walks the trie from the root using all pending keys and returns
-`Matched(Command)`, `Pending`, or `NotFound`.
+`Matched(Command)`, `Pending`, or `NotFound`. `KeymapNode::bindings()` walks
+that same trie recursively and sorts the result for stable presentation;
+`C-h b` (`DescribeBindings`) uses it to create the read-only `*Help*` buffer,
+so the displayed list cannot drift from `default_keymap()`.
 
 `Key` has no shift field: `Key::from_event` resolves a SHIFT modifier on a
 char key into the shifted character (`shifted_char`: Unicode uppercase for
@@ -387,7 +393,8 @@ fallback.
 
 A flat enum with no data except `InsertChar(char)`. All editor actions are
 variants. There are no trait objects or dynamic dispatch -- just a single
-`match` in `Editor::execute()`.
+`match` in `Editor::execute()`. `Command::name()` provides the stable,
+Emacs-style command names used by generated keybinding help.
 
 ### History
 

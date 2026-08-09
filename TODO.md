@@ -1,3 +1,5 @@
+- [x] `C-h b` opens a read-only `*Help*` buffer whose binding list is generated
+      by walking the actual default keymap trie (`describe-bindings`).
 - [x] `M-<` and `M->` don't work with the "option" key on macOS/cmux. They do work with "ESC", but they should also work with "option". (Done: kitty-protocol terminals report Alt+Shift+`,` as the *base* key with ALT|SHIFT; `Key::from_event` now resolves SHIFT into the shifted char (Unicode uppercase + US-layout punctuation table), and `main()` additionally pushes `REPORT_ALTERNATE_KEYS` so conforming terminals send the layout-correct shifted char themselves.)
 
 # LF-only line endings (product decision, 2026-07-10)

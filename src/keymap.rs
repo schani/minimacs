@@ -133,6 +133,32 @@ impl KeymapNode {
     pub fn get(&self, key: &Key) -> Option<&KeymapNode> {
         self.children.get(key)
     }
+
+    /// Return every bound key sequence by walking this trie. The result is
+    /// sorted because child storage is a `HashMap`; callers must not expose
+    /// map iteration order to users.
+    pub fn bindings(&self) -> Vec<(String, Command)> {
+        fn walk(node: &KeymapNode, keys: &mut Vec<Key>, out: &mut Vec<(String, Command)>) {
+            if let Some(command) = &node.command {
+                let sequence = keys
+                    .iter()
+                    .map(Key::display)
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                out.push((sequence, command.clone()));
+            }
+            for (key, child) in &node.children {
+                keys.push(key.clone());
+                walk(child, keys, out);
+                keys.pop();
+            }
+        }
+
+        let mut bindings = Vec::new();
+        walk(self, &mut Vec::new(), &mut bindings);
+        bindings.sort_by(|left, right| left.0.cmp(&right.0));
+        bindings
+    }
 }
 
 /// Result of processing a key through the keymap.
@@ -351,6 +377,12 @@ pub fn default_keymap() -> KeymapNode {
     // Display
     root.bind(&[ctrl('l')], Command::RecenterTopBottom);
 
+    // Help (Emacs `describe-bindings`)
+    root.bind(
+        &[ctrl('h'), plain(KeyCode::Char('b'))],
+        Command::DescribeBindings,
+    );
+
     // Search
     root.bind(&[ctrl('s')], Command::ISearchForward);
     root.bind(&[ctrl('r')], Command::ISearchBackward);
@@ -367,6 +399,37 @@ pub fn default_keymap() -> KeymapNode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bindings_are_generated_by_walking_the_trie() {
+        let mut keymap = KeymapNode::new();
+        keymap.bind(&[ctrl('z')], Command::Undo);
+        keymap.bind(&[ctrl('x'), plain(KeyCode::Char('a'))], Command::BeginningOfLine);
+        keymap.bind(&[ctrl('a')], Command::BeginningOfLine);
+
+        let bindings = keymap.bindings();
+        assert_eq!(
+            bindings,
+            vec![
+                ("C-a".to_string(), Command::BeginningOfLine),
+                ("C-x a".to_string(), Command::BeginningOfLine),
+                ("C-z".to_string(), Command::Undo),
+            ]
+        );
+    }
+
+    #[test]
+    fn describe_bindings_uses_the_emacs_chord() {
+        let mut state = KeymapState::new(default_keymap());
+        assert!(matches!(
+            state.process_key(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL)),
+            KeymapResult::Pending
+        ));
+        assert!(matches!(
+            state.process_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE)),
+            KeymapResult::Matched(Command::DescribeBindings)
+        ));
+    }
 
     #[test]
     fn single_key_lookup() {

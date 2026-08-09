@@ -2,6 +2,40 @@ use super::*;
 use crate::minibuffer::PromptKind;
 
 #[test]
+fn describe_bindings_opens_generated_read_only_help_buffer() {
+    let mut editor = Editor::new_with_text("editable");
+
+    editor.execute(Command::DescribeBindings);
+
+    assert_eq!(editor.current_buffer().name(), "*Help*");
+    assert!(editor.current_buffer().is_read_only());
+    let help = editor.buffer_text();
+    assert!(help.starts_with("Key bindings\n\n"));
+    assert!(help.contains("C-f"));
+    assert!(help.contains("forward-char"));
+    assert!(help.contains("C-h b"));
+    assert!(help.contains("describe-bindings"));
+    for (keys, command) in default_keymap().bindings() {
+        assert!(
+            help.lines().any(|line| {
+                line.starts_with(&keys) && line.ends_with(command.name())
+            }),
+            "generated help omitted {keys} -> {}",
+            command.name()
+        );
+    }
+
+    editor.execute(Command::InsertChar('x'));
+    editor.paste_supplied_text("pasted");
+    assert_eq!(editor.buffer_text(), help);
+    assert_eq!(editor.minibuffer.message(), Some("Buffer is read-only"));
+
+    // Read-only help buffers still permit navigation.
+    editor.execute(Command::BufferEnd);
+    assert_eq!(editor.point(), help.chars().count());
+}
+
+#[test]
 fn open_nonexistent_file_creates_buffer() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("new_file.txt");

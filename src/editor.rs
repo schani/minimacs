@@ -5,6 +5,7 @@ use ratatui::layout::Direction;
 use crate::buffer::Buffer;
 use crate::command::Command;
 use crate::indent::INDENT_WIDTH;
+use crate::keymap::default_keymap;
 use crate::minibuffer::Minibuffer;
 use crate::pane::{Pane, PaneTree};
 
@@ -485,6 +486,15 @@ impl Editor {
     }
 
     pub fn execute(&mut self, cmd: Command) {
+        if !self.minibuffer.is_active()
+            && self.current_buffer().is_read_only()
+            && Self::command_modifies_buffer(&cmd)
+        {
+            self.last_command = None;
+            self.minibuffer.show_message("Buffer is read-only".to_string());
+            return;
+        }
+
         // When minibuffer is active, intercept InsertNewline (submit) and InsertTab (complete)
         if self.minibuffer.is_active() {
             match &cmd {
@@ -575,6 +585,7 @@ impl Editor {
             Command::CycleFocus => self.cycle_focus(),
             Command::ISearchForward => self.isearch_start(SearchDirection::Forward),
             Command::ISearchBackward => self.isearch_start(SearchDirection::Backward),
+            Command::DescribeBindings => self.describe_bindings(),
             Command::Cancel => self.cancel(),
             Command::Quit => self.quit(),
         }
@@ -582,6 +593,56 @@ impl Editor {
         self.last_command = this_command;
 
         self.ensure_cursor_visible();
+    }
+
+    fn command_modifies_buffer(cmd: &Command) -> bool {
+        matches!(
+            cmd,
+            Command::InsertChar(_)
+                | Command::InsertNewline
+                | Command::IndentLine
+                | Command::DedentLine
+                | Command::DeleteBackward
+                | Command::DeleteForward
+                | Command::DeleteWordBackward
+                | Command::KillLine
+                | Command::Undo
+                | Command::Redo
+                | Command::Cut
+                | Command::Paste
+        )
+    }
+
+    /// Generate a `describe-bindings` buffer from the keymap trie itself.
+    fn describe_bindings(&mut self) {
+        const HELP_NAME: &str = "*Help*";
+
+        let bindings = default_keymap().bindings();
+        let key_width = bindings
+            .iter()
+            .map(|(keys, _)| keys.chars().count())
+            .max()
+            .unwrap_or(3)
+            .max(3);
+        let mut text = String::from("Key bindings\n\n");
+        text.push_str(&format!("{:<key_width$}  Command\n", "Key"));
+        text.push_str(&format!("{:-<key_width$}  -------\n", ""));
+        for (keys, command) in bindings {
+            text.push_str(&format!("{keys:<key_width$}  {}\n", command.name()));
+        }
+
+        let buffer_id = if let Some(buffer) = self.buffers.iter().find(|b| b.name() == HELP_NAME) {
+            buffer.id()
+        } else {
+            let id = self.next_buffer_id;
+            self.next_buffer_id += 1;
+            self.buffers
+                .push(Buffer::new_read_only(id, HELP_NAME, &text));
+            id
+        };
+        let buffer_len = self.buffer_by_id(buffer_id).char_count();
+        self.pane_tree
+            .switch_focused_buffer(buffer_id, buffer_len);
     }
 
     /// Scroll the focused editing pane so its point is visible. Runs after
@@ -1379,6 +1440,12 @@ impl Editor {
     /// obtained clipboard text. Normalization, completion lifecycle, undo
     /// grouping, point/goal-column updates, and cursor reveal stay together.
     pub(crate) fn paste_supplied_text(&mut self, text: &str) {
+        if !self.minibuffer.is_active() && self.current_buffer().is_read_only() {
+            self.clear_last_command();
+            self.minibuffer.show_message("Buffer is read-only".to_string());
+            return;
+        }
+
         self.clear_last_command();
         if self.minibuffer.is_active() {
             self.minibuffer.dismiss_completions();

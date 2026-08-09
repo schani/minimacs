@@ -137,6 +137,7 @@ pub struct Buffer {
     path: Option<PathBuf>,
     name: String,
     modified: bool,
+    read_only: bool,
     line_ending: LineEnding,
     history: History,
     syntax: Option<SyntaxState>,
@@ -170,6 +171,10 @@ impl Buffer {
 
     pub fn is_modified(&self) -> bool {
         self.modified
+    }
+
+    pub fn is_read_only(&self) -> bool {
+        self.read_only
     }
 
     pub fn line_ending(&self) -> LineEnding {
@@ -240,6 +245,7 @@ impl Buffer {
             path: None,
             name: "*scratch*".to_string(),
             modified: false,
+            read_only: false,
             line_ending: LineEnding::Lf,
             history: History::new(),
             syntax: None,
@@ -262,6 +268,7 @@ impl Buffer {
             path: Some(path.to_path_buf()),
             name,
             modified: false,
+            read_only: false,
             line_ending: LineEnding::Lf,
             history: History::new(),
             syntax: syntax_state,
@@ -278,6 +285,7 @@ impl Buffer {
             path: None,
             name: name.to_string(),
             modified: false,
+            read_only: false,
             line_ending: LineEnding::Lf,
             history: History::new(),
             syntax: None,
@@ -285,6 +293,14 @@ impl Buffer {
             line_class_cache: RefCell::new(VecDeque::with_capacity(LINE_CLASS_CACHE_CAPACITY)),
             disk_state: DiskState::Missing,
         }
+    }
+
+    /// Construct non-file informational content that editor commands cannot
+    /// modify, such as generated help.
+    pub fn new_read_only(id: BufferId, name: &str, content: &str) -> Self {
+        let mut buffer = Self::from_str(id, name, content);
+        buffer.read_only = true;
+        buffer
     }
 
     pub fn from_file(id: BufferId, path: &Path) -> Result<Self> {
@@ -330,6 +346,7 @@ impl Buffer {
             path: Some(path.to_path_buf()),
             name,
             modified: false,
+            read_only: false,
             line_ending,
             history: History::new(),
             syntax: syntax_state,
