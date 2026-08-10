@@ -49,6 +49,9 @@ cargo install --git https://github.com/schani/minimacs --no-default-features
 
 Requires Rust 1.88+ and a C compiler (for tree-sitter grammars). CI checks the
 locked dependency graph with Rust 1.88 as well as the current stable toolchain.
+The repository defaults native dependencies to `CFLAGS=-g0`: GCC otherwise
+spends many minutes generating unused debug information for the large generated
+`tree-sitter-gitcommit` parser. Set `CFLAGS` explicitly to override this.
 
 ```sh
 cargo build --release

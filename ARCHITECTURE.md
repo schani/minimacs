@@ -47,6 +47,9 @@ Terminal input (crossterm)
 ## Module Map
 
 ```
+.cargo/config.toml Native-build defaults; `CFLAGS=-g0` avoids pathological GCC
+                   debug-info time for the generated gitcommit parser while
+                   allowing an explicit environment override
 src/
   lib.rs            Single owner of the shared module tree; exposes only the
                     three binary entry functions

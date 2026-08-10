@@ -160,6 +160,20 @@ fn aggregate_privacy(
     Ok(fields)
 }
 
+#[test]
+fn native_debug_info_is_disabled_by_default_with_an_override_escape_hatch() {
+    let config = std::fs::read_to_string(".cargo/config.toml")
+        .expect("the repository must provide its Cargo environment defaults");
+    assert!(
+        config.contains("CFLAGS = { value = \"-g0\", force = false }"),
+        "CFLAGS must default to -g0 without overriding a developer's environment"
+    );
+    assert!(
+        config.contains("tree-sitter-gitcommit"),
+        "the unusually large generated parser must be documented as the reason"
+    );
+}
+
 fn public_aggregate_fields(
     contents: &str,
     aggregate_names: Vec<&'static str>,
