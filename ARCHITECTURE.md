@@ -353,7 +353,12 @@ preferred column, and scroll position (including the sub-line row offset)
 into `buffer_states`. Switching back to a buffer in the same pane restores
 that saved view state. `last_buffer_id` tracks the alternate buffer for that
 pane, so `C-x b RET` toggles to the most recently visited buffer in that
-window.
+window. Killing a buffer also follows this per-pane history: every pane that
+was displaying the killed buffer returns to its own surviving alternate and
+restores that buffer's saved view state. A pane with no surviving alternate
+uses the editor's stable fallback (the first remaining buffer, or a newly
+created `*scratch*` when none remain). References to the killed buffer are
+forgotten in every pane, including panes that were not displaying it.
 
 The focus path is a sequence of child indices that navigate from the root to the
 currently focused pane. Operations like `focused_pane()` walk this path.

@@ -523,13 +523,23 @@ impl PaneTree {
         });
     }
 
+    /// Remove every reference to a killed buffer. Each pane displaying it
+    /// returns to that pane's own surviving alternate; `fallback_id` is used
+    /// only when the pane has no such alternate. Buffer lengths are supplied
+    /// by the editor so restored point and mark can be clamped correctly.
     pub(crate) fn replace_killed_buffer(
         &mut self,
         buffer_id: BufferId,
-        replacement_id: BufferId,
-        replacement_len: usize,
+        fallback_id: BufferId,
+        surviving_buffer_lengths: &HashMap<BufferId, usize>,
     ) {
         Self::visit_panes_mut(&mut self.root, &mut |pane| {
+            let replacement_id = pane
+                .alternate_buffer_id()
+                .filter(|id| surviving_buffer_lengths.contains_key(id))
+                .unwrap_or(fallback_id);
+            let replacement_len = surviving_buffer_lengths[&replacement_id];
+
             pane.forget_buffer(buffer_id);
             if pane.buffer_id() == buffer_id {
                 pane.restore_buffer_state(replacement_id, replacement_len);

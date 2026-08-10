@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::{Component, Path, PathBuf};
 
@@ -265,11 +266,16 @@ impl Editor {
         } else {
             self.buffers[0].id()
         };
-        let new_buffer_len = self.buffer_by_id(new_id).char_count();
+        let surviving_buffer_lengths: HashMap<_, _> = self
+            .buffers
+            .iter()
+            .map(|buffer| (buffer.id(), buffer.char_count()))
+            .collect();
 
-        // Update all panes that referenced the killed buffer.
+        // Each pane that displayed the killed buffer returns to its own
+        // surviving alternate. Panes without one use the stable fallback.
         self.pane_tree
-            .replace_killed_buffer(buffer_id, new_id, new_buffer_len);
+            .replace_killed_buffer(buffer_id, new_id, &surviving_buffer_lengths);
     }
 
     // === File operations ===

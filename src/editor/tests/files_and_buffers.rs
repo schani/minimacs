@@ -169,6 +169,52 @@ fn kill_buffer_unmodified() {
 }
 
 #[test]
+fn killing_help_restores_the_panes_previous_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("visited.txt");
+    std::fs::write(&file, "file content").unwrap();
+
+    let mut editor = Editor::new();
+    editor.open_file(&file).unwrap();
+    editor.execute(Command::DescribeBindings);
+    assert_eq!(editor.current_buffer().name(), "*Help*");
+
+    editor.execute(Command::KillBuffer);
+
+    assert_eq!(editor.current_buffer().name(), "visited.txt");
+}
+
+#[test]
+fn killing_buffer_restores_each_panes_own_alternate() {
+    let dir = tempfile::tempdir().unwrap();
+    let file_a = dir.path().join("a.txt");
+    let file_b = dir.path().join("b.txt");
+    std::fs::write(&file_a, "a").unwrap();
+    std::fs::write(&file_b, "bb").unwrap();
+
+    let mut editor = Editor::new();
+    editor.open_file(&file_a).unwrap();
+    editor.open_file(&file_b).unwrap();
+
+    // Give the first pane a.txt as its alternate before displaying Help.
+    editor.switch_to_buffer("a.txt");
+    editor.execute(Command::DescribeBindings);
+    editor.execute(Command::SplitVertical);
+
+    // Give the second pane b.txt as its own alternate before returning to Help.
+    editor.execute(Command::CycleFocus);
+    editor.switch_to_buffer("b.txt");
+    editor.execute(Command::DescribeBindings);
+    editor.execute(Command::KillBuffer);
+
+    let mut names = Vec::new();
+    editor.pane_tree.for_each_pane(&mut |pane| {
+        names.push(editor.buffer_by_id(pane.buffer_id()).name().to_string());
+    });
+    assert_eq!(names, vec!["a.txt", "b.txt"]);
+}
+
+#[test]
 fn kill_buffer_modified_prompts() {
     let mut editor = Editor::new_with_text("");
     editor.execute(Command::InsertChar('x'));
