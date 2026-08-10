@@ -123,6 +123,10 @@ impl Editor {
         self.start_minibuffer_prompt(PromptKind::GotoLine, "Goto line: ");
     }
 
+    pub(super) fn execute_extended_command_prompt(&mut self) {
+        self.start_minibuffer_prompt(PromptKind::ExecuteExtendedCommand, "M-x ");
+    }
+
     pub fn submit_prompt(&mut self) {
         // Enter is intercepted before the keymap, so it never reaches
         // `execute()` and `last_command` would survive the prompt — a C-k
@@ -157,6 +161,18 @@ impl Editor {
             PromptKind::SwitchBuffer => {
                 self.minibuffer.finish();
                 self.switch_to_buffer(&input);
+            }
+            PromptKind::ExecuteExtendedCommand => {
+                let Some(command) = crate::command::Command::from_name_or_unique_prefix(&input)
+                else {
+                    self.minibuffer.dismiss_completions();
+                    self.minibuffer.set_prompt_label("M-x (command required) ");
+                    return;
+                };
+                // Finish first so commands that open a prompt can do so,
+                // including execute-extended-command itself.
+                self.minibuffer.finish();
+                self.execute(command);
             }
             PromptKind::WriteFile => {
                 let Some(path) = self.validated_path_from_input(&input) else {

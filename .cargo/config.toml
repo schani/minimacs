@@ -1,0 +1,6 @@
+[env]
+# GCC can spend many minutes compiling tree-sitter-gitcommit's unusually large
+# generated C parser when debug information is enabled. Native dependencies do
+# not need debug symbols for minimacs development, and release builds already
+# omit them. `force = false` lets developers override CFLAGS when needed.
+CFLAGS = { value = "-g0", force = false }

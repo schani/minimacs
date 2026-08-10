@@ -17,9 +17,8 @@ fn describe_bindings_opens_generated_read_only_help_buffer() {
     assert!(help.contains("describe-bindings"));
     for (keys, command) in default_keymap().bindings() {
         assert!(
-            help.lines().any(|line| {
-                line.starts_with(&keys) && line.ends_with(command.name())
-            }),
+            help.lines()
+                .any(|line| { line.starts_with(&keys) && line.ends_with(command.name()) }),
             "generated help omitted {keys} -> {}",
             command.name()
         );

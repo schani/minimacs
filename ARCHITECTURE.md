@@ -47,6 +47,9 @@ Terminal input (crossterm)
 ## Module Map
 
 ```
+.cargo/config.toml Native-build defaults; `CFLAGS=-g0` avoids pathological GCC
+                   debug-info time for the generated gitcommit parser while
+                   allowing an explicit environment override
 src/
   lib.rs            Single owner of the shared module tree; exposes only the
                     three binary entry functions
@@ -393,8 +396,18 @@ fallback.
 
 A flat enum with no data except `InsertChar(char)`. All editor actions are
 variants. There are no trait objects or dynamic dispatch -- just a single
-`match` in `Editor::execute()`. `Command::name()` provides the stable,
-Emacs-style command names used by generated keybinding help.
+`match` in `Editor::execute()`. `Command::name()` provides stable, Emacs-style
+names used by generated keybinding help and `M-x`.
+
+`Command::interactive_commands()` is the command-by-name registry. It contains
+every fixed command that users may invoke and deliberately excludes
+parameterized internal commands such as `InsertChar(char)`; it is independent
+of the keymap so unbound commands remain discoverable and aliases do not
+produce duplicate completion candidates. `Command::from_name()` and
+`from_name_or_unique_prefix()` resolve through that registry. `M-x`
+(`Command::ExecuteExtended`) opens a require-match minibuffer prompt; submitting
+finishes that prompt before executing the resolved command, allowing the
+command to open another prompt (including another `M-x`).
 
 ### History
 
@@ -763,6 +776,8 @@ The two lifecycle states are:
     the pane's alternate buffer).
   - `WriteFile`: its text is the requested save-as path.
   - `GotoLine`: its text is the one-based line number.
+  - `ExecuteExtendedCommand`: its text is an exact command name or unique
+    command-name prefix to execute (`M-x`).
   - `ISearch`: the payload-free marker tying the live prompt to the
     Editor-owned isearch state.
   - `KillConfirm { buffer_id }`: identifies the modified buffer to kill.
@@ -901,12 +916,16 @@ time the find-file and write-file prompts resolve a relative result against
 `Editor::cwd` (captured at startup) via `Editor::path_from_input()`, so which
 file is opened or written never depends on the process working directory.
 
-Tab completion is implemented as free functions `complete_path_with_candidates()`
-and `complete_buffer_with_candidates()` in `minibuffer.rs`. Each returns
-`(completed_prefix, display_candidates)`. Relative path input is looked up on
-disk against `Editor::cwd` (the same base submission resolves against) but the
-completed string stays relative. Path candidates use basenames with
-trailing `/` for directories; buffer candidates are sorted alphabetically.
+Tab completion is implemented as free functions in `minibuffer.rs`, all
+returning `(completed_prefix, display_candidates)`. The generic
+`complete_from_candidates()` owns in-memory prefix matching, common-prefix
+extension, candidate sorting, and unique-match behavior; buffer-name and `M-x`
+completion both delegate to it rather than reimplementing completion.
+`complete_path_with_candidates()` remains specialized because relative path
+input is looked up on disk against `Editor::cwd` (the same base submission
+resolves against) but the completed string stays relative. Path candidates use
+basenames with trailing `/` for directories; buffer candidates are sorted
+alphabetically.
 Completion replaces the buffer contents as a single undo group using
 `record_replace()`, making it undoable.
 

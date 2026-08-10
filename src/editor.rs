@@ -491,7 +491,8 @@ impl Editor {
             && Self::command_modifies_buffer(&cmd)
         {
             self.last_command = None;
-            self.minibuffer.show_message("Buffer is read-only".to_string());
+            self.minibuffer
+                .show_message("Buffer is read-only".to_string());
             return;
         }
 
@@ -586,6 +587,7 @@ impl Editor {
             Command::ISearchForward => self.isearch_start(SearchDirection::Forward),
             Command::ISearchBackward => self.isearch_start(SearchDirection::Backward),
             Command::DescribeBindings => self.describe_bindings(),
+            Command::ExecuteExtended => self.execute_extended_command_prompt(),
             Command::Cancel => self.cancel(),
             Command::Quit => self.quit(),
         }
@@ -641,8 +643,7 @@ impl Editor {
             id
         };
         let buffer_len = self.buffer_by_id(buffer_id).char_count();
-        self.pane_tree
-            .switch_focused_buffer(buffer_id, buffer_len);
+        self.pane_tree.switch_focused_buffer(buffer_id, buffer_len);
     }
 
     /// Scroll the focused editing pane so its point is visible. Runs after
@@ -1442,7 +1443,8 @@ impl Editor {
     pub(crate) fn paste_supplied_text(&mut self, text: &str) {
         if !self.minibuffer.is_active() && self.current_buffer().is_read_only() {
             self.clear_last_command();
-            self.minibuffer.show_message("Buffer is read-only".to_string());
+            self.minibuffer
+                .show_message("Buffer is read-only".to_string());
             return;
         }
 

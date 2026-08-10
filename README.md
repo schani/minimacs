@@ -10,7 +10,8 @@ users. It is not extensible -- it ships one good editor, not a platform.
 ## Features
 
 - **Emacs keybindings** -- standard movement, editing, and chord sequences
-  (`C-x C-s`, `C-x C-f`, `M-g g`, etc.)
+  (`C-x C-s`, `C-x C-f`, `M-g g`, etc.), plus `M-x` command dispatch with
+  completion
 - **Multiple buffers** -- open, switch, and kill buffers
 - **Pane splits** -- vertical and horizontal splits with per-pane cursors
 - **Syntax highlighting** -- tree-sitter based, supporting 13 languages
@@ -48,6 +49,9 @@ cargo install --git https://github.com/schani/minimacs --no-default-features
 
 Requires Rust 1.88+ and a C compiler (for tree-sitter grammars). CI checks the
 locked dependency graph with Rust 1.88 as well as the current stable toolchain.
+The repository defaults native dependencies to `CFLAGS=-g0`: GCC otherwise
+spends many minutes generating unused debug information for the large generated
+`tree-sitter-gitcommit` parser. Set `CFLAGS` explicitly to override this.
 
 ```sh
 cargo build --release

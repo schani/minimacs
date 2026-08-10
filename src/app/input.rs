@@ -174,7 +174,10 @@ where
     }
 
     fn handle_minibuffer_tab(&mut self) {
-        use crate::minibuffer::{complete_buffer_with_candidates, complete_path_with_candidates};
+        use crate::minibuffer::{
+            complete_buffer_with_candidates, complete_from_candidates,
+            complete_path_with_candidates,
+        };
 
         let kind = self.editor.minibuffer().prompt().map(|p| p.kind());
         let input = self.editor.minibuffer_text();
@@ -185,6 +188,13 @@ where
             Some(PromptKind::SwitchBuffer) => {
                 let names = self.editor.buffer_names();
                 complete_buffer_with_candidates(&input, &names)
+            }
+            Some(PromptKind::ExecuteExtendedCommand) => {
+                let names: Vec<String> = Command::interactive_commands()
+                    .iter()
+                    .map(|command| command.name().to_string())
+                    .collect();
+                complete_from_candidates(&input, &names)
             }
             _ => return,
         };
