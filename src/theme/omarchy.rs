@@ -1,13 +1,8 @@
-//! Follows the active Omarchy theme the way Neovim does.
+//! Generates a theme from the active Omarchy theme's palette.
 //!
-//! An Omarchy theme picks a Neovim colorscheme in its `neovim.lua`, and most
-//! of those carry colors of their own that appear nowhere else in the theme.
-//! So minimacs reads the same file and applies the same colorscheme:
-//!
-//! - Stock colorschemes come from `nvim_schemes.rs`, a generated snapshot of
-//!   their resolved highlight groups.
-//! - `aether`, Omarchy's generic scheme, is computed from the theme's
-//!   `colors.toml`, as is any colorscheme minimacs has no snapshot for.
+//! `colors.toml` is the only input. The color scheme is derived from it with
+//! the algorithm of aether, the scheme Omarchy generates for Neovim, so
+//! captures and UI roles get the colors aether would give them.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -15,7 +10,6 @@ use std::time::SystemTime;
 
 use ratatui::style::{Color, Modifier, Style};
 
-use super::nvim_schemes::SCHEMES;
 use super::{Theme, HIGHLIGHT_NAMES};
 
 /// The `face()` spelling of "this color is unset".
@@ -24,10 +18,8 @@ pub(super) const NONE: i64 = -1;
 const BOLD: u8 = 1;
 const ITALIC: u8 = 2;
 const UNDERLINE: u8 = 4;
-const REVERSE: u8 = 8;
-const STRIKETHROUGH: u8 = 16;
 
-/// A resolved Neovim highlight group.
+/// One highlight group of the generated scheme.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(super) struct Face {
     fg: Option<u32>,
@@ -43,81 +35,34 @@ pub(super) const fn face(fg: i64, bg: i64, attrs: u8) -> Face {
     }
 }
 
-pub(super) struct NvimScheme {
-    pub(super) name: &'static str,
-    pub(super) groups: &'static [(&'static str, Face)],
-}
-
 /// Where Omarchy keeps the applied copy of the current theme.
 pub(crate) fn current_theme_dir() -> Option<PathBuf> {
     let home = std::env::var_os("HOME")?;
     Some(PathBuf::from(home).join(".local/state/omarchy/current/theme"))
 }
 
-/// The theme for an Omarchy theme directory, or `None` if the directory
-/// doesn't describe one.
+/// The theme for an Omarchy theme directory, or `None` if it has no usable
+/// `colors.toml`.
 pub(crate) fn load_theme(dir: &Path) -> Option<Theme> {
-    let neovim_lua = std::fs::read_to_string(dir.join("neovim.lua")).unwrap_or_default();
-    let snapshot = active_colorscheme(&neovim_lua)
-        .and_then(|name| SCHEMES.iter().find(|scheme| scheme.name == name));
-    if let Some(scheme) = snapshot {
-        return Some(theme_from_groups(|group| lookup(scheme.groups, group)));
-    }
-    let colors_toml = std::fs::read_to_string(dir.join("colors.toml")).unwrap_or_default();
-    // Omarchy resolves a theme's missing colors while generating neovim.lua,
-    // so that palette, when there is one, is exactly what Neovim gets.
-    let mut colors = parse_colors(&colors_toml);
-    colors.extend(parse_colors(&neovim_lua));
-    let groups = aether_groups(&colors)?;
+    let colors_toml = std::fs::read_to_string(dir.join("colors.toml")).ok()?;
+    let groups = aether_groups(&resolve_palette(parse_colors(&colors_toml)))?;
     Some(theme_from_groups(|group| lookup(&groups, group)))
 }
 
-/// The value of the first uncommented `colorscheme = "name"` in a theme's
-/// `neovim.lua`.
-fn active_colorscheme(neovim_lua: &str) -> Option<&str> {
-    neovim_lua
-        .lines()
-        .map(|line| line.split("--").next().unwrap_or_default())
-        .find_map(|code| {
-            let (_, after) = code.split_once("colorscheme")?;
-            let value = after.trim_start().strip_prefix('=')?.trim_start();
-            let quote = value.chars().next().filter(|c| matches!(c, '"' | '\''))?;
-            value[1..].split_once(quote).map(|(name, _)| name)
-        })
-}
-
-/// The `key = "#rrggbb"` entries of a `colors.toml` or generated `neovim.lua`.
-fn parse_colors(source: &str) -> HashMap<&str, u32> {
-    source
+/// The `key = "#rrggbb"` entries of a theme's flat `colors.toml`.
+fn parse_colors(colors_toml: &str) -> HashMap<&str, u32> {
+    colors_toml
         .lines()
         .filter_map(|line| {
             let (key, value) = line.split_once('=')?;
-            let hex = value
-                .trim()
-                .trim_end_matches(',')
-                .trim_matches('"')
-                .strip_prefix('#')?;
+            let hex = value.trim().trim_matches('"').strip_prefix('#')?;
             Some((key.trim(), u32::from_str_radix(hex, 16).ok()?))
         })
         .collect()
 }
 
-/// The UI highlight groups a theme is built from.
-#[cfg(test)]
-const UI_GROUPS: &[&str] = &[
-    "Normal",
-    "StatusLine",
-    "StatusLineNC",
-    "Visual",
-    "Search",
-    "IncSearch",
-    "WinSeparator",
-    "NonText",
-    "Pmenu",
-];
-
-/// The Neovim group that colors a capture from `HIGHLIGHT_NAMES`.
-fn nvim_group(name: &str) -> &'static str {
+/// The aether group that colors a capture from `HIGHLIGHT_NAMES`.
+fn aether_group(name: &str) -> &'static str {
     match name {
         "attribute" => "@attribute",
         "comment" => "@comment",
@@ -153,7 +98,7 @@ fn nvim_group(name: &str) -> &'static str {
         "variable.builtin" => "@variable.builtin",
         "variable.parameter" => "@variable.parameter",
         "markup.link" => "@markup.link",
-        other => unreachable!("no Neovim group for capture {other:?}"),
+        other => unreachable!("no aether group for capture {other:?}"),
     }
 }
 
@@ -182,8 +127,6 @@ impl Face {
             (BOLD, Modifier::BOLD),
             (ITALIC, Modifier::ITALIC),
             (UNDERLINE, Modifier::UNDERLINED),
-            (REVERSE, Modifier::REVERSED),
-            (STRIKETHROUGH, Modifier::CROSSED_OUT),
         ] {
             if self.attrs & attr != 0 {
                 style = style.add_modifier(modifier);
@@ -192,8 +135,8 @@ impl Face {
         style
     }
 
-    /// Omarchy runs Neovim with a transparent background, so plain text and
-    /// the bars drawn over it leave the terminal's background alone.
+    /// Plain text and the bars drawn over it leave the terminal's background
+    /// alone, so translucent terminals stay translucent.
     fn transparent(self) -> Self {
         Self { bg: None, ..self }
     }
@@ -201,19 +144,14 @@ impl Face {
 
 fn theme_from_groups(lookup: impl Fn(&str) -> Face) -> Theme {
     let ui = |group: &str| lookup(group).style();
-    let mode_line_unfocused = ui("StatusLineNC");
-    let mut mode_line_focused = ui("StatusLine");
-    if mode_line_focused == mode_line_unfocused {
-        mode_line_focused = mode_line_focused.add_modifier(Modifier::BOLD);
-    }
     Theme {
         text: Face {
             attrs: 0,
             ..lookup("Normal").transparent()
         }
         .style(),
-        mode_line_focused,
-        mode_line_unfocused,
+        mode_line_focused: ui("StatusLine"),
+        mode_line_unfocused: ui("StatusLineNC"),
         region: ui("Visual"),
         search_current: ui("IncSearch"),
         search_other: ui("Search"),
@@ -222,12 +160,13 @@ fn theme_from_groups(lookup: impl Fn(&str) -> Face) -> Theme {
         completions: ui("Pmenu"),
         highlights: HIGHLIGHT_NAMES
             .iter()
-            .map(|name| lookup(nvim_group(name)).style())
+            .map(|name| lookup(aether_group(name)).style())
             .collect(),
     }
 }
 
-/// aether.nvim's `Util.blend`: `fg` over `bg` at opacity `alpha`.
+/// aether's `Util.blend`, which is also Omarchy's `mix_color`: `fg` over `bg`
+/// at opacity `alpha`.
 fn blend(fg: u32, alpha: f64, bg: u32) -> u32 {
     [16, 8, 0].iter().fold(0, |blended, shift| {
         let channel = |value: u32| f64::from((value >> shift) & 0xFF);
@@ -236,18 +175,78 @@ fn blend(fg: u32, alpha: f64, bg: u32) -> u32 {
     })
 }
 
-/// The groups aether.nvim, Omarchy's generic colorscheme, derives from a
-/// theme's palette. `None` if the palette is missing a color it needs.
+/// Omarchy's rules for colors a theme leaves out, in order: a missing name
+/// takes the first available source (see `omarchy-theme-color`).
+const PALETTE_ALIASES: &[(&str, &str)] = &[
+    ("background", "bg"),
+    ("dark_background", "dark_bg"),
+    ("foreground", "fg"),
+    ("dark_foreground", "dark_fg"),
+    ("background", "color0"),
+    ("foreground", "color7"),
+    ("red", "color1"),
+    ("green", "color2"),
+    ("yellow", "color3"),
+    ("blue", "color4"),
+    ("magenta", "color5"),
+    ("cyan", "color6"),
+    ("bright_red", "color9"),
+    ("bright_yellow", "color11"),
+    ("bright_blue", "color12"),
+    ("bright_magenta", "color13"),
+    ("bright_cyan", "color14"),
+    ("magenta", "purple"),
+    ("bright_magenta", "bright_purple"),
+    ("dark_foreground", "color8"),
+    ("dark_foreground", "foreground"),
+    ("muted", "color8"),
+    ("muted", "dark_foreground"),
+    ("selection", "selection_background"),
+    ("selection", "color8"),
+    ("selection", "background"),
+    ("orange", "yellow"),
+];
+
+/// Shades Omarchy derives when still missing: `(name, base, mixed_with, amount)`.
+const PALETTE_SHADES: &[(&str, &str, u32, f64)] = &[
+    ("dark_background", "background", 0x000000, 0.25),
+    ("bright_red", "red", 0xFFFFFF, 0.2),
+    ("bright_yellow", "yellow", 0xFFFFFF, 0.2),
+    ("bright_blue", "blue", 0xFFFFFF, 0.2),
+    ("bright_magenta", "magenta", 0xFFFFFF, 0.2),
+    ("bright_cyan", "cyan", 0xFFFFFF, 0.2),
+];
+
+/// `colors` with the gaps filled in the way Omarchy fills them.
+fn resolve_palette(mut colors: HashMap<&str, u32>) -> HashMap<&str, u32> {
+    for (name, source) in PALETTE_ALIASES {
+        if !colors.contains_key(name) {
+            if let Some(value) = colors.get(source).copied() {
+                colors.insert(name, value);
+            }
+        }
+    }
+    for (name, base, mixed_with, amount) in PALETTE_SHADES {
+        if !colors.contains_key(name) {
+            if let Some(value) = colors.get(base).copied() {
+                colors.insert(name, blend(*mixed_with, *amount, value));
+            }
+        }
+    }
+    colors
+}
+
+/// The groups aether derives from a resolved palette. `None` if a color it
+/// needs is missing.
 fn aether_groups(colors: &HashMap<&str, u32>) -> Option<Vec<(&'static str, Face)>> {
     let get = |key: &str| colors.get(key).map(|value| i64::from(*value));
-    // neovim.lua abbreviates three of the names colors.toml spells out.
-    let bg = get("bg").or_else(|| get("background"))?;
-    let fg = get("fg").or_else(|| get("foreground"))?;
-    let dark_bg = get("dark_bg").or_else(|| get("dark_background"))?;
+    let bg = get("background")?;
+    let fg = get("foreground")?;
+    let dark_bg = get("dark_background")?;
     let muted = get("muted")?;
     let selection = get("selection")?;
     let yellow = get("yellow")?;
-    let orange = get("orange").unwrap_or(yellow);
+    let orange = get("orange")?;
     let green = get("green")?;
     let cyan = get("cyan")?;
     let blue = get("blue")?;
@@ -308,31 +307,27 @@ fn aether_groups(colors: &HashMap<&str, u32>) -> Option<Vec<(&'static str, Face)
     ])
 }
 
-/// Notices when Omarchy applies a different theme, by the identity of the
-/// files a theme is read from. Omarchy swaps the whole directory in place,
-/// so a missing file only means a switch is underway.
+/// Notices when Omarchy applies a different theme, by the identity of its
+/// `colors.toml`. Omarchy swaps the whole directory in place, so a missing
+/// file only means a switch is underway.
 pub(crate) struct ThemeWatcher {
     dir: PathBuf,
     stamp: Stamp,
 }
 
-type Stamp = [Option<(SystemTime, u64)>; 2];
+type Stamp = Option<(SystemTime, u64)>;
 
 impl ThemeWatcher {
     pub(crate) fn new(dir: PathBuf) -> Self {
-        Self {
-            dir,
-            stamp: [None, None],
-        }
+        Self { dir, stamp: None }
     }
 
     /// The theme, the first time it is seen and after each change. `None`
     /// means there is nothing new to apply.
     pub(crate) fn load_if_changed(&mut self) -> Option<Theme> {
-        let stamp = ["neovim.lua", "colors.toml"].map(|file| {
-            let metadata = std::fs::metadata(self.dir.join(file)).ok()?;
-            Some((metadata.modified().ok()?, metadata.len()))
-        });
+        let stamp = std::fs::metadata(self.dir.join("colors.toml"))
+            .ok()
+            .and_then(|metadata| Some((metadata.modified().ok()?, metadata.len())));
         if stamp == self.stamp {
             return None;
         }
@@ -343,7 +338,7 @@ impl ThemeWatcher {
 
 #[cfg(test)]
 mod tests {
-    use super::super::nvim_schemes::{AETHER_RISTRETTO_COLORS, AETHER_RISTRETTO_FIXTURE};
+    use super::super::aether_fixture::{AETHER_RISTRETTO_COLORS, AETHER_RISTRETTO_FIXTURE};
     use super::*;
 
     fn rgb(value: u32) -> Color {
@@ -355,42 +350,36 @@ mod tests {
         theme.highlight(idx)
     }
 
-    fn theme_dir(neovim_lua: Option<&str>, colors_toml: Option<&str>) -> tempfile::TempDir {
+    fn theme_dir(colors_toml: &str) -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
-        if let Some(contents) = neovim_lua {
-            std::fs::write(dir.path().join("neovim.lua"), contents).unwrap();
-        }
-        if let Some(contents) = colors_toml {
-            std::fs::write(dir.path().join("colors.toml"), contents).unwrap();
-        }
+        std::fs::write(dir.path().join("colors.toml"), colors_toml).unwrap();
         dir
     }
 
-    const MATTE_BLACK_LUA: &str = r#"return {
-  { "tahayvr/matteblack.nvim", lazy = false, priority = 1000 },
-  {
-		"LazyVim/LazyVim",
-		opts = {
-			colorscheme = "matteblack",
-		},
-	},
-}"#;
-
-    #[test]
-    fn finds_the_colorscheme_a_theme_selects() {
-        assert_eq!(active_colorscheme(MATTE_BLACK_LUA), Some("matteblack"));
-        assert_eq!(
-            active_colorscheme("opts = { colorscheme='rose-pine-dawn' }"),
-            Some("rose-pine-dawn")
-        );
-        assert_eq!(active_colorscheme("return {}"), None);
+    fn ristretto() -> HashMap<&'static str, u32> {
+        resolve_palette(parse_colors(AETHER_RISTRETTO_COLORS))
     }
 
-    #[test]
-    fn ignores_commented_out_colorschemes() {
-        let lua = "-- colorscheme = \"old\"\nopts = { colorscheme = \"new\" }\n";
-        assert_eq!(active_colorscheme(lua), Some("new"));
-    }
+    const MATTE_BLACK: &str = r##"
+accent = "#e68e0d"
+selection = "#2a2a2a"
+muted = "#333333"
+background = "#121212"
+dark_background = "#0d0d0d"
+foreground = "#bebebe"
+red = "#D35F5F"
+yellow = "#b91c1c"
+orange = "#c63d3d"
+green = "#FFC107"
+cyan = "#bebebe"
+blue = "#e68e0d"
+magenta = "#D35F5F"
+bright_red = "#B91C1C"
+bright_yellow = "#b90a0a"
+bright_cyan = "#eaeaea"
+bright_blue = "#f59e0b"
+bright_magenta = "#B91C1C"
+"##;
 
     #[test]
     fn parses_only_hex_colors_from_colors_toml() {
@@ -402,116 +391,71 @@ mod tests {
     }
 
     #[test]
-    fn matte_black_uses_its_neovim_colorscheme_not_the_shared_palette() {
-        // colors.toml has no #8A8A8D or #059669; only matteblack.nvim does.
-        let dir = theme_dir(Some(MATTE_BLACK_LUA), Some("blue = \"#e68e0d\"\n"));
-        let theme = load_theme(dir.path()).unwrap();
-
-        let comment = highlight(&theme, "comment");
-        assert_eq!(comment.fg, Some(rgb(0x8A8A8D)));
-        assert!(comment.add_modifier.contains(Modifier::ITALIC));
-        assert_eq!(highlight(&theme, "keyword").fg, Some(rgb(0x059669)));
-        assert_eq!(highlight(&theme, "type").fg, Some(rgb(0xFBBF24)));
-        assert_eq!(highlight(&theme, "function").fg, Some(rgb(0xDC2626)));
-        assert_eq!(highlight(&theme, "function.method").fg, Some(rgb(0xF59E0B)));
-        assert_eq!(theme.mode_line_focused.bg, Some(rgb(0x212121)));
-        assert_eq!(theme.mode_line_unfocused.bg, Some(rgb(0x333333)));
-        assert_eq!(theme.region.bg, Some(rgb(0x333333)));
-        assert_eq!(theme.search_current.bg, Some(rgb(0xEFBF04)));
-        assert_eq!(theme.search_other.bg, Some(rgb(0xF59E0B)));
-        assert_eq!(theme.completions.bg, Some(rgb(0x212121)));
-    }
-
-    #[test]
-    fn text_keeps_the_terminal_background_like_transparent_neovim() {
-        let dir = theme_dir(Some(MATTE_BLACK_LUA), None);
-        let theme = load_theme(dir.path()).unwrap();
-        assert_eq!(theme.text.fg, Some(rgb(0xEAEAEA)));
-        assert_eq!(theme.text.bg, None);
-        assert_eq!(theme.separator.bg, None);
-        assert_eq!(theme.fringe.bg, None);
-    }
-
-    #[test]
-    fn every_snapshot_covers_every_group_minimacs_asks_for() {
-        for scheme in SCHEMES {
-            for name in HIGHLIGHT_NAMES
-                .iter()
-                .copied()
-                .map(nvim_group)
-                .chain(UI_GROUPS.iter().copied())
-            {
-                assert!(
-                    scheme.groups.iter().any(|(group, _)| *group == name),
-                    "{} lacks {name}",
-                    scheme.name
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn every_snapshot_tells_focused_panes_apart() {
-        for scheme in SCHEMES {
-            let theme = theme_from_groups(|group| lookup(scheme.groups, group));
-            assert_ne!(
-                theme.mode_line_focused, theme.mode_line_unfocused,
-                "{}",
-                scheme.name
-            );
-        }
-    }
-
-    #[test]
-    fn aether_port_matches_the_real_plugin() {
-        let colors = parse_colors(AETHER_RISTRETTO_COLORS);
-        let groups = aether_groups(&colors).unwrap();
+    fn generated_scheme_matches_the_real_aether_plugin() {
+        let groups = aether_groups(&ristretto()).unwrap();
         for (group, expected) in AETHER_RISTRETTO_FIXTURE {
             assert_eq!(lookup(&groups, group), *expected, "{group}");
         }
     }
 
     #[test]
-    fn aether_and_unknown_colorschemes_are_built_from_colors_toml() {
-        for lua in [
-            "opts = { colorscheme = \"aether\" }",
-            "opts = { colorscheme = \"somebodys-custom-scheme\" }",
-        ] {
-            let dir = theme_dir(Some(lua), Some(AETHER_RISTRETTO_COLORS));
-            let theme = load_theme(dir.path()).unwrap();
-            let colors = parse_colors(AETHER_RISTRETTO_COLORS);
-            assert_eq!(highlight(&theme, "string").fg, Some(rgb(colors["green"])));
-        }
+    fn matte_black_is_generated_from_its_palette() {
+        let dir = theme_dir(MATTE_BLACK);
+        let theme = load_theme(dir.path()).unwrap();
+
+        let comment = highlight(&theme, "comment");
+        assert_eq!(comment.fg, Some(rgb(0x333333)));
+        assert!(comment.add_modifier.contains(Modifier::ITALIC));
+        let keyword = highlight(&theme, "keyword");
+        assert_eq!(keyword.fg, Some(rgb(0xB91C1C)));
+        assert!(keyword.add_modifier.contains(Modifier::ITALIC));
+        let function = highlight(&theme, "function");
+        assert_eq!(function.fg, Some(rgb(0xE68E0D)));
+        assert!(function.add_modifier.contains(Modifier::BOLD));
+        assert_eq!(highlight(&theme, "string").fg, Some(rgb(0xFFC107)));
+        assert_eq!(theme.mode_line_focused.bg, Some(rgb(0x0D0D0D)));
+        assert_eq!(theme.region.bg, Some(rgb(0x2A2A2A)));
+        assert_eq!(theme.region.fg, None, "selection keeps syntax colors");
     }
 
     #[test]
-    fn prefers_the_resolved_palette_omarchy_generated_for_neovim() {
-        // What neovim.lua.tpl renders: aether's names, every gap filled in.
-        let lua = r##"opts = {
-      colors = {
-        bg = "#101010",
-        dark_bg = "#0a0a0a",
-        fg = "#d0d0d0",
-        muted = "#606060",
-        red = "#aa0000",
-        yellow = "#aaaa00",
-        orange = "#ff8800",
-        green = "#00aa00",
-        cyan = "#00aaaa",
-        blue = "#0000aa",
-        bright_red = "#ff0000",
-        bright_yellow = "#ffff00",
-        bright_cyan = "#00ffff",
-        bright_blue = "#0000ff",
-        bright_magenta = "#ff00ff",
-        selection = "#303030",
-      },
-    },
-    colorscheme = "aether","##;
-        let dir = theme_dir(Some(lua), Some("orange = \"#123456\"\n"));
+    fn nothing_but_colors_toml_is_read() {
+        let dir = theme_dir(AETHER_RISTRETTO_COLORS);
+        std::fs::write(
+            dir.path().join("neovim.lua"),
+            "opts = { colorscheme = \"matteblack\", colors = { green = \"#123456\" } }",
+        )
+        .unwrap();
         let theme = load_theme(dir.path()).unwrap();
-        assert_eq!(highlight(&theme, "number").fg, Some(rgb(0xFF8800)));
-        assert_eq!(theme.text.fg, Some(rgb(0xD0D0D0)));
+        assert_eq!(
+            highlight(&theme, "string").fg,
+            Some(rgb(ristretto()["green"]))
+        );
+
+        let only_nvim = tempfile::tempdir().unwrap();
+        std::fs::write(
+            only_nvim.path().join("neovim.lua"),
+            "opts = { colorscheme = \"matteblack\" }",
+        )
+        .unwrap();
+        assert_eq!(load_theme(only_nvim.path()), None);
+    }
+
+    #[test]
+    fn text_keeps_the_terminal_background() {
+        let dir = theme_dir(MATTE_BLACK);
+        let theme = load_theme(dir.path()).unwrap();
+        assert_eq!(theme.text.fg, Some(rgb(0xBEBEBE)));
+        assert_eq!(theme.text.bg, None);
+        assert_eq!(theme.separator.bg, None);
+        assert_eq!(theme.fringe.bg, None);
+    }
+
+    #[test]
+    fn focused_and_unfocused_mode_lines_differ() {
+        let dir = theme_dir(MATTE_BLACK);
+        let theme = load_theme(dir.path()).unwrap();
+        assert_ne!(theme.mode_line_focused, theme.mode_line_unfocused);
     }
 
     #[test]
@@ -521,43 +465,78 @@ mod tests {
             .filter(|line| !line.starts_with("orange"))
             .map(|line| format!("{line}\n"))
             .collect();
-        let dir = theme_dir(None, Some(&without_orange));
-        let theme = load_theme(dir.path()).unwrap();
-        let colors = parse_colors(AETHER_RISTRETTO_COLORS);
-        assert_eq!(highlight(&theme, "number").fg, Some(rgb(colors["yellow"])));
+        let colors = resolve_palette(parse_colors(&without_orange));
+        assert_eq!(colors["orange"], colors["yellow"]);
+    }
+
+    /// Expected values are the output of Omarchy's own `omarchy-theme-color`.
+    #[test]
+    fn fills_gaps_in_a_legacy_ansi_palette_like_omarchy() {
+        let legacy = r##"
+color0 = "#101820"
+color1 = "#a01010"
+color2 = "#10a010"
+color3 = "#a0a010"
+color4 = "#1010a0"
+color5 = "#a010a0"
+color6 = "#10a0a0"
+color7 = "#d0d0d0"
+color8 = "#606060"
+"##;
+        let colors = resolve_palette(parse_colors(legacy));
+        for (key, expected) in [
+            ("background", 0x101820),
+            ("foreground", 0xD0D0D0),
+            ("dark_background", 0x0C1218),
+            ("muted", 0x606060),
+            ("selection", 0x606060),
+            ("yellow", 0xA0A010),
+            ("orange", 0xA0A010),
+            ("green", 0x10A010),
+            ("cyan", 0x10A0A0),
+            ("blue", 0x1010A0),
+            ("bright_red", 0xB34040),
+            ("bright_yellow", 0xB3B340),
+            ("bright_cyan", 0x40B3B3),
+            ("bright_blue", 0x4040B3),
+            ("bright_magenta", 0xB340B3),
+        ] {
+            assert_eq!(colors.get(key), Some(&expected), "{key}");
+        }
+        assert!(aether_groups(&colors).is_some());
     }
 
     #[test]
-    fn a_theme_without_neovim_lua_still_uses_colors_toml() {
-        let dir = theme_dir(None, Some(AETHER_RISTRETTO_COLORS));
-        assert!(load_theme(dir.path()).is_some());
+    fn accepts_short_palette_names() {
+        let colors = resolve_palette(parse_colors(
+            "bg = \"#101010\"\nfg = \"#202020\"\ndark_bg = \"#303030\"\n",
+        ));
+        assert_eq!(colors["background"], 0x101010);
+        assert_eq!(colors["foreground"], 0x202020);
+        assert_eq!(colors["dark_background"], 0x303030);
     }
 
     #[test]
     fn missing_or_incomplete_themes_are_rejected() {
-        let empty = theme_dir(None, None);
+        let empty = tempfile::tempdir().unwrap();
         assert_eq!(load_theme(empty.path()), None);
         assert_eq!(load_theme(Path::new("/nonexistent/theme")), None);
-        let partial = theme_dir(
-            Some("colorscheme = \"aether\""),
-            Some("blue = \"#112233\"\n"),
-        );
+        let partial = theme_dir("blue = \"#112233\"\n");
         assert_eq!(load_theme(partial.path()), None);
     }
 
     #[test]
     fn watcher_loads_the_theme_once_and_again_only_after_a_change() {
-        let dir = theme_dir(Some(MATTE_BLACK_LUA), None);
+        let dir = theme_dir(MATTE_BLACK);
         let mut watcher = ThemeWatcher::new(dir.path().to_path_buf());
 
         let first = watcher.load_if_changed().unwrap();
-        assert_eq!(highlight(&first, "keyword").fg, Some(rgb(0x059669)));
+        assert_eq!(highlight(&first, "string").fg, Some(rgb(0xFFC107)));
         assert_eq!(watcher.load_if_changed(), None);
 
-        let tokyo = "opts = { colorscheme = \"tokyonight-night\" }";
-        std::fs::write(dir.path().join("neovim.lua"), tokyo).unwrap();
+        std::fs::write(dir.path().join("colors.toml"), AETHER_RISTRETTO_COLORS).unwrap();
         let second = watcher.load_if_changed().unwrap();
-        assert_ne!(highlight(&second, "keyword"), highlight(&first, "keyword"));
+        assert_ne!(highlight(&second, "string"), highlight(&first, "string"));
     }
 
     #[test]
@@ -566,7 +545,7 @@ mod tests {
         let current = parent.path().join("theme");
         let next = parent.path().join("next-theme");
         std::fs::create_dir(&current).unwrap();
-        std::fs::write(current.join("neovim.lua"), MATTE_BLACK_LUA).unwrap();
+        std::fs::write(current.join("colors.toml"), MATTE_BLACK).unwrap();
         let mut watcher = ThemeWatcher::new(current.clone());
         assert!(watcher.load_if_changed().is_some());
 
@@ -579,11 +558,7 @@ mod tests {
         );
 
         std::fs::create_dir(&next).unwrap();
-        std::fs::write(
-            next.join("neovim.lua"),
-            "opts = { colorscheme = \"catppuccin-latte\" }",
-        )
-        .unwrap();
+        std::fs::write(next.join("colors.toml"), AETHER_RISTRETTO_COLORS).unwrap();
         std::fs::rename(&next, &current).unwrap();
         assert!(watcher.load_if_changed().is_some());
     }

@@ -127,21 +127,23 @@ fn set_theme_recolors_the_ui_and_retires_spans_colored_by_the_old_theme() {
 
 #[test]
 fn watched_omarchy_theme_applies_at_once_and_follows_changes() {
+    use crate::theme::aether_fixture::AETHER_RISTRETTO_COLORS;
     use crate::theme::omarchy::ThemeWatcher;
 
     let dir = tempfile::tempdir().unwrap();
-    let lua = dir.path().join("neovim.lua");
-    std::fs::write(&lua, "opts = { colorscheme = \"matteblack\" }").unwrap();
+    let colors = dir.path().join("colors.toml");
+    std::fs::write(&colors, AETHER_RISTRETTO_COLORS).unwrap();
 
     let (mut app, mut events) = test_app_with_text(40, 8, "text\n", vec![]);
     app.watch_theme(ThemeWatcher::new(dir.path().to_path_buf()));
     app.run_until_idle(&mut events).unwrap();
-    assert_eq!(cell_at(&app.terminal, 1, 6).bg, rgb(0x21, 0x21, 0x21));
-    assert_eq!(cell_at(&app.terminal, 0, 0).fg, rgb(0xEA, 0xEA, 0xEA));
+    assert_eq!(cell_at(&app.terminal, 1, 6).bg, rgb(0x21, 0x1B, 0x1B));
+    assert_eq!(cell_at(&app.terminal, 0, 0).fg, rgb(0xE6, 0xD9, 0xDB));
     assert!(!app.reload_theme(), "nothing changed");
 
-    std::fs::write(&lua, "opts = { colorscheme = \"catppuccin-latte\" }").unwrap();
+    let recolored = AETHER_RISTRETTO_COLORS.replace("#211b1b", "#010203");
+    std::fs::write(&colors, format!("{recolored}\n")).unwrap();
     assert!(app.reload_theme());
     app.render().unwrap();
-    assert_ne!(cell_at(&app.terminal, 1, 6).bg, rgb(0x21, 0x21, 0x21));
+    assert_eq!(cell_at(&app.terminal, 1, 6).bg, rgb(1, 2, 3));
 }

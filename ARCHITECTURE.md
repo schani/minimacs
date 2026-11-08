@@ -89,10 +89,7 @@ src/
                     Language detection and tree-house configuration
   syntax/state.rs   SyntaxState parser, cache, and background state
   theme.rs          Theme -- one Style per UI role and syntax capture
-  theme/omarchy.rs  Builds a Theme from the active Omarchy theme
-  theme/nvim_schemes.rs
-                    Generated snapshot of Neovim colorschemes
-                    (scripts/generate-nvim-schemes.lua)
+  theme/omarchy.rs  Generates a Theme from the active Omarchy palette
   syntax_worker.rs  Single-thread parser executor and coalescing mailbox
   syntax_bench.rs   syntax-bench performance harness (see below)
   syntax_fuzz.rs    syntax-fuzz incremental-vs-fresh fuzz harness (see below)
@@ -771,28 +768,24 @@ entry in `HIGHLIGHT_NAMES`. `App` owns the active theme as an `Arc<Theme>` and
 passes it to `render()`. The built-in default, `Theme::light_plus()`, is
 VS Code's Light+ palette in true color and assumes a light terminal.
 
-On Omarchy, `theme/omarchy.rs` builds the theme the way Neovim gets its own. A
-theme's `neovim.lua` names a colorscheme, and most colorschemes carry colors
-found nowhere else in the theme, so minimacs reads that file and applies the
-same scheme:
+On Omarchy, `theme/omarchy.rs` generates the theme from the palette in the
+current theme's `colors.toml`, which is its only input. minimacs never reads
+Neovim's files. It first fills colors the palette leaves out by Omarchy's rules
+(`omarchy-theme-color`), then derives the scheme with the algorithm of aether,
+the scheme Omarchy generates for Neovim: each UI role and each capture in
+`HIGHLIGHT_NAMES` maps to one aether group. `theme/aether_fixture.rs` holds
+output captured once from the real plugin, and a test keeps the port equal to
+it. Omarchy themes that ship a hand-made Neovim colorscheme (Matte Black, for
+example) therefore look different in minimacs than in Neovim.
 
-- Stock colorschemes come from `theme/nvim_schemes.rs`, the highlight groups
-  resolved by real Neovim. Regenerate it with
-  `scripts/generate-nvim-schemes.lua` when Omarchy adds or changes one.
-- `aether`, Omarchy's generic colorscheme, is a port of the plugin's group
-  mapping over the palette in the generated `neovim.lua`, falling back to
-  `colors.toml`. Colorschemes without a snapshot use it too. A fixture dumped
-  from the real plugin keeps the port honest.
+Text keeps the terminal's background, so only the mode lines, region, matches,
+and completion list paint one. Without a usable Omarchy theme, the default stays
+Light+.
 
-Text keeps the terminal's background, as Omarchy's transparent Neovim does, so
-only the mode lines, region, matches, and completion list paint one. Each
-capture in `HIGHLIGHT_NAMES` maps to one Neovim group. Without a usable Omarchy
-theme, the default stays Light+.
-
-`ThemeWatcher` follows theme switches the way Neovim's Omarchy hot-reload does.
-`App` polls it on idle ticks, comparing the modification time and length of the
-theme's `neovim.lua` and `colors.toml`; Omarchy replaces the whole directory, so
-missing files only mean a switch is underway and the current theme stays.
+`ThemeWatcher` follows theme switches: `App` polls it on idle ticks, comparing
+the modification time and length of `colors.toml`. Omarchy replaces the whole
+directory, so a missing file only means a switch is underway and the current
+theme stays.
 
 `App::set_theme` installs a theme. Syntax spans cache resolved styles, so it
 also hands the theme to the worker (which drops its documents when the theme

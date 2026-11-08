@@ -2,7 +2,8 @@
 //!
 //! `Theme::light_plus()` (VS Code Light+) is the built-in default.
 
-mod nvim_schemes;
+#[cfg(test)]
+pub(crate) mod aether_fixture;
 pub(crate) mod omarchy;
 
 use std::sync::{Arc, LazyLock};
