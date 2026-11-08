@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use anyhow::Result;
 use crossterm::event::{Event, KeyEventKind, MouseButton, MouseEventKind};
 use ratatui::backend::Backend;
@@ -7,6 +9,7 @@ use crate::editor::Editor;
 use crate::event::{EventSource, Poll};
 use crate::render;
 use crate::syntax_worker::SyntaxWorker;
+use crate::theme::Theme;
 
 mod input;
 mod mouse;
@@ -18,6 +21,7 @@ pub struct App<B: Backend> {
     terminal: Terminal<B>,
     input: InputState,
     syntax_worker: SyntaxWorker,
+    theme: Arc<Theme>,
     /// Number of `render()` calls, so tests can assert that discarded
     /// events (mouse motion, key releases, focus changes) skip the redraw.
     #[cfg(test)]
@@ -38,6 +42,7 @@ where
             terminal,
             input: InputState::new(),
             syntax_worker: SyntaxWorker::new(),
+            theme: Theme::shared_default(),
             #[cfg(test)]
             renders: 0,
         }
@@ -208,7 +213,13 @@ where
         let pending = self.input.render_view();
         let pending_input = render::PendingInput { display: &pending };
         self.terminal.draw(|frame| {
-            render::render(frame, editor, &self.syntax_worker, pending_input);
+            render::render(
+                frame,
+                editor,
+                &self.syntax_worker,
+                pending_input,
+                &self.theme,
+            );
         })?;
         Ok(())
     }

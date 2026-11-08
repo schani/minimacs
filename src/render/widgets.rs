@@ -9,8 +9,8 @@ use crate::display::*;
 use crate::editor::Editor;
 use crate::pane::{visual_lines_for_length, Pane};
 use crate::syntax_worker::{SyntaxJob, SyntaxWorker};
+use crate::theme::Theme;
 
-use super::faces;
 use super::layout::*;
 use super::PendingInput;
 
@@ -20,6 +20,7 @@ pub fn render(
     editor: &Editor,
     syntax_worker: &SyntaxWorker,
     pending_input: PendingInput<'_>,
+    theme: &Theme,
 ) {
     let area = frame.area();
     let layout = screen_layout(editor, area);
@@ -88,8 +89,17 @@ pub fn render(
             },
             text_area,
             syntax_worker,
+            theme,
         );
-        render_pane_mode_line(frame, buf, pane, is_focused, pending_input, mode_line_area);
+        render_pane_mode_line(
+            frame,
+            buf,
+            pane,
+            is_focused,
+            pending_input,
+            mode_line_area,
+            theme,
+        );
 
         // Set cursor position for the focused pane
         if is_focused && !editor.minibuffer().is_active() {
@@ -138,7 +148,7 @@ pub fn render(
 
     // Render separator bars between horizontally-split panes
     for sep_rect in &separator_rects {
-        let sep_style = faces::separator();
+        let sep_style = theme.separator;
         let lines: Vec<Line> = (0..sep_rect.height)
             .map(|_| Line::from(Span::styled("│", sep_style)))
             .collect();
@@ -153,11 +163,12 @@ pub fn render(
                 candidates,
                 editor.minibuffer().completion_page(),
                 comp_area,
+                theme,
             );
         }
     }
 
-    render_minibuffer(frame, &layout.minibuffer, layout.minibuffer_area);
+    render_minibuffer(frame, &layout.minibuffer, layout.minibuffer_area, theme);
 }
 
 /// One terminal column of a rendered line. A tab expands to several cells; a
@@ -177,6 +188,7 @@ fn render_pane_text(
     overlays: PaneOverlays<'_>,
     area: Rect,
     syntax_worker: &SyntaxWorker,
+    theme: &Theme,
 ) {
     let scroll_top = pane.scroll_top();
     let max_visual_rows = area.height as usize;
@@ -231,20 +243,21 @@ fn render_pane_text(
                 overlays.search_matches,
                 overlays.current_match,
                 &syntax_spans,
+                theme,
             );
         }
         if row.continues {
-            spans.push(Span::styled("\\", faces::fringe()));
+            spans.push(Span::styled("\\", theme.fringe));
         }
         output_lines.push(Line::from(spans));
     }
 
     // Fill remaining rows with ~
     while output_lines.len() < max_visual_rows {
-        output_lines.push(Line::from(Span::styled("~", faces::fringe())));
+        output_lines.push(Line::from(Span::styled("~", theme.fringe)));
     }
 
-    let paragraph = Paragraph::new(output_lines);
+    let paragraph = Paragraph::new(output_lines).style(theme.text);
     frame.render_widget(paragraph, area);
 }
 
@@ -273,6 +286,7 @@ fn build_styled_spans(
     search_matches: &[(usize, usize)],
     current_match: Option<usize>,
     syntax_spans: &[crate::syntax::StyledSpan],
+    theme: &Theme,
 ) {
     let segment = &visual_cells[start..end];
     if segment.is_empty() {
@@ -291,21 +305,15 @@ fn build_styled_spans(
                 .map(|(rs, re)| char_pos >= rs && char_pos < re)
                 .unwrap_or(false);
 
+            let syntax = syntax_style_at_byte(syntax_spans, cell.buffer_byte_start);
             if in_region {
-                faces::region()
+                syntax.patch(theme.region)
+            } else if current_match.is_some_and(|cm| char_pos >= cm && char_pos < cm + match_len) {
+                syntax.patch(theme.search_current)
+            } else if match_covering(search_matches, char_pos).is_some() {
+                syntax.patch(theme.search_other)
             } else {
-                let is_current_match =
-                    current_match.is_some_and(|cm| char_pos >= cm && char_pos < cm + match_len);
-                let is_other_match =
-                    !is_current_match && match_covering(search_matches, char_pos).is_some();
-
-                if is_current_match {
-                    faces::search_current_match()
-                } else if is_other_match {
-                    faces::search_other_match()
-                } else {
-                    syntax_style_at_byte(syntax_spans, cell.buffer_byte_start)
-                }
+                syntax
             }
         })
         .collect();
@@ -390,6 +398,7 @@ fn render_pane_mode_line(
     is_focused: bool,
     pending_input: PendingInput<'_>,
     area: Rect,
+    theme: &Theme,
 ) {
     let (line, col) = buf.char_to_line_col(pane.point());
 
@@ -434,13 +443,23 @@ fn render_pane_mode_line(
 
     let mode_line_text = mode_line_text(&left, &right, area.width as usize);
 
-    let style = faces::mode_line(is_focused);
+    let style = if is_focused {
+        theme.mode_line_focused
+    } else {
+        theme.mode_line_unfocused
+    };
 
     let mode_line = Paragraph::new(Line::from(Span::styled(mode_line_text, style)));
     frame.render_widget(mode_line, area);
 }
 
-fn render_completions(frame: &mut Frame, candidates: &[String], page: usize, area: Rect) {
+fn render_completions(
+    frame: &mut Frame,
+    candidates: &[String],
+    page: usize,
+    area: Rect,
+    theme: &Theme,
+) {
     let width = area.width as usize;
     let rows = area.height as usize;
     if width == 0 || rows == 0 {
@@ -463,7 +482,7 @@ fn render_completions(frame: &mut Frame, candidates: &[String], page: usize, are
     let page = page % page_count;
     let start = page * displayable;
 
-    let bg = faces::completions();
+    let bg = theme.completions;
 
     let mut lines: Vec<Line> = Vec::with_capacity(rows);
     for row in 0..rows {
@@ -520,14 +539,14 @@ fn render_completions(frame: &mut Frame, candidates: &[String], page: usize, are
     frame.render_widget(paragraph, area);
 }
 
-fn render_minibuffer(frame: &mut Frame, layout: &MinibufferLayout, area: Rect) {
+fn render_minibuffer(frame: &mut Frame, layout: &MinibufferLayout, area: Rect, theme: &Theme) {
     let lines: Vec<Line> = layout
         .visible_rows
         .iter()
         .map(String::as_str)
         .map(Line::from)
         .collect();
-    let minibuffer = Paragraph::new(lines);
+    let minibuffer = Paragraph::new(lines).style(theme.text);
     frame.render_widget(minibuffer, area);
 
     if let Some((row, col)) = layout.cursor {

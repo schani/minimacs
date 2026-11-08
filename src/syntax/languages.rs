@@ -13,8 +13,8 @@ use tree_house::{
 };
 use tree_sitter_language::LanguageFn;
 
-use super::theme::{style_for_highlight, HIGHLIGHT_NAMES};
 use super::StyledSpan;
+use crate::theme::{Theme, HIGHLIGHT_NAMES};
 
 /// Custom markdown block injection query. The upstream tree-sitter-md query omits
 /// `injection.include-children`, which can give injected parsers only the gaps
@@ -391,6 +391,7 @@ pub(super) fn tree_house_spans(
     let mut spans = Vec::new();
     let mut position = start;
     let mut style = Style::default();
+    let theme = Theme::shared_default();
 
     loop {
         let next = (highlighter.next_event_offset() as usize).min(end);
@@ -412,7 +413,7 @@ pub(super) fn tree_house_spans(
             TreeHouseEvent::Push => style,
         };
         style = highlights.fold(base, |current, highlight| {
-            current.patch(style_for_highlight(highlight.idx()))
+            current.patch(theme.highlight(highlight.idx()))
         });
     }
 

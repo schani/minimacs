@@ -15,6 +15,7 @@ mod syntax;
 mod syntax_bench;
 mod syntax_fuzz;
 mod syntax_worker;
+mod theme;
 
 /// Runs the interactive minimacs editor CLI.
 pub fn run_editor() -> anyhow::Result<()> {

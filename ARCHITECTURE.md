@@ -81,8 +81,6 @@ src/
   render.rs         Rendering facade and immutable PendingInput projection
   render/layout.rs  Screen, completions, and minibuffer layout
   render/widgets.rs render() orchestration and ratatui widgets
-  render/faces.rs   UI faces (mode line, region, matches, ...) from the
-                    terminal's ANSI palette
   minibuffer.rs     Minibuffer/Prompt -- prompt state, tab completion functions
   history.rs        History -- undo/redo with edit grouping
   indent.rs         Shared indentation constants (INDENT_WIDTH = 4)
@@ -90,7 +88,7 @@ src/
   syntax/languages.rs
                     Language detection and tree-house configuration
   syntax/state.rs   SyntaxState parser, cache, and background state
-  syntax/theme.rs   Highlight capture names and ANSI-palette styles
+  theme.rs          Theme -- one Style per UI role and syntax capture
   syntax_worker.rs  Single-thread parser executor and coalescing mailbox
   syntax_bench.rs   syntax-bench performance harness (see below)
   syntax_fuzz.rs    syntax-fuzz incremental-vs-fresh fuzz harness (see below)
@@ -597,18 +595,15 @@ called when visible state changes. It:
      using the expanded visual width. The first `scroll_row_offset` wrap
      segments of the top (`scroll_top`) line are skipped — they are scrolled
      off above the viewport.
-   - Overlays region highlighting (muted background between mark and
-     point).
-   - Overlays search match highlighting (background-colored text on red for
-     the current match, on yellow for others).
+   - Overlays region highlighting between mark and point.
+   - Overlays search match highlighting, with a distinct style for the
+     current match.
    - Text content is rendered as spans within a single `Paragraph` widget.
    - Renders the mode line: modified flag, buffer name, `(line,col)`,
      position percentage, language name (if syntax is active), and any
      pending key chord prefix.
-   - Focused pane gets an inverted (reverse-video) bold mode line;
-     unfocused panes get the muted background with default text.
-   - All of these come from `render/faces.rs` (see Colors and Terminal
-     Themes).
+   - Focused and unfocused panes get different mode-line styles.
+   - All of these come from the active `Theme` (see Themes).
 4. Renders the minibuffer's hard-wrapped prompt or message rows.
 5. Sets the terminal cursor position. If the minibuffer is active, the cursor
    goes to the minibuffer input's wrapped row and display column. Otherwise it
@@ -759,40 +754,22 @@ The JavaScript query's Glimmer-only `#offset!` injection is omitted because
 tree-house does not implement that editor-specific predicate and minimacs ships
 no Glimmer grammar.
 
-Highlight captures map to the terminal's ANSI palette (see Colors and
-Terminal Themes), using the slot Omarchy's Helix template assigns each
-capture: keywords magenta, functions blue, strings green, types and constants
-yellow, comments muted italic. Markdown-specific highlight names
-(`text.title`, `text.emphasis`, `text.strong`, `text.literal`, `text.uri`,
-`text.reference`) are mapped to appropriate styles (bold, italic, underline,
-colors).
+Highlight captures resolve to styles through the active `Theme` (see Themes).
+Markdown-specific highlight names (`text.title`, `text.emphasis`,
+`text.strong`, `text.literal`, `text.uri`, `text.reference`) are mapped to
+appropriate styles (bold, italic, underline, colors).
 
-## Colors and Terminal Themes
+## Themes
 
-minimacs has no color theme of its own: every style -- syntax highlighting in
-`syntax/theme.rs` and UI faces in `render/faces.rs` -- uses only the
-terminal's default foreground/background (`Color::Reset`), the 16 named ANSI
-colors, and text modifiers, never RGB or 256-color indexes, and it never paints
-a background behind ordinary text. The terminal's theme therefore applies
-unchanged, light or dark. Under Omarchy, `omarchy theme set` rewrites the
-terminal palette and the terminal recolors minimacs live, the same way it
-recolors other ANSI-palette TUIs.
+`theme.rs` defines `Theme`: one ratatui `Style` for each UI role (text, mode
+lines, region, search matches, separators, fringe, completions) and one per
+entry in `HIGHLIGHT_NAMES`. `App` owns the active theme as an `Arc<Theme>` and
+passes it to `render()`. The built-in default, `Theme::light_plus()`, is
+VS Code's Light+ palette in true color and assumes a light terminal.
 
-Role conventions follow Omarchy's terminal templates, where ANSI black is the
-theme background, white its foreground, and bright black (`DarkGray`) its
-muted color:
-
-- Black/white text is only ever drawn on a colored background (search
-  matches use `Black` on red/yellow, like the terminal's own search
-  highlighting), never on the default background where one of them is
-  invisible.
-- Bands that must stand out without a dedicated color use reverse video (the
-  focused mode line) or the muted color (unfocused mode lines, the region).
-- Separators and the `\` / `~` fringe markers are muted text.
-
-`src/app/tests/theme.rs` renders representative screens (split panes,
-region, syntax, isearch, completions) and asserts every cell obeys these
-rules.
+Region and search-match styles are patched over the syntax style of the text
+they cover. A theme keeps the syntax colors by leaving the foreground unset, or
+replaces them by setting it; Light+ replaces them.
 
 ## Minibuffer
 

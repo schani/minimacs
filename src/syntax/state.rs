@@ -12,8 +12,6 @@ use ropey::RopeSlice;
 use tree_house::Syntax as TreeHouseSyntax;
 
 use super::languages::*;
-#[cfg(test)]
-use super::theme::*;
 use super::StyledSpan;
 
 const PARSE_TIMEOUT: Duration = Duration::from_secs(2);
@@ -561,6 +559,7 @@ fn padded_range(source: RopeSlice<'_>, requested: Range<usize>) -> Range<usize> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::theme::{Theme, HIGHLIGHT_NAMES};
     use ratatui::style::Modifier;
     use std::path::Path;
 
@@ -711,66 +710,98 @@ mod tests {
         HIGHLIGHT_NAMES.iter().position(|&n| n == name).unwrap()
     }
 
-    /// The mapping mirrors Omarchy's Helix template (ANSI slot per capture),
-    /// so minimacs and Helix color the same code the same way in every theme.
-    #[test]
-    fn highlights_follow_the_terminal_ansi_palette() {
-        for (name, fg) in [
-            ("comment", Color::DarkGray),
-            ("string", Color::Green),
-            ("text.literal", Color::Green),
-            ("number", Color::Yellow),
-            ("constant", Color::Yellow),
-            ("keyword", Color::Magenta),
-            ("function", Color::Blue),
-            ("function.macro", Color::Magenta),
-            ("type", Color::Yellow),
-            ("type.builtin", Color::Magenta),
-            ("variable.builtin", Color::Red),
-            ("variable.parameter", Color::Magenta),
-            ("property", Color::Blue),
-            ("escape", Color::Magenta),
-            ("tag", Color::Blue),
-            ("operator", Color::Cyan),
-            ("markup.heading", Color::Red),
-        ] {
-            let style = style_for_highlight(highlight_index(name));
-            assert_eq!(style.fg, Some(fg), "{name}");
-        }
+    fn style_for_highlight(idx: usize) -> Style {
+        Theme::light_plus().highlight(idx)
     }
 
     #[test]
-    fn highlights_never_hardcode_colors_or_backgrounds() {
-        for (idx, name) in HIGHLIGHT_NAMES.iter().enumerate() {
-            let style = style_for_highlight(idx);
-            if let Some(fg) = style.fg {
-                assert!(
-                    !matches!(
-                        fg,
-                        Color::Rgb(..) | Color::Indexed(_) | Color::Black | Color::White
-                    ),
-                    "{name} uses {fg:?}"
-                );
-            }
-            assert_eq!(style.bg, None, "{name} sets a background");
-        }
-    }
-
-    #[test]
-    fn plain_variables_and_punctuation_use_the_default_foreground() {
-        for name in ["variable", "punctuation", "punctuation.bracket"] {
-            assert_eq!(
-                style_for_highlight(highlight_index(name)),
-                Style::default(),
-                "{name}"
-            );
-        }
-    }
-
-    #[test]
-    fn comments_are_muted_and_italic() {
+    fn vscode_light_comment_color() {
         let style = style_for_highlight(highlight_index("comment"));
-        assert!(style.add_modifier.contains(Modifier::ITALIC));
+        assert_eq!(style.fg, Some(Color::Rgb(0, 128, 0)));
+    }
+
+    #[test]
+    fn vscode_light_string_color() {
+        let style = style_for_highlight(highlight_index("string"));
+        assert_eq!(style.fg, Some(Color::Rgb(163, 21, 21)));
+    }
+
+    #[test]
+    fn vscode_light_keyword_color() {
+        let style = style_for_highlight(highlight_index("keyword"));
+        assert_eq!(style.fg, Some(Color::Rgb(0, 0, 255)));
+    }
+
+    #[test]
+    fn vscode_light_function_color() {
+        let style = style_for_highlight(highlight_index("function"));
+        assert_eq!(style.fg, Some(Color::Rgb(121, 94, 38)));
+    }
+
+    #[test]
+    fn vscode_light_type_color() {
+        let style = style_for_highlight(highlight_index("type"));
+        assert_eq!(style.fg, Some(Color::Rgb(38, 127, 153)));
+    }
+
+    #[test]
+    fn vscode_light_number_color() {
+        let style = style_for_highlight(highlight_index("number"));
+        assert_eq!(style.fg, Some(Color::Rgb(9, 134, 88)));
+    }
+
+    #[test]
+    fn vscode_light_constant_color() {
+        let style = style_for_highlight(highlight_index("constant"));
+        assert_eq!(style.fg, Some(Color::Rgb(0, 112, 193)));
+    }
+
+    #[test]
+    fn vscode_light_variable_builtin_color() {
+        let style = style_for_highlight(highlight_index("variable.builtin"));
+        assert_eq!(style.fg, Some(Color::Rgb(0, 0, 255)));
+    }
+
+    #[test]
+    fn vscode_light_variable_parameter_color() {
+        let style = style_for_highlight(highlight_index("variable.parameter"));
+        assert_eq!(style.fg, Some(Color::Rgb(0, 16, 128)));
+    }
+
+    #[test]
+    fn vscode_light_variable_color() {
+        let style = style_for_highlight(highlight_index("variable"));
+        assert_eq!(style.fg, Some(Color::Rgb(0, 16, 128)));
+    }
+
+    #[test]
+    fn vscode_light_escape_color() {
+        let style = style_for_highlight(highlight_index("escape"));
+        assert_eq!(style.fg, Some(Color::Rgb(238, 0, 0)));
+    }
+
+    #[test]
+    fn vscode_light_tag_color() {
+        let style = style_for_highlight(highlight_index("tag"));
+        assert_eq!(style.fg, Some(Color::Rgb(128, 0, 0)));
+    }
+
+    #[test]
+    fn vscode_light_property_color() {
+        let style = style_for_highlight(highlight_index("property"));
+        assert_eq!(style.fg, Some(Color::Rgb(0, 16, 128)));
+    }
+
+    #[test]
+    fn vscode_light_operator_default() {
+        let style = style_for_highlight(highlight_index("operator"));
+        assert_eq!(style, Style::default());
+    }
+
+    #[test]
+    fn vscode_light_punctuation_default() {
+        let style = style_for_highlight(highlight_index("punctuation"));
+        assert_eq!(style, Style::default());
     }
 
     #[test]

@@ -1,6 +1,5 @@
 mod languages;
 mod state;
-mod theme;
 
 use ratatui::style::Style;
 
