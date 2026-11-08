@@ -6,6 +6,7 @@ use std::thread::{self, JoinHandle};
 use ropey::Rope;
 
 use crate::syntax::{BackgroundEdit, Language, SyntaxCompletion, SyntaxState};
+use crate::theme::Theme;
 
 /// A complete immutable snapshot of the work needed for one syntax state.
 /// Rope clones share their backing chunks, so submitting a snapshot is O(1).
@@ -52,6 +53,7 @@ impl PendingJobs {
 struct SharedState {
     pending: PendingJobs,
     completions: HashMap<usize, SyntaxCompletion>,
+    theme: Option<Arc<Theme>>,
     shutdown: bool,
 }
 
@@ -88,6 +90,17 @@ impl SyntaxWorker {
         let mut state = state.lock().expect("syntax worker state poisoned");
         state.pending.push(job);
         ready.notify_one();
+    }
+
+    /// Color every job started from now on with `theme`. A job already
+    /// running finishes with the old one; callers retire its completion by
+    /// giving the buffer a new syntax key.
+    pub(crate) fn set_theme(&self, theme: Arc<Theme>) {
+        self.shared
+            .0
+            .lock()
+            .expect("syntax worker state poisoned")
+            .theme = Some(theme);
     }
 
     pub(crate) fn take_completions(&self) -> Vec<SyntaxCompletion> {
@@ -150,8 +163,9 @@ impl Drop for SyntaxWorker {
 
 fn worker_loop(shared: Shared) {
     let mut documents = HashMap::<usize, WorkerDocument>::new();
+    let mut applied_theme: Option<Arc<Theme>> = None;
     loop {
-        let job = {
+        let (job, theme) = {
             let (state, ready) = &*shared;
             let mut state = state.lock().expect("syntax worker state poisoned");
             while state.pending.jobs.is_empty() && !state.shutdown {
@@ -160,10 +174,20 @@ fn worker_loop(shared: Shared) {
             if state.shutdown {
                 return;
             }
-            state.pending.pop().expect("pending job disappeared")
+            let theme = state.theme.clone().unwrap_or_else(Theme::shared_default);
+            (state.pending.pop().expect("pending job disappeared"), theme)
         };
 
-        let completion = process_job(&mut documents, job);
+        // Documents cache spans colored by the theme they were built with.
+        if !applied_theme
+            .as_ref()
+            .is_some_and(|applied| Arc::ptr_eq(applied, &theme))
+        {
+            documents.clear();
+            applied_theme = Some(Arc::clone(&theme));
+        }
+
+        let completion = process_job(&mut documents, job, &theme);
         let mut state = shared.0.lock().expect("syntax worker state poisoned");
         let should_publish = state
             .completions
@@ -175,7 +199,11 @@ fn worker_loop(shared: Shared) {
     }
 }
 
-fn process_job(documents: &mut HashMap<usize, WorkerDocument>, job: SyntaxJob) -> SyntaxCompletion {
+fn process_job(
+    documents: &mut HashMap<usize, WorkerDocument>,
+    job: SyntaxJob,
+    theme: &Theme,
+) -> SyntaxCompletion {
     let can_update = documents.get(&job.key).is_some_and(|document| {
         let relevant = job
             .edits
@@ -226,6 +254,7 @@ fn process_job(documents: &mut HashMap<usize, WorkerDocument>, job: SyntaxJob) -
                 job.source.slice(..),
                 job.requested.clone(),
                 job.generation,
+                theme,
             )
         })
         .unwrap_or((job.requested.clone(), Vec::new()));
@@ -322,6 +351,40 @@ mod tests {
         assert_eq!(worker.thread_start_count(), 1);
     }
 
+    fn wait_for_generation(
+        worker: &SyntaxWorker,
+        key: usize,
+        generation: usize,
+    ) -> SyntaxCompletion {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Some(completion) = worker
+                .take_completions()
+                .into_iter()
+                .find(|completion| completion.key == key && completion.generation == generation)
+            {
+                return completion;
+            }
+            assert!(Instant::now() < deadline, "worker completion timed out");
+            std::thread::yield_now();
+        }
+    }
+
+    #[test]
+    fn set_theme_recolors_even_an_already_highlighted_document() {
+        let worker = SyntaxWorker::new();
+        worker.submit(job(5, 0, "fn zero() {}", 0..12));
+        let before = wait_for_generation(&worker, 5, 0);
+
+        let style = Style::default().fg(Color::Rgb(1, 2, 3));
+        worker.set_theme(Arc::new(Theme::with_all_highlights(style)));
+        worker.submit(job(5, 0, "fn zero() {}", 0..12));
+        let after = wait_for_generation(&worker, 5, 0);
+
+        assert!(!before.spans.iter().any(|span| span.style == style));
+        assert!(after.spans.iter().any(|span| span.style == style));
+    }
+
     #[test]
     fn syntax_state_accepts_only_current_versioned_completions() {
         let syntax = SyntaxState::new(Language::Rust).unwrap();
@@ -405,7 +468,11 @@ mod tests {
         }
 
         let mut documents = HashMap::new();
-        process_job(&mut documents, job(41, 0, "fn main() {}", 0..12));
+        process_job(
+            &mut documents,
+            job(41, 0, "fn main() {}", 0..12),
+            &Theme::light_plus(),
+        );
         process_job(
             &mut documents,
             SyntaxJob {
@@ -420,6 +487,7 @@ mod tests {
                 }],
                 requested: 0..13,
             },
+            &Theme::light_plus(),
         );
         process_job(
             &mut documents,
@@ -441,6 +509,7 @@ mod tests {
                 ],
                 requested: 0..14,
             },
+            &Theme::light_plus(),
         );
 
         let document = documents.get(&41).unwrap();
@@ -915,7 +984,11 @@ mod tests {
         let visible = 50_000..50_100;
         let mut documents = HashMap::new();
 
-        let completion = process_job(&mut documents, job(91, 0, &source, visible.clone()));
+        let completion = process_job(
+            &mut documents,
+            job(91, 0, &source, visible.clone()),
+            &Theme::light_plus(),
+        );
 
         assert!(completion.requested.start < visible.start);
         assert!(completion.requested.end > visible.end);

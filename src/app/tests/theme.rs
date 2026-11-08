@@ -1,6 +1,10 @@
 use super::*;
 
-use ratatui::style::{Color, Modifier};
+use std::sync::Arc;
+
+use ratatui::style::{Color, Modifier, Style};
+
+use crate::theme::Theme;
 
 fn rgb(r: u8, g: u8, b: u8) -> Color {
     Color::Rgb(r, g, b)
@@ -94,4 +98,29 @@ fn default_theme_draws_completions_in_light_plus() {
     let (x, y) = find_text(&app.terminal, "alpha.txt");
     let cell = cell_at(&app.terminal, x, y);
     assert_eq!((cell.fg, cell.bg), (Color::Black, rgb(243, 243, 243)));
+}
+
+// === Switching themes ===
+
+#[test]
+fn set_theme_recolors_the_ui_and_retires_spans_colored_by_the_old_theme() {
+    let (mut app, mut events) = test_app_with_text(40, 8, "fn main() {}\n", vec![]);
+    app.editor
+        .enable_buffer_syntax_for_test(0, crate::syntax::Language::Rust);
+    app.run_until_idle(&mut events).unwrap();
+    let old_key = app.editor.buffers()[0].syntax().unwrap().background_key();
+
+    let mut theme = Theme::light_plus();
+    theme.text = Style::default().fg(rgb(10, 20, 30));
+    theme.mode_line_focused = Style::default().bg(rgb(1, 2, 3));
+    app.set_theme(Arc::new(theme));
+    app.render().unwrap();
+
+    assert_eq!(cell_at(&app.terminal, 1, 6).bg, rgb(1, 2, 3));
+    assert_eq!(cell_at(&app.terminal, 0, 0).fg, rgb(10, 20, 30));
+    assert_ne!(
+        app.editor.buffers()[0].syntax().unwrap().background_key(),
+        old_key,
+        "completions in flight were colored by the old theme"
+    );
 }

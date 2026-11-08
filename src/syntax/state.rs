@@ -13,6 +13,7 @@ use tree_house::Syntax as TreeHouseSyntax;
 
 use super::languages::*;
 use super::StyledSpan;
+use crate::theme::Theme;
 
 const PARSE_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_CONSECUTIVE_FAILED_GENERATIONS: u8 = 3;
@@ -310,6 +311,16 @@ impl SyntaxState {
         requested: Range<usize>,
         version: usize,
     ) -> Vec<StyledSpan> {
+        self.highlight_rope_themed(source, requested, version, &Theme::shared_default())
+    }
+
+    fn highlight_rope_themed(
+        &self,
+        source: RopeSlice<'_>,
+        requested: Range<usize>,
+        version: usize,
+        theme: &Theme,
+    ) -> Vec<StyledSpan> {
         let requested = clamp_range(requested, source.len_bytes());
         if self.disabled.get() {
             return Vec::new();
@@ -337,7 +348,7 @@ impl SyntaxState {
             let Some(parsed) = syntax.as_ref() else {
                 return Vec::new();
             };
-            let spans = tree_house_spans(parsed, source, loader, window.clone());
+            let spans = tree_house_spans(parsed, source, loader, window.clone(), theme);
             drop(syntax);
             *self.cache.borrow_mut() = Some(HighlightCache {
                 version,
@@ -368,9 +379,10 @@ impl SyntaxState {
         source: RopeSlice<'_>,
         requested: Range<usize>,
         version: usize,
+        theme: &Theme,
     ) -> (Range<usize>, Vec<StyledSpan>) {
         let requested = clamp_range(requested, source.len_bytes());
-        let _ = self.highlight_rope(source, requested.clone(), version);
+        let _ = self.highlight_rope_themed(source, requested.clone(), version, theme);
         self.cache
             .borrow()
             .as_ref()
@@ -559,7 +571,7 @@ fn padded_range(source: RopeSlice<'_>, requested: Range<usize>) -> Range<usize> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::theme::{Theme, HIGHLIGHT_NAMES};
+    use crate::theme::HIGHLIGHT_NAMES;
     use ratatui::style::Modifier;
     use std::path::Path;
 

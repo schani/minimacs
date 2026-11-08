@@ -1,5 +1,6 @@
 use std::io;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use anyhow::Result;
 use crossterm::{
@@ -16,6 +17,7 @@ use ratatui::Terminal;
 use crate::app::App;
 use crate::editor::Editor;
 use crate::event::TerminalEventSource;
+use crate::theme::omarchy;
 
 /// Best-effort terminal restoration. Used by both the normal exit path and
 /// the panic hook, so every step must run even if earlier ones fail.
@@ -169,6 +171,9 @@ pub(crate) fn run() -> Result<()> {
     let terminal = Terminal::new(backend)?;
 
     let mut app = App::new(terminal, editor);
+    if let Some(theme) = omarchy::current_theme_dir().and_then(|dir| omarchy::load_theme(&dir)) {
+        app.set_theme(Arc::new(theme));
+    }
     let mut event_source = TerminalEventSource;
 
     let result = app.run(&mut event_source);

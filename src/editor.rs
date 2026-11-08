@@ -247,6 +247,13 @@ impl Editor {
         self.minibuffer_pane.set_viewport(height, width);
     }
 
+    /// Re-highlight every buffer from scratch, after the theme changed.
+    pub(crate) fn restart_syntax(&mut self) {
+        for buffer in &mut self.buffers {
+            buffer.restart_syntax();
+        }
+    }
+
     pub(crate) fn accept_syntax_completion(
         &self,
         completion: crate::syntax::SyntaxCompletion,

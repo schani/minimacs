@@ -2,6 +2,9 @@
 //!
 //! `Theme::light_plus()` (VS Code Light+) is the built-in default.
 
+mod nvim_schemes;
+pub(crate) mod omarchy;
+
 use std::sync::{Arc, LazyLock};
 
 use ratatui::style::{Color, Modifier, Style};
@@ -104,6 +107,14 @@ impl Theme {
     pub(crate) fn shared_default() -> Arc<Self> {
         static DEFAULT: LazyLock<Arc<Theme>> = LazyLock::new(|| Arc::new(Theme::light_plus()));
         Arc::clone(&DEFAULT)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_all_highlights(style: Style) -> Self {
+        Self {
+            highlights: vec![style; HIGHLIGHT_NAMES.len()],
+            ..Self::light_plus()
+        }
     }
 
     /// The style of the capture at `idx` in `HIGHLIGHT_NAMES`.

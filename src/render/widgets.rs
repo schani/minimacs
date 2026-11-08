@@ -928,6 +928,42 @@ mod tests {
     }
 
     #[test]
+    fn region_without_a_foreground_keeps_syntax_colors() {
+        let cell = VisualCell {
+            text: "x".to_string(),
+            buffer_char_pos: 0,
+            buffer_byte_start: 0,
+            buffer_byte_end: 1,
+        };
+        let syntax = ratatui::style::Color::Rgb(1, 2, 3);
+        let selection = ratatui::style::Color::Rgb(4, 5, 6);
+        let syntax_spans = vec![crate::syntax::StyledSpan {
+            start: 0,
+            end: 1,
+            style: Style::default().fg(syntax),
+        }];
+        let mut theme = Theme::light_plus();
+        theme.region = Style::default().bg(selection);
+
+        let mut spans = Vec::new();
+        build_styled_spans(
+            &mut spans,
+            std::slice::from_ref(&cell),
+            0,
+            1,
+            0,
+            Some((0, 1)),
+            &[],
+            None,
+            &syntax_spans,
+            &theme,
+        );
+
+        assert_eq!(spans[0].style.fg, Some(syntax));
+        assert_eq!(spans[0].style.bg, Some(selection));
+    }
+
+    #[test]
     fn syntax_style_lookup_uses_half_open_span_boundaries() {
         let styled = Style::default().fg(ratatui::style::Color::Red);
         let spans = vec![crate::syntax::StyledSpan {

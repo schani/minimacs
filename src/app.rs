@@ -204,6 +204,13 @@ where
         }
     }
 
+    /// Use `theme` from the next render on.
+    pub(crate) fn set_theme(&mut self, theme: Arc<Theme>) {
+        self.syntax_worker.set_theme(Arc::clone(&theme));
+        self.theme = theme;
+        self.editor.restart_syntax();
+    }
+
     pub fn render(&mut self) -> Result<()> {
         #[cfg(test)]
         {

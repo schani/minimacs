@@ -383,6 +383,7 @@ pub(super) fn tree_house_spans(
     source: RopeSlice<'_>,
     loader: &TreeHouseLoader,
     range: Range<usize>,
+    theme: &Theme,
 ) -> Vec<StyledSpan> {
     let start = range.start.min(source.len_bytes());
     let end = range.end.min(source.len_bytes()).max(start);
@@ -391,7 +392,6 @@ pub(super) fn tree_house_spans(
     let mut spans = Vec::new();
     let mut position = start;
     let mut style = Style::default();
-    let theme = Theme::shared_default();
 
     loop {
         let next = (highlighter.next_event_offset() as usize).min(end);

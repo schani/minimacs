@@ -45,6 +45,12 @@ To install without OS clipboard support:
 cargo install --git https://github.com/schani/minimacs --no-default-features
 ```
 
+## Colors
+
+The default theme is VS Code Light+, for light terminals. On
+[Omarchy](https://omarchy.org/), minimacs instead uses the colors Neovim uses for
+the current theme.
+
 ## Building
 
 Requires Rust 1.88+ and a C compiler (for tree-sitter grammars). CI checks the

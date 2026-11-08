@@ -439,6 +439,20 @@ impl Buffer {
 
     /// Re-detect the syntax highlighting language from the current path
     /// (after `C-x C-w` to a different extension).
+    /// Replace the syntax state with a fresh one of the same language, under
+    /// a new key, so results still in flight for the old one are discarded.
+    /// Highlighting that was disabled for being too slow stays disabled.
+    pub(crate) fn restart_syntax(&mut self) {
+        let language = self
+            .syntax
+            .as_ref()
+            .filter(|syntax| !syntax.is_disabled())
+            .map(|syntax| syntax.language);
+        if let Some(language) = language {
+            self.enable_syntax(language);
+        }
+    }
+
     pub fn redetect_syntax(&mut self) {
         self.syntax = self
             .path
@@ -1157,6 +1171,34 @@ mod tests {
         let (base, edits) = buf.syntax.as_ref().unwrap().background_update_for(1);
         assert_eq!(base, Some(0));
         assert_eq!(edits.len(), 1);
+    }
+
+    #[test]
+    fn restart_syntax_retires_the_old_key_and_leaves_disabled_highlighting_off() {
+        let mut buf = Buffer::new_for_path(0, Path::new("test.rs"));
+        let key = buf.syntax.as_ref().unwrap().background_key();
+        buf.restart_syntax();
+        let restarted = buf.syntax.as_ref().unwrap().background_key();
+        assert_ne!(restarted, key);
+
+        assert!(buf.syntax.as_ref().unwrap().accept_background_completion(
+            crate::syntax::SyntaxCompletion {
+                key: restarted,
+                generation: 0,
+                requested: 0..0,
+                spans: Vec::new(),
+                disabled: true,
+            },
+            0,
+        ));
+        buf.restart_syntax();
+        let syntax = buf.syntax.as_ref().unwrap();
+        assert_eq!(syntax.background_key(), restarted);
+        assert!(syntax.is_disabled());
+
+        let mut plain = Buffer::new_scratch(1);
+        plain.restart_syntax();
+        assert!(plain.syntax.is_none());
     }
 
     #[test]

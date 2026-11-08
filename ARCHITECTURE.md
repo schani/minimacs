@@ -89,6 +89,10 @@ src/
                     Language detection and tree-house configuration
   syntax/state.rs   SyntaxState parser, cache, and background state
   theme.rs          Theme -- one Style per UI role and syntax capture
+  theme/omarchy.rs  Builds a Theme from the active Omarchy theme
+  theme/nvim_schemes.rs
+                    Generated snapshot of Neovim colorschemes
+                    (scripts/generate-nvim-schemes.lua)
   syntax_worker.rs  Single-thread parser executor and coalescing mailbox
   syntax_bench.rs   syntax-bench performance harness (see below)
   syntax_fuzz.rs    syntax-fuzz incremental-vs-fresh fuzz harness (see below)
@@ -766,6 +770,29 @@ lines, region, search matches, separators, fringe, completions) and one per
 entry in `HIGHLIGHT_NAMES`. `App` owns the active theme as an `Arc<Theme>` and
 passes it to `render()`. The built-in default, `Theme::light_plus()`, is
 VS Code's Light+ palette in true color and assumes a light terminal.
+
+On Omarchy, `theme/omarchy.rs` builds the theme the way Neovim gets its own. A
+theme's `neovim.lua` names a colorscheme, and most colorschemes carry colors
+found nowhere else in the theme, so minimacs reads that file and applies the
+same scheme:
+
+- Stock colorschemes come from `theme/nvim_schemes.rs`, the highlight groups
+  resolved by real Neovim. Regenerate it with
+  `scripts/generate-nvim-schemes.lua` when Omarchy adds or changes one.
+- `aether`, Omarchy's generic colorscheme, is a port of the plugin's group
+  mapping over the palette in the generated `neovim.lua`, falling back to
+  `colors.toml`. Colorschemes without a snapshot use it too. A fixture dumped
+  from the real plugin keeps the port honest.
+
+Text keeps the terminal's background, as Omarchy's transparent Neovim does, so
+only the mode lines, region, matches, and completion list paint one. Each
+capture in `HIGHLIGHT_NAMES` maps to one Neovim group. Without a usable Omarchy
+theme, the default stays Light+.
+
+`App::set_theme` installs a theme. Syntax spans cache resolved styles, so it
+also hands the theme to the worker (which drops its documents when the theme
+changes) and gives every buffer a fresh syntax state with a new key, which
+discards completions still in flight for the old theme.
 
 Region and search-match styles are patched over the syntax style of the text
 they cover. A theme keeps the syntax colors by leaving the foreground unset, or
