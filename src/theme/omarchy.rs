@@ -45,7 +45,9 @@ pub(crate) fn current_theme_dir() -> Option<PathBuf> {
 /// `colors.toml`.
 pub(crate) fn load_theme(dir: &Path) -> Option<Theme> {
     let colors_toml = std::fs::read_to_string(dir.join("colors.toml")).ok()?;
-    let groups = aether_groups(&resolve_palette(parse_colors(&colors_toml)))?;
+    let colors = resolve_palette(parse_colors(&colors_toml));
+    let mut groups = aether_groups(&colors)?;
+    raise_contrast(&mut groups, colors["background"], colors["foreground"]);
     Some(theme_from_groups(|group| lookup(&groups, group)))
 }
 
@@ -173,6 +175,61 @@ fn blend(fg: u32, alpha: f64, bg: u32) -> u32 {
         let mixed = alpha * channel(fg) + (1.0 - alpha) * channel(bg);
         blended | ((mixed.clamp(0.0, 255.0) + 0.5).floor() as u32) << shift
     })
+}
+
+/// The lowest WCAG contrast ratio generated text may have. Many palettes'
+/// faintest colors, `muted` above all, fall well below it.
+const MIN_CONTRAST: f64 = 3.0;
+
+/// WCAG relative luminance of an `0xRRGGBB` color.
+fn relative_luminance(color: u32) -> f64 {
+    let channel = |shift: u32| {
+        let value = f64::from((color >> shift) & 0xFF) / 255.0;
+        if value <= 0.03928 {
+            value / 12.92
+        } else {
+            ((value + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * channel(16) + 0.7152 * channel(8) + 0.0722 * channel(0)
+}
+
+/// WCAG contrast ratio, from 1 (identical) to 21 (black on white).
+fn contrast_ratio(a: u32, b: u32) -> f64 {
+    let (a, b) = (relative_luminance(a), relative_luminance(b));
+    (a.max(b) + 0.05) / (a.min(b) + 0.05)
+}
+
+/// Blend each too-faint text color toward the theme's foreground, stopping at
+/// the first step that reaches `MIN_CONTRAST` against what the text sits on:
+/// the group's own background, or else the theme's. Colors already readable
+/// don't change. Where the foreground can't reach the minimum, as with text
+/// on a mid-toned bar, the color moves away from that background instead;
+/// one of white and black always reaches it. Separators are lines, not text,
+/// and stay quiet.
+fn raise_contrast(groups: &mut [(&str, Face)], background: u32, foreground: u32) {
+    for (group, face) in groups.iter_mut() {
+        if *group == "WinSeparator" {
+            continue;
+        }
+        let Some(color) = face.fg else {
+            continue;
+        };
+        let on = face.bg.unwrap_or(background);
+        let (away, opposite) = if relative_luminance(color) > relative_luminance(on) {
+            (0xFFFFFF, 0x000000)
+        } else {
+            (0x000000, 0xFFFFFF)
+        };
+        face.fg = [foreground, away, opposite]
+            .into_iter()
+            .find_map(|target| {
+                (0..=100)
+                    .map(|step| blend(target, f64::from(step) / 100.0, color))
+                    .find(|candidate| contrast_ratio(*candidate, on) >= MIN_CONTRAST)
+            })
+            .or(Some(color));
+    }
 }
 
 /// Omarchy's rules for colors a theme leaves out, in order: a missing name
@@ -404,10 +461,8 @@ bright_magenta = "#B91C1C"
         let theme = load_theme(dir.path()).unwrap();
 
         let comment = highlight(&theme, "comment");
-        assert_eq!(comment.fg, Some(rgb(0x333333)));
         assert!(comment.add_modifier.contains(Modifier::ITALIC));
         let keyword = highlight(&theme, "keyword");
-        assert_eq!(keyword.fg, Some(rgb(0xB91C1C)));
         assert!(keyword.add_modifier.contains(Modifier::ITALIC));
         let function = highlight(&theme, "function");
         assert_eq!(function.fg, Some(rgb(0xE68E0D)));
@@ -416,6 +471,118 @@ bright_magenta = "#B91C1C"
         assert_eq!(theme.mode_line_focused.bg, Some(rgb(0x0D0D0D)));
         assert_eq!(theme.region.bg, Some(rgb(0x2A2A2A)));
         assert_eq!(theme.region.fg, None, "selection keeps syntax colors");
+    }
+
+    const ROSE_PINE: &str = r##"
+selection = "#dfdad9"
+muted = "#cecacd"
+background = "#faf4ed"
+dark_background = "#ede7e1"
+foreground = "#575279"
+red = "#b4637a"
+yellow = "#ea9d34"
+orange = "#cf8057"
+green = "#286983"
+cyan = "#d7827e"
+blue = "#56949f"
+magenta = "#907aa9"
+bright_red = "#b4637a"
+bright_yellow = "#ea9d34"
+bright_cyan = "#d7827e"
+bright_blue = "#56949f"
+bright_magenta = "#907aa9"
+"##;
+
+    #[test]
+    fn contrast_ratio_follows_wcag() {
+        assert!((contrast_ratio(0x000000, 0xFFFFFF) - 21.0).abs() < 0.001);
+        assert!((contrast_ratio(0xFFFFFF, 0x000000) - 21.0).abs() < 0.001);
+        assert!((contrast_ratio(0x777777, 0x777777) - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn faint_comments_are_raised_just_enough_to_read() {
+        let dir = theme_dir(ROSE_PINE);
+        let theme = load_theme(dir.path()).unwrap();
+        // muted (#cecacd) is 1.5:1 on the background; this is the first
+        // step toward the foreground that reaches 3:1.
+        assert_eq!(highlight(&theme, "comment").fg, Some(rgb(0x8F8AA0)));
+    }
+
+    #[test]
+    fn every_generated_text_color_reaches_the_minimum() {
+        for palette in [ROSE_PINE, MATTE_BLACK, AETHER_RISTRETTO_COLORS] {
+            let colors = resolve_palette(parse_colors(palette));
+            let mut groups = aether_groups(&colors).unwrap();
+            raise_contrast(&mut groups, colors["background"], colors["foreground"]);
+            for (group, face) in groups {
+                let Some(fg) = face.fg.filter(|_| group != "WinSeparator") else {
+                    continue;
+                };
+                let on = face.bg.unwrap_or(colors["background"]);
+                assert!(
+                    contrast_ratio(fg, on) >= MIN_CONTRAST,
+                    "{group}: #{fg:06x} on #{on:06x}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn colors_above_the_minimum_are_left_alone() {
+        let readable = face(0x101010, NONE, ITALIC);
+        let mut groups = vec![("@keyword", readable)];
+        raise_contrast(&mut groups, 0xFFFFFF, 0x000000);
+        assert_eq!(groups[0].1, readable);
+    }
+
+    #[test]
+    fn raising_only_changes_the_foreground_and_keeps_attributes() {
+        let mut groups = vec![("@comment", face(0xEEEEEE, NONE, ITALIC))];
+        raise_contrast(&mut groups, 0xFFFFFF, 0x000000);
+        assert_ne!(groups[0].1.fg, Some(0xEEEEEE));
+        assert_eq!(groups[0].1.bg, None);
+        assert_eq!(groups[0].1.attrs, ITALIC);
+    }
+
+    #[test]
+    fn contrast_is_measured_against_the_groups_own_background() {
+        // Fine on white, unreadable on its own near-identical bar.
+        let mut groups = vec![("StatusLineNC", face(0x404040, 0x383838, 0))];
+        raise_contrast(&mut groups, 0xFFFFFF, 0xF0F0F0);
+        let raised = groups[0].1.fg.unwrap();
+        assert!(contrast_ratio(raised, 0x383838) >= MIN_CONTRAST);
+    }
+
+    #[test]
+    fn separators_and_groups_without_a_foreground_stay_quiet() {
+        let separator = face(0xEEEEEE, NONE, BOLD);
+        let selection = face(NONE, 0xEEEEEE, 0);
+        let mut groups = vec![("WinSeparator", separator), ("Visual", selection)];
+        raise_contrast(&mut groups, 0xFFFFFF, 0x000000);
+        assert_eq!(
+            groups,
+            vec![("WinSeparator", separator), ("Visual", selection)]
+        );
+    }
+
+    #[test]
+    fn text_on_a_colored_bar_moves_away_from_it_when_the_foreground_cannot_help() {
+        // Rose Pine's current search match: cream on orange, with a dark
+        // foreground that only passes through worse contrast on the way.
+        let mut groups = vec![("IncSearch", face(0xFAF4ED, 0xCF8057, BOLD))];
+        raise_contrast(&mut groups, 0xFAF4ED, 0x575279);
+        let raised = groups[0].1.fg.unwrap();
+        assert!(contrast_ratio(raised, 0xCF8057) >= MIN_CONTRAST);
+        assert!(relative_luminance(raised) > relative_luminance(0xCF8057));
+    }
+
+    #[test]
+    fn the_minimum_is_reached_even_when_foreground_equals_background() {
+        let mut groups = vec![("@comment", face(0x818181, NONE, 0))];
+        raise_contrast(&mut groups, 0x808080, 0x808080);
+        let raised = groups[0].1.fg.unwrap();
+        assert!(contrast_ratio(raised, 0x808080) >= MIN_CONTRAST);
     }
 
     #[test]

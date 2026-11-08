@@ -778,6 +778,14 @@ output captured once from the real plugin, and a test keeps the port equal to
 it. Omarchy themes that ship a hand-made Neovim colorscheme (Matte Black, for
 example) therefore look different in minimacs than in Neovim.
 
+Many palettes' faintest colors are hard to read, `muted` comments above all, so
+one step goes beyond aether: `raise_contrast` blends any text color below a WCAG
+contrast of 3:1 toward the theme's foreground, just far enough to reach it.
+Contrast is measured against the group's own background, or the theme's if it
+has none. Where the foreground can't reach it, as with text on a mid-toned bar,
+the color moves away from that background toward white or black instead.
+Readable colors don't change, and separators are exempt.
+
 Text keeps the terminal's background, so only the mode lines, region, matches,
 and completion list paint one. Without a usable Omarchy theme, the default stays
 Light+.
