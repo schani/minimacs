@@ -9,6 +9,7 @@ use crate::editor::Editor;
 use crate::event::{EventSource, Poll};
 use crate::render;
 use crate::syntax_worker::SyntaxWorker;
+use crate::theme::omarchy::ThemeWatcher;
 use crate::theme::Theme;
 
 mod input;
@@ -22,6 +23,7 @@ pub struct App<B: Backend> {
     input: InputState,
     syntax_worker: SyntaxWorker,
     theme: Arc<Theme>,
+    theme_watcher: Option<ThemeWatcher>,
     /// Number of `render()` calls, so tests can assert that discarded
     /// events (mouse motion, key releases, focus changes) skip the redraw.
     #[cfg(test)]
@@ -43,6 +45,7 @@ where
             input: InputState::new(),
             syntax_worker: SyntaxWorker::new(),
             theme: Theme::shared_default(),
+            theme_watcher: None,
             #[cfg(test)]
             renders: 0,
         }
@@ -55,10 +58,12 @@ where
         loop {
             let event = match event_source.next_event() {
                 Poll::Event(event) => event,
-                // Timeouts deliver no event; nothing can have changed, so
-                // skip the re-render instead of redrawing ~10×/s while idle.
+                // Timeouts deliver no event, so unless the desktop theme or
+                // a background parse changed something, skip the re-render
+                // instead of redrawing ~10×/s while idle.
                 Poll::Timeout => {
-                    if self.apply_syntax_completions() {
+                    let theme_changed = self.reload_theme();
+                    if self.apply_syntax_completions() || theme_changed {
                         self.render()?;
                     }
                     continue;
@@ -202,6 +207,25 @@ where
         if dimensions_changed {
             self.editor.ensure_cursor_visible();
         }
+    }
+
+    /// Follow the theme `watcher` reports, starting with the current one.
+    pub(crate) fn watch_theme(&mut self, watcher: ThemeWatcher) {
+        self.theme_watcher = Some(watcher);
+        self.reload_theme();
+    }
+
+    /// Apply the watched theme if it changed; true if it did.
+    pub(crate) fn reload_theme(&mut self) -> bool {
+        let theme = self
+            .theme_watcher
+            .as_mut()
+            .and_then(ThemeWatcher::load_if_changed);
+        let changed = theme.is_some();
+        if let Some(theme) = theme {
+            self.set_theme(Arc::new(theme));
+        }
+        changed
     }
 
     /// Use `theme` from the next render on.

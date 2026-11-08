@@ -789,6 +789,11 @@ only the mode lines, region, matches, and completion list paint one. Each
 capture in `HIGHLIGHT_NAMES` maps to one Neovim group. Without a usable Omarchy
 theme, the default stays Light+.
 
+`ThemeWatcher` follows theme switches the way Neovim's Omarchy hot-reload does.
+`App` polls it on idle ticks, comparing the modification time and length of the
+theme's `neovim.lua` and `colors.toml`; Omarchy replaces the whole directory, so
+missing files only mean a switch is underway and the current theme stays.
+
 `App::set_theme` installs a theme. Syntax spans cache resolved styles, so it
 also hands the theme to the worker (which drops its documents when the theme
 changes) and gives every buffer a fresh syntax state with a new key, which

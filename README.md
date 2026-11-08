@@ -49,7 +49,7 @@ cargo install --git https://github.com/schani/minimacs --no-default-features
 
 The default theme is VS Code Light+, for light terminals. On
 [Omarchy](https://omarchy.org/), minimacs instead uses the colors Neovim uses for
-the current theme.
+the current theme, and it follows `omarchy theme set` while running.
 
 ## Building
 

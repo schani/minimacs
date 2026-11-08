@@ -1,6 +1,5 @@
 use std::io;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use anyhow::Result;
 use crossterm::{
@@ -171,8 +170,8 @@ pub(crate) fn run() -> Result<()> {
     let terminal = Terminal::new(backend)?;
 
     let mut app = App::new(terminal, editor);
-    if let Some(theme) = omarchy::current_theme_dir().and_then(|dir| omarchy::load_theme(&dir)) {
-        app.set_theme(Arc::new(theme));
+    if let Some(dir) = omarchy::current_theme_dir() {
+        app.watch_theme(omarchy::ThemeWatcher::new(dir));
     }
     let mut event_source = TerminalEventSource;
 

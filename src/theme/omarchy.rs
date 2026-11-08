@@ -11,6 +11,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use ratatui::style::{Color, Modifier, Style};
 
@@ -307,6 +308,39 @@ fn aether_groups(colors: &HashMap<&str, u32>) -> Option<Vec<(&'static str, Face)
     ])
 }
 
+/// Notices when Omarchy applies a different theme, by the identity of the
+/// files a theme is read from. Omarchy swaps the whole directory in place,
+/// so a missing file only means a switch is underway.
+pub(crate) struct ThemeWatcher {
+    dir: PathBuf,
+    stamp: Stamp,
+}
+
+type Stamp = [Option<(SystemTime, u64)>; 2];
+
+impl ThemeWatcher {
+    pub(crate) fn new(dir: PathBuf) -> Self {
+        Self {
+            dir,
+            stamp: [None, None],
+        }
+    }
+
+    /// The theme, the first time it is seen and after each change. `None`
+    /// means there is nothing new to apply.
+    pub(crate) fn load_if_changed(&mut self) -> Option<Theme> {
+        let stamp = ["neovim.lua", "colors.toml"].map(|file| {
+            let metadata = std::fs::metadata(self.dir.join(file)).ok()?;
+            Some((metadata.modified().ok()?, metadata.len()))
+        });
+        if stamp == self.stamp {
+            return None;
+        }
+        self.stamp = stamp;
+        load_theme(&self.dir)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::nvim_schemes::{AETHER_RISTRETTO_COLORS, AETHER_RISTRETTO_FIXTURE};
@@ -509,6 +543,56 @@ mod tests {
             Some("blue = \"#112233\"\n"),
         );
         assert_eq!(load_theme(partial.path()), None);
+    }
+
+    #[test]
+    fn watcher_loads_the_theme_once_and_again_only_after_a_change() {
+        let dir = theme_dir(Some(MATTE_BLACK_LUA), None);
+        let mut watcher = ThemeWatcher::new(dir.path().to_path_buf());
+
+        let first = watcher.load_if_changed().unwrap();
+        assert_eq!(highlight(&first, "keyword").fg, Some(rgb(0x059669)));
+        assert_eq!(watcher.load_if_changed(), None);
+
+        let tokyo = "opts = { colorscheme = \"tokyonight-night\" }";
+        std::fs::write(dir.path().join("neovim.lua"), tokyo).unwrap();
+        let second = watcher.load_if_changed().unwrap();
+        assert_ne!(highlight(&second, "keyword"), highlight(&first, "keyword"));
+    }
+
+    #[test]
+    fn watcher_survives_omarchy_replacing_the_theme_directory() {
+        let parent = tempfile::tempdir().unwrap();
+        let current = parent.path().join("theme");
+        let next = parent.path().join("next-theme");
+        std::fs::create_dir(&current).unwrap();
+        std::fs::write(current.join("neovim.lua"), MATTE_BLACK_LUA).unwrap();
+        let mut watcher = ThemeWatcher::new(current.clone());
+        assert!(watcher.load_if_changed().is_some());
+
+        // omarchy-theme-set: rm -rf current, then mv next current.
+        std::fs::remove_dir_all(&current).unwrap();
+        assert_eq!(
+            watcher.load_if_changed(),
+            None,
+            "mid-switch keeps the theme"
+        );
+
+        std::fs::create_dir(&next).unwrap();
+        std::fs::write(
+            next.join("neovim.lua"),
+            "opts = { colorscheme = \"catppuccin-latte\" }",
+        )
+        .unwrap();
+        std::fs::rename(&next, &current).unwrap();
+        assert!(watcher.load_if_changed().is_some());
+    }
+
+    #[test]
+    fn watcher_of_a_system_without_omarchy_never_loads() {
+        let mut watcher = ThemeWatcher::new(PathBuf::from("/nonexistent/theme"));
+        assert_eq!(watcher.load_if_changed(), None);
+        assert_eq!(watcher.load_if_changed(), None);
     }
 
     #[test]
