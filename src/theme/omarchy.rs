@@ -21,7 +21,7 @@ const UNDERLINE: u8 = 4;
 
 /// One highlight group of the generated scheme.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(super) struct Face {
+pub(crate) struct Face {
     fg: Option<u32>,
     bg: Option<u32>,
     attrs: u8,
