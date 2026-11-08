@@ -81,6 +81,8 @@ src/
   render.rs         Rendering facade and immutable PendingInput projection
   render/layout.rs  Screen, completions, and minibuffer layout
   render/widgets.rs render() orchestration and ratatui widgets
+  render/faces.rs   UI faces (mode line, region, matches, ...) from the
+                    terminal's ANSI palette
   minibuffer.rs     Minibuffer/Prompt -- prompt state, tab completion functions
   history.rs        History -- undo/redo with edit grouping
   indent.rs         Shared indentation constants (INDENT_WIDTH = 4)
@@ -88,7 +90,7 @@ src/
   syntax/languages.rs
                     Language detection and tree-house configuration
   syntax/state.rs   SyntaxState parser, cache, and background state
-  syntax/theme.rs   Highlight capture names and VSCode Light+ styles
+  syntax/theme.rs   Highlight capture names and ANSI-palette styles
   syntax_worker.rs  Single-thread parser executor and coalescing mailbox
   syntax_bench.rs   syntax-bench performance harness (see below)
   syntax_fuzz.rs    syntax-fuzz incremental-vs-fresh fuzz harness (see below)
@@ -595,16 +597,18 @@ called when visible state changes. It:
      using the expanded visual width. The first `scroll_row_offset` wrap
      segments of the top (`scroll_top`) line are skipped — they are scrolled
      off above the viewport.
-   - Overlays region highlighting (light blue background between mark and
+   - Overlays region highlighting (muted background between mark and
      point).
-   - Overlays search match highlighting (olive background for the current
-     match, light orange for others).
+   - Overlays search match highlighting (background-colored text on red for
+     the current match, on yellow for others).
    - Text content is rendered as spans within a single `Paragraph` widget.
    - Renders the mode line: modified flag, buffer name, `(line,col)`,
      position percentage, language name (if syntax is active), and any
      pending key chord prefix.
-   - Focused pane gets a blue-background bold mode line with white text;
-     unfocused panes get a light gray background with dark text.
+   - Focused pane gets an inverted (reverse-video) bold mode line;
+     unfocused panes get the muted background with default text.
+   - All of these come from `render/faces.rs` (see Colors and Terminal
+     Themes).
 4. Renders the minibuffer's hard-wrapped prompt or message rows.
 5. Sets the terminal cursor position. If the minibuffer is active, the cursor
    goes to the minibuffer input's wrapped row and display column. Otherwise it
@@ -755,10 +759,40 @@ The JavaScript query's Glimmer-only `#offset!` injection is omitted because
 tree-house does not implement that editor-specific predicate and minimacs ships
 no Glimmer grammar.
 
-The color theme is a built-in light palette matching VSCode's Light+ theme,
-using true color (RGB) values. Markdown-specific highlight names (`text.title`,
-`text.emphasis`, `text.strong`, `text.literal`, `text.uri`, `text.reference`)
-are mapped to appropriate styles (bold, italic, underline, colors).
+Highlight captures map to the terminal's ANSI palette (see Colors and
+Terminal Themes), using the slot Omarchy's Helix template assigns each
+capture: keywords magenta, functions blue, strings green, types and constants
+yellow, comments muted italic. Markdown-specific highlight names
+(`text.title`, `text.emphasis`, `text.strong`, `text.literal`, `text.uri`,
+`text.reference`) are mapped to appropriate styles (bold, italic, underline,
+colors).
+
+## Colors and Terminal Themes
+
+minimacs has no color theme of its own: every style -- syntax highlighting in
+`syntax/theme.rs` and UI faces in `render/faces.rs` -- uses only the
+terminal's default foreground/background (`Color::Reset`), the 16 named ANSI
+colors, and text modifiers, never RGB or 256-color indexes, and it never paints
+a background behind ordinary text. The terminal's theme therefore applies
+unchanged, light or dark. Under Omarchy, `omarchy theme set` rewrites the
+terminal palette and the terminal recolors minimacs live, the same way it
+recolors other ANSI-palette TUIs.
+
+Role conventions follow Omarchy's terminal templates, where ANSI black is the
+theme background, white its foreground, and bright black (`DarkGray`) its
+muted color:
+
+- Black/white text is only ever drawn on a colored background (search
+  matches use `Black` on red/yellow, like the terminal's own search
+  highlighting), never on the default background where one of them is
+  invisible.
+- Bands that must stand out without a dedicated color use reverse video (the
+  focused mode line) or the muted color (unfocused mode lines, the region).
+- Separators and the `\` / `~` fringe markers are muted text.
+
+`src/app/tests/theme.rs` renders representative screens (split panes,
+region, syntax, isearch, completions) and asserts every cell obeys these
+rules.
 
 ## Minibuffer
 

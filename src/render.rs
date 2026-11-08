@@ -1,3 +1,4 @@
+mod faces;
 mod layout;
 mod widgets;
 

@@ -18,6 +18,7 @@ mod input_state;
 mod isearch;
 mod minibuffer;
 mod mouse;
+mod theme;
 mod visual;
 
 fn test_app(width: u16, height: u16, events: Vec<Event>) -> (App<TestBackend>, TestEventSource) {

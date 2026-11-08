@@ -40,45 +40,38 @@ pub(super) const HIGHLIGHT_NAMES: &[&str] = &[
 ];
 
 /// Maps a highlight name index to a ratatui Style.
+///
+/// Only the terminal's ANSI palette is used (no RGB), so highlighting follows
+/// the terminal theme -- including live Omarchy theme switches -- in light
+/// and dark themes alike. Each capture gets the ANSI slot Omarchy's own Helix
+/// template gives it, so both editors color code the same way. `DarkGray`
+/// (bright black) is Omarchy's "muted" color. Black and white are never used:
+/// one of them is the background in any theme.
 pub(crate) fn style_for_highlight(idx: usize) -> Style {
     let name = HIGHLIGHT_NAMES.get(idx).copied().unwrap_or("");
+    let fg = |color| Style::default().fg(color);
     match name {
-        "comment" => Style::default().fg(Color::Rgb(0, 128, 0)), // #008000
-        "string" | "string.special" => Style::default().fg(Color::Rgb(163, 21, 21)), // #A31515
-        "number" => Style::default().fg(Color::Rgb(9, 134, 88)), // #098658
-        "keyword" => Style::default().fg(Color::Rgb(0, 0, 255)), // #0000FF
-        "function" | "function.builtin" | "function.macro" => {
-            Style::default().fg(Color::Rgb(121, 94, 38)) // #795E26
+        "comment" => fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+        "string" | "text.literal" => fg(Color::Green),
+        "string.special" => fg(Color::Blue),
+        "number" | "constant" | "constant.builtin" => fg(Color::Yellow),
+        "keyword" | "function.macro" | "type.builtin" | "escape" => fg(Color::Magenta),
+        "function" | "function.builtin" | "constructor" | "property" | "tag" | "label" => {
+            fg(Color::Blue)
         }
-        "type" | "type.builtin" => Style::default().fg(Color::Rgb(38, 127, 153)), // #267F99
-        "constant" | "constant.builtin" => Style::default().fg(Color::Rgb(0, 112, 193)), // #0070C1
-        "variable.builtin" => Style::default().fg(Color::Rgb(0, 0, 255)),         // #0000FF
-        "variable.parameter" => Style::default().fg(Color::Rgb(0, 16, 128)),      // #001080
-        "variable" => Style::default().fg(Color::Rgb(0, 16, 128)),                // #001080
-        "attribute" => Style::default().fg(Color::Rgb(38, 127, 153)),             // #267F99
-        "constructor" => Style::default().fg(Color::Rgb(38, 127, 153)),           // #267F99
-        "escape" => Style::default().fg(Color::Rgb(238, 0, 0)),                   // #EE0000
-        "tag" => Style::default().fg(Color::Rgb(128, 0, 0)),                      // #800000
-        "property" => Style::default().fg(Color::Rgb(0, 16, 128)),                // #001080
-        "text.title" => Style::default()
-            .fg(Color::Rgb(0, 0, 255))
-            .add_modifier(Modifier::BOLD),
+        "type" | "attribute" => fg(Color::Yellow),
+        "variable.builtin" => fg(Color::Red),
+        "variable.parameter" => fg(Color::Magenta).add_modifier(Modifier::ITALIC),
+        "operator" | "punctuation.special" => fg(Color::Cyan),
+        "text.title" | "markup.heading" => fg(Color::Red).add_modifier(Modifier::BOLD),
         "text.emphasis" => Style::default().add_modifier(Modifier::ITALIC),
         "text.strong" => Style::default().add_modifier(Modifier::BOLD),
-        "text.literal" => Style::default().fg(Color::Rgb(163, 21, 21)), // #A31515
-        "text.uri" | "markup.link" => Style::default()
-            .fg(Color::Rgb(0, 112, 193))
-            .add_modifier(Modifier::UNDERLINED),
-        "markup.heading" => Style::default()
-            .fg(Color::Rgb(0, 0, 255))
-            .add_modifier(Modifier::BOLD),
-        "text.reference" => Style::default().fg(Color::Rgb(0, 112, 193)), // #0070C1
-        "operator"
-        | "label"
-        | "punctuation"
-        | "punctuation.bracket"
-        | "punctuation.delimiter"
-        | "punctuation.special" => Style::default(),
+        "text.uri" | "markup.link" => {
+            fg(Color::Blue).add_modifier(Modifier::ITALIC | Modifier::UNDERLINED)
+        }
+        "text.reference" => fg(Color::Magenta),
+        // "variable", "punctuation", "punctuation.bracket",
+        // "punctuation.delimiter": the terminal's default foreground.
         _ => Style::default(),
     }
 }

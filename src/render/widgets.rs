@@ -1,5 +1,5 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
@@ -10,6 +10,7 @@ use crate::editor::Editor;
 use crate::pane::{visual_lines_for_length, Pane};
 use crate::syntax_worker::{SyntaxJob, SyntaxWorker};
 
+use super::faces;
 use super::layout::*;
 use super::PendingInput;
 
@@ -137,9 +138,7 @@ pub fn render(
 
     // Render separator bars between horizontally-split panes
     for sep_rect in &separator_rects {
-        let sep_style = Style::default()
-            .fg(Color::Rgb(200, 200, 200))
-            .bg(Color::Rgb(255, 255, 255));
+        let sep_style = faces::separator();
         let lines: Vec<Line> = (0..sep_rect.height)
             .map(|_| Line::from(Span::styled("│", sep_style)))
             .collect();
@@ -235,20 +234,14 @@ fn render_pane_text(
             );
         }
         if row.continues {
-            spans.push(Span::styled(
-                "\\",
-                Style::default().fg(Color::Rgb(35, 120, 147)),
-            ));
+            spans.push(Span::styled("\\", faces::fringe()));
         }
         output_lines.push(Line::from(spans));
     }
 
     // Fill remaining rows with ~
     while output_lines.len() < max_visual_rows {
-        output_lines.push(Line::from(Span::styled(
-            "~",
-            Style::default().fg(Color::Rgb(35, 120, 147)),
-        )));
+        output_lines.push(Line::from(Span::styled("~", faces::fringe())));
     }
 
     let paragraph = Paragraph::new(output_lines);
@@ -299,7 +292,7 @@ fn build_styled_spans(
                 .unwrap_or(false);
 
             if in_region {
-                Style::default().bg(Color::Rgb(173, 214, 255))
+                faces::region()
             } else {
                 let is_current_match =
                     current_match.is_some_and(|cm| char_pos >= cm && char_pos < cm + match_len);
@@ -307,13 +300,9 @@ fn build_styled_spans(
                     !is_current_match && match_covering(search_matches, char_pos).is_some();
 
                 if is_current_match {
-                    Style::default()
-                        .bg(Color::Rgb(168, 172, 148))
-                        .fg(Color::Black)
+                    faces::search_current_match()
                 } else if is_other_match {
-                    Style::default()
-                        .bg(Color::Rgb(248, 201, 171))
-                        .fg(Color::Black)
+                    faces::search_other_match()
                 } else {
                     syntax_style_at_byte(syntax_spans, cell.buffer_byte_start)
                 }
@@ -445,16 +434,7 @@ fn render_pane_mode_line(
 
     let mode_line_text = mode_line_text(&left, &right, area.width as usize);
 
-    let style = if is_focused {
-        Style::default()
-            .bg(Color::Rgb(0, 122, 204))
-            .fg(Color::White)
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default()
-            .bg(Color::Rgb(223, 223, 223))
-            .fg(Color::Rgb(51, 51, 51))
-    };
+    let style = faces::mode_line(is_focused);
 
     let mode_line = Paragraph::new(Line::from(Span::styled(mode_line_text, style)));
     frame.render_widget(mode_line, area);
@@ -483,9 +463,7 @@ fn render_completions(frame: &mut Frame, candidates: &[String], page: usize, are
     let page = page % page_count;
     let start = page * displayable;
 
-    let bg = Style::default()
-        .bg(Color::Rgb(243, 243, 243))
-        .fg(Color::Black);
+    let bg = faces::completions();
 
     let mut lines: Vec<Line> = Vec::with_capacity(rows);
     for row in 0..rows {
@@ -932,7 +910,7 @@ mod tests {
 
     #[test]
     fn syntax_style_lookup_uses_half_open_span_boundaries() {
-        let styled = Style::default().fg(Color::Red);
+        let styled = Style::default().fg(ratatui::style::Color::Red);
         let spans = vec![crate::syntax::StyledSpan {
             start: 2,
             end: 5,
@@ -1118,7 +1096,7 @@ mod tests {
 
     /// Regression test: when the viewport starts inside a fenced code block,
     /// syntax highlighting should still be correct. Lines after the closing ```
-    /// should be highlighted as normal markdown (e.g., headings should be bold+blue),
+    /// should be highlighted as normal markdown (e.g., headings should be bold),
     /// not as code.
     #[test]
     fn markdown_highlight_consistent_when_scrolled_into_code_block() {
@@ -1164,7 +1142,7 @@ Some *emphasis* here.\n";
         );
 
         // Line 10 is "# After Code Block" — the '#' and heading text should have
-        // the heading style (bold + blue) regardless of scroll position.
+        // the heading style (bold) regardless of scroll position.
         let heading_line = 10;
         let heading_start = buf.text().line_to_byte(heading_line);
         let heading_end = buf.text().line_to_byte(heading_line + 1);
